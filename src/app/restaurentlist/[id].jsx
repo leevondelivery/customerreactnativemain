@@ -270,6 +270,10 @@ export default function RestaurantMenuScreen() {
     const cartItem = cart.find((c) => (c.itemId && c.itemId === item.itemId) || (c._id && c._id === item._id));
     const quantity = cartItem ? cartItem.quantity : 0;
 
+    const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+    const hasOffer = offerPercent > 0 && offerPercent <= 100;
+    const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
+
     return (
       <View style={styles.itemCard}>
         <Image
@@ -282,14 +286,29 @@ export default function RestaurantMenuScreen() {
           {displayItemName}
         </Text>
 
-        <View style={styles.itemRatingContainer}>
-          <FontAwesome name="star" size={10} color="#FFD200" />
-          <Text style={styles.itemRatingText}>
-            {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
-          </Text>
+        <View style={styles.ratingAndOfferContainer}>
+          <View style={styles.itemRatingContainer}>
+            <FontAwesome name="star" size={10} color="#FFD200" />
+            <Text style={styles.itemRatingText}>
+              {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
+            </Text>
+          </View>
+          {hasOffer && (
+            <View style={styles.offerBadge}>
+              <Ionicons name="pricetag" size={9} color="#FFFFFF" />
+              <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
+            </View>
+          )}
         </View>
 
-        <Text style={styles.priceText}>RS:{item.price || 0}</Text>
+        {hasOffer ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+            <Text style={[styles.priceText, { marginBottom: 0 }]}>RS:{Math.round(offerPrice)}</Text>
+            <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
+          </View>
+        ) : (
+          <Text style={styles.priceText}>RS:{item.price || 0}</Text>
+        )}
 
         {quantity > 0 ? (
           <View style={styles.quantityContainer}>
@@ -728,9 +747,10 @@ const styles = StyleSheet.create({
     marginTop: 45, // space for the absolute positioned circular image
     paddingTop: 50, // push texts below the overlaying image
     paddingHorizontal: 12,
-    paddingBottom: 31, // Increased bottom padding to 31 for taller card height
+    paddingBottom: 18, // Move button closer to bottom edge
     alignItems: 'center',
     position: 'relative',
+    minHeight: 195, // Maintain stable taller height
   },
   itemImage: {
     width: 80,
@@ -757,10 +777,30 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
     gap: 3,
-    marginBottom: 6,
   },
   itemRatingText: {
     fontSize: 11,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  ratingAndOfferContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  offerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF5E00', // Bright orange like the Special Offer sticker
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    gap: 3,
+  },
+  offerBadgeText: {
+    fontSize: 10,
     fontWeight: 'bold',
     color: '#FFFFFF',
   },
@@ -782,6 +822,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+    marginTop: 10, // Push button down from price
   },
   addButtonText: {
     fontSize: 12,
@@ -802,6 +843,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+    marginTop: 10, // Push button down from price
   },
   quantityBtn: {
     width: 24,

@@ -512,7 +512,13 @@ export default function CartScreen() {
   };
 
   const calculateTotal = () => {
-    return cartItems.reduce((sum, item) => sum + (item.price || 0) * (item.quantity || 0), 0);
+    return cartItems.reduce((sum, item) => {
+      const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+      const price = (offerPercent > 0 && offerPercent <= 100)
+        ? (item.price - (item.price * (offerPercent / 100)))
+        : (item.price || 0);
+      return sum + price * (item.quantity || 0);
+    }, 0);
   };
 
   if (loading) {
@@ -576,6 +582,10 @@ export default function CartScreen() {
               displayItemName += suffix;
             }
 
+            const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+            const hasOffer = offerPercent > 0 && offerPercent <= 100;
+            const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
+
             return (
               <View key={item._id || item.itemId} style={styles.cartCard}>
                 <Text style={styles.itemName} numberOfLines={2}>
@@ -595,7 +605,14 @@ export default function CartScreen() {
                   </View>
 
                   {/* Price */}
-                  <Text style={styles.itemPrice}>₹{(item.price * item.quantity).toFixed(2)}</Text>
+                  <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
+                    <Text style={styles.itemPrice}>₹{(offerPrice * item.quantity).toFixed(2)}</Text>
+                    {hasOffer && (
+                      <Text style={[styles.itemPrice, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 11, fontWeight: 'normal', marginTop: 1, minWidth: 0 }]}>
+                        ₹{(item.price * item.quantity).toFixed(2)}
+                      </Text>
+                    )}
+                  </View>
 
                   {/* Red Trash Icon */}
                   <TouchableOpacity onPress={() => updateQuantity(item._id || item.itemId, -item.quantity)} activeOpacity={0.7}>
