@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTabBar } from '../_layout';
 import { API_URL } from '../../config';
-import { styles } from './orderstatus.styles';
+import { styles } from '../../styles/orderstatus.styles';
 import LoadingView from '../../components/LoadingView';
 
 
@@ -75,6 +75,24 @@ export default function OrderStatusScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+
+  const hadActiveOrder = useRef(false);
+
+  // Redirect to reviews screen once the order completes
+  useEffect(() => {
+    if (orderStatus) {
+      const statusLower = orderStatus.status?.toLowerCase() || '';
+      if (statusLower.includes('delivered') || statusLower.includes('completed')) {
+        hadActiveOrder.current = false;
+        router.replace('/profile/myreviews');
+      } else {
+        hadActiveOrder.current = true;
+      }
+    } else if (hadActiveOrder.current && !loading) {
+      hadActiveOrder.current = false;
+      router.replace('/profile/myreviews');
+    }
+  }, [orderStatus, loading, router]);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;

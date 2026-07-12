@@ -15,6 +15,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
@@ -25,13 +26,52 @@ import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurants
 
 const EMPTY_ARRAY = [];
 
+const getClosingSoonStatus = (closeTimeStr, now) => {
+  if (!closeTimeStr) return null;
+  
+  const match = closeTimeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  
+  const closeHours = parseInt(match[1], 10);
+  const closeMinutes = parseInt(match[2], 10);
+  
+  const currentHours = now.getHours();
+  const currentMinutes = now.getMinutes();
+  
+  const closeTotalMinutes = closeHours * 60 + closeMinutes;
+  const currentTotalMinutes = currentHours * 60 + currentMinutes;
+  
+  let diff = closeTotalMinutes - currentTotalMinutes;
+  
+  // Handle cross-midnight case (e.g. closes at 00:02, now is 23:59)
+  if (diff < 0) {
+    diff += 1440; // 24 hours in minutes
+  }
+  
+  // If it's between 1 and 5 minutes
+  if (diff >= 1 && diff <= 5) {
+    return `Closes in ${diff}m`;
+  }
+  
+  return null;
+};
+
 export default function RestaurantMenuScreen() {
+  const [nowTime, setNowTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTime(new Date());
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const dispatch = useDispatch();
 
   // Route parameters
-  const { restId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress } = useLocalSearchParams();
+  const { restId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime } = useLocalSearchParams();
 
   // State
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,6 +80,11 @@ export default function RestaurantMenuScreen() {
   const [cart, setCart] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
+
+  // Custom Replace Cart Modal States
+  const [showReplaceCartModal, setShowReplaceCartModal] = useState(false);
+  const [pendingItemToAdd, setPendingItemToAdd] = useState(null);
+  const [previousRestaurantName, setPreviousRestaurantName] = useState('');
 
   // Toast state and animated values
   const [toastConfig, setToastConfig] = useState({ visible: false, message: '', type: 'success' });
@@ -147,6 +192,13 @@ export default function RestaurantMenuScreen() {
   // Redux store
   const menuItems = useSelector((state) => state.restaurants.menus[restId] || EMPTY_ARRAY);
   const menuLoading = useSelector((state) => state.restaurants.menuLoading[restId] || false);
+  const restaurants = useSelector((state) => state.restaurants.list);
+  const restaurantDetail = restaurants.find(r => r.restId === restId || r._id === restId);
+  const roadDistances = useSelector((state) => state.location.roadDistances);
+  const distanceText = roadDistances[restaurantDetail?._id || restaurantDetail?.restId || restId];
+  const openTime = restaurantDetail?.openTime || passedOpenTime;
+  const closeTime = restaurantDetail?.closeTime || passedCloseTime;
+  const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isactive !== false) : true;
 
   // Fetch restaurant menu on mount
   useEffect(() => {
@@ -228,8 +280,19 @@ export default function RestaurantMenuScreen() {
       const cartData = await AsyncStorage.getItem('cart');
       let currentCart = cartData ? JSON.parse(cartData) : [];
 
+      // Check if cart has items from a different restaurant
+      const differentRestaurantItem = currentCart.find((cartItem) => cartItem.restId && cartItem.restId !== restId);
+      if (change > 0 && differentRestaurantItem) {
+        setPreviousRestaurantName(differentRestaurantItem.restaurantName || 'another restaurant');
+        setPendingItemToAdd(item);
+        setShowReplaceCartModal(true);
+        return;
+      }
+
       const existingItemIndex = currentCart.findIndex(
-        (cartItem) => (cartItem.itemId && cartItem.itemId === item.itemId) || (cartItem._id && cartItem._id === item._id)
+        (cartItem) => 
+          ((cartItem.itemId && cartItem.itemId === item.itemId) || (cartItem._id && cartItem._id === item._id))
+          && cartItem.restId === restId
       );
 
       if (existingItemIndex > -1) {
@@ -267,7 +330,10 @@ export default function RestaurantMenuScreen() {
       displayItemName += suffix;
     }
 
-    const cartItem = cart.find((c) => (c.itemId && c.itemId === item.itemId) || (c._id && c._id === item._id));
+    const cartItem = cart.find((c) => 
+      ((c.itemId && c.itemId === item.itemId) || (c._id && c._id === item._id))
+      && c.restId === restId
+    );
     const quantity = cartItem ? cartItem.quantity : 0;
 
     const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
@@ -361,6 +427,33 @@ export default function RestaurantMenuScreen() {
                       {((parseInt(restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
                     </Text>
                   </View>
+                  {distanceText ? (
+                    <View style={[styles.heroSpecDistance, { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2B783E' }]}>
+                      <FontAwesome5 name="motorcycle" size={11} color="#FFFFFF" />
+                      <Text style={styles.heroSpecTextWhite}>{distanceText}</Text>
+                    </View>
+                  ) : null}
+                  {/* Closing soon highlight badge */}
+                  {(() => {
+                    const closingSoonText = isActive ? getClosingSoonStatus(closeTime, nowTime) : null;
+                    if (!closingSoonText) return null;
+                    return (
+                      <View style={{
+                        backgroundColor: '#D9534F',
+                        borderRadius: 12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 5,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4
+                      }}>
+                        <Feather name="alert-circle" size={13} color="#FFF" />
+                        <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#FFF' }}>
+                          {closingSoonText}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </View>
               </View>
               <Image
@@ -534,6 +627,81 @@ export default function RestaurantMenuScreen() {
           </View>
         </Animated.View>
       )}
+      {/* Custom Replace Cart Confirmation Modal */}
+      <Modal transparent visible={showReplaceCartModal} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: 'rgb(224, 214, 188)' }]}>
+            <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
+              <Feather name="shopping-cart" size={30} color="#FA4D56" />
+            </View>
+            <Text style={styles.modalTitle}>Replace Cart Items?</Text>
+            <Text style={[styles.modalSub, { color: '#1E3545', fontWeight: '500', marginBottom: 24 }]}>
+              Your cart contains items from &quot;{previousRestaurantName}&quot;. Do you want to discard your cart and add items from &quot;{passedName || 'this restaurant'}&quot; instead?
+            </Text>
+            
+            <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: '#FFFFFF',
+                  alignItems: 'center',
+                  elevation: 2,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 2,
+                }}
+                activeOpacity={0.8}
+                onPress={() => {
+                  setShowReplaceCartModal(false);
+                  setPendingItemToAdd(null);
+                }}
+              >
+                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1E3545' }}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  backgroundColor: '#1E3545',
+                  alignItems: 'center',
+                  elevation: 2,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 1 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 2,
+                }}
+                activeOpacity={0.85}
+                onPress={async () => {
+                  if (pendingItemToAdd) {
+                    try {
+                      const newCart = [{
+                        ...pendingItemToAdd,
+                        quantity: 1,
+                        restId: restId,
+                        restaurantName: passedName,
+                      }];
+                      setCart(newCart);
+                      await AsyncStorage.setItem('cart', JSON.stringify(newCart));
+                      triggerToast();
+                    } catch (err) {
+                      console.error('Error replacing cart:', err);
+                    }
+                  }
+                  setShowReplaceCartModal(false);
+                  setPendingItemToAdd(null);
+                }}
+              >
+                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#FFFFFF' }}>Replace</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -994,5 +1162,45 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     letterSpacing: 0.5,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    borderRadius: 20,
+    padding: 24,
+    width: '90%',
+    maxWidth: 340,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  modalIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1E3545',
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  modalSub: {
+    fontSize: 14,
+    color: '#1E3545',
+    textAlign: 'center',
+    lineHeight: 20,
   },
 });

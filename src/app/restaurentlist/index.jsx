@@ -1,7 +1,7 @@
 import { Feather, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
@@ -13,6 +13,9 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Modal,
+  ActivityIndicator,
+  Linking,
 } from 'react-native';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,8 +23,11 @@ import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { fetchRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
+import { checkLocationAndCalculateDistances, skipLocation, setSelectedSavedAddressId } from '../../store/locationSlice';
 import { useTabBar } from '../_layout';
-import { styles } from './restaurentlist.styles';
+import { styles } from '../../styles/restaurentlist.styles';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -52,7 +58,94 @@ function CarouselImage({ uri, style }) {
   );
 }
 
+const kurnoolPolygon = [
+  { latitude: 15.845928, longitude: 78.012744 },
+  { latitude: 15.846311, longitude: 78.019729 },
+  { latitude: 15.839716, longitude: 78.027036 },
+  { latitude: 15.846872, longitude: 78.031149 },
+  { latitude: 15.84623, longitude: 78.034459 },
+  { latitude: 15.838115, longitude: 78.049654 },
+  { latitude: 15.82565, longitude: 78.056682 },
+  { latitude: 15.818905, longitude: 78.060495 },
+  { latitude: 15.815102, longitude: 78.065114 },
+  { latitude: 15.801613, longitude: 78.072318 },
+  { latitude: 15.798335, longitude: 78.078557 },
+  { latitude: 15.79411, longitude: 78.078435 },
+  { latitude: 15.786917, longitude: 78.078888 },
+  { latitude: 15.776939, longitude: 78.073002 },
+  { latitude: 15.772624, longitude: 78.057852 },
+  { latitude: 15.768974, longitude: 78.054399 },
+  { latitude: 15.765935, longitude: 78.049634 },
+  { latitude: 15.77651, longitude: 78.02883 },
+  { latitude: 15.813778, longitude: 77.996924 },
+  { latitude: 15.847026, longitude: 78.005964 }
+];
+
+const isPointInPolygon = (point, polygon) => {
+  const x = point.latitude, y = point.longitude;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].latitude, yi = polygon[i].longitude;
+    const xj = polygon[j].latitude, yj = polygon[j].longitude;
+    const intersect = ((yi > y) !== (yj > y))
+        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+};
+
+const getHaversineDistance = (lat1, lon1, lat2, lon2) => {
+  const R = 6371; // Radius of the earth in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distance in km
+};
+
+const getClosingSoonStatus = (closeTimeStr, now) => {
+  if (!closeTimeStr) return null;
+  
+  const match = closeTimeStr.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  
+  const closeHours = parseInt(match[1], 10);
+  const closeMinutes = parseInt(match[2], 10);
+  
+  const currentHours = now.getHours();
+  const currentMinutes = now.getMinutes();
+  
+  const closeTotalMinutes = closeHours * 60 + closeMinutes;
+  const currentTotalMinutes = currentHours * 60 + currentMinutes;
+  
+  let diff = closeTotalMinutes - currentTotalMinutes;
+  
+  // Handle cross-midnight case (e.g. closes at 00:02, now is 23:59)
+  if (diff < 0) {
+    diff += 1440; // 24 hours in minutes
+  }
+  
+  // If it's between 1 and 5 minutes
+  if (diff >= 1 && diff <= 5) {
+    return `Closes in ${diff}m`;
+  }
+  
+  return null;
+};
+
 export default function RestaurantListScreen() {
+  const [nowTime, setNowTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setNowTime(new Date());
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
+
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showTabBar, hideTabBar } = useTabBar();
@@ -66,6 +159,118 @@ export default function RestaurantListScreen() {
   const initialLoaded = useSelector((state) => state.restaurants.initialLoaded);
   const reduxLoading = useSelector((state) => state.restaurants.loading);
 
+  // Redux Selectors for Global Location State
+  const {
+    userLocation,
+    roadDistances,
+    locationStatus,
+    showLocationModal,
+    showFetchingModal,
+    showOutOfZoneModal,
+    locationError,
+    selectedSavedAddressId,
+  } = useSelector((state) => state.location);
+
+  const handleEnableLocation = async () => {
+    console.log('[Location UI] handleEnableLocation triggered.');
+    try {
+      if (Platform.OS === 'android') {
+        try {
+          await Location.enableNetworkProviderAsync();
+        } catch (e) {
+          console.warn('Network provider enable failed:', e);
+        }
+      }
+      dispatch(checkLocationAndCalculateDistances(restaurants));
+    } catch (err) {
+      console.warn('handleEnableLocation error:', err);
+    }
+  };
+
+  const handleOpenSettings = () => {
+    console.log('[Location UI] Opening app settings...');
+    Platform.OS === 'ios' ? Linking.openURL('app-settings:') : Linking.openSettings();
+  };
+
+  const [userid, setUserid] = useState(null);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [showDeliverToModal, setShowDeliverToModal] = useState(false);
+
+  useEffect(() => {
+    const initLocationFlow = async () => {
+      if (restaurants.length === 0) return;
+      
+      const uid = await AsyncStorage.getItem('userid');
+      setUserid(uid);
+      
+      // If user has an active order, skip location prompts entirely
+      if (uid) {
+        try {
+          const response = await fetch(`${API_URL}/orderstatus/user/${uid}`);
+          const data = await response.json();
+          if (response.ok && data.success && data.orderStatus) {
+            console.log('[RestaurantList] Active order exists, skipping location checking.');
+            dispatch(skipLocation());
+            return;
+          }
+        } catch (err) {
+          console.warn('[RestaurantList] Error checking active order status:', err);
+        }
+      }
+      
+      if (locationStatus === 'idle') {
+        if (uid) {
+          try {
+            const response = await fetch(`${API_URL}/user/${uid}/addresses`);
+            const data = await response.json();
+            if (data.success && data.addresses && data.addresses.length > 0) {
+              setSavedAddresses(data.addresses);
+              setShowDeliverToModal(true);
+              return;
+            }
+          } catch (err) {
+            console.warn('[RestaurantList] Error loading addresses on startup:', err);
+          }
+        }
+        // Guest user or user with no saved addresses: default to live GPS check
+        dispatch(checkLocationAndCalculateDistances(restaurants));
+      } else if (uid) {
+        // If not idle, still fetch saved addresses so they are available in the top bar dropdown
+        try {
+          const response = await fetch(`${API_URL}/user/${uid}/addresses`);
+          const data = await response.json();
+          if (data.success && data.addresses) {
+            setSavedAddresses(data.addresses);
+          }
+        } catch (err) {
+          console.warn('[RestaurantList] Error loading addresses:', err);
+        }
+      }
+    };
+    
+    initLocationFlow();
+  }, [restaurants, locationStatus, dispatch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const loadAddresses = async () => {
+        const uid = await AsyncStorage.getItem('userid');
+        if (uid) {
+          try {
+            const response = await fetch(`${API_URL}/user/${uid}/addresses`);
+            const data = await response.json();
+            if (data.success && data.addresses) {
+              setSavedAddresses(data.addresses);
+            }
+          } catch (err) {
+            console.warn('[RestaurantList] Error loading addresses on focus:', err);
+          }
+        }
+      };
+      loadAddresses();
+    }, [])
+  );
+
   const handlePressRestaurant = (item, displayName) => {
     const isActive = item.isActive !== false && item.isactive !== false;
     if (!isActive) {
@@ -78,7 +283,9 @@ export default function RestaurantListScreen() {
         restId: item.restId,
         name: displayName,
         logoUrl: item.logoUrl || '',
-        address: item.address || ''
+        address: item.address || '',
+        openTime: item.openTime || '',
+        closeTime: item.closeTime || ''
       }
     });
   };
@@ -168,11 +375,11 @@ export default function RestaurantListScreen() {
   // Fetch initial data on mount
   useEffect(() => {
     console.log(`[RestaurantList] Screen focused/mounted. initialLoaded: ${initialLoaded}, reduxLoading: ${reduxLoading}`);
-    if (!initialLoaded) {
-      console.log('[RestaurantList] initialLoaded is false, dispatching fetchRestaurants.');
+    if (!initialLoaded && !reduxLoading) {
+      console.log('[RestaurantList] initialLoaded is false and not loading, dispatching fetchRestaurants.');
       dispatch(fetchRestaurants());
     }
-  }, [dispatch, initialLoaded]);
+  }, [dispatch, initialLoaded, reduxLoading]);
 
   // Background Polling for Restaurant active status updates (every 5 seconds)
   useEffect(() => {
@@ -250,6 +457,50 @@ export default function RestaurantListScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
         }
       >
+        {/* Top Location Selection Bar */}
+        <TouchableOpacity 
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: 'rgb(224, 214, 188)',
+            marginHorizontal: 0,
+            marginTop: 0,
+            marginBottom: 16,
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+            borderRadius: 14,
+            gap: 10
+          }}
+          activeOpacity={0.75}
+          onPress={() => setShowDeliverToModal(true)}
+        >
+          <Feather name="map-pin" size={18} color="#FA4D56" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 10, color: '#808C94', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              Deliver to
+            </Text>
+            <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
+              {(() => {
+                if (selectedSavedAddressId) {
+                  const selectedAddr = savedAddresses.find(
+                    (a) => (a.id || a._id) === selectedSavedAddressId
+                  );
+                  if (selectedAddr) {
+                    return `${selectedAddr.tag || selectedAddr.label || 'Saved Address'} - ${selectedAddr.flatNo || ''}, ${selectedAddr.street || ''}`;
+                  }
+                }
+                if (locationStatus === 'inside') {
+                  return 'Current Location (GPS)';
+                }
+                if (locationStatus === 'skipped') {
+                  return 'Skipped location (Explore only)';
+                }
+                return 'Select your location...';
+              })()}
+            </Text>
+          </View>
+          <Feather name="chevron-down" size={18} color="#1E3545" />
+        </TouchableOpacity>
         {/* Fast CDN-mapped Carousel */}
         {carouselItems.length > 0 && (
           <View style={styles.carouselContainer}>
@@ -480,33 +731,62 @@ export default function RestaurantListScreen() {
                   {/* Restaurant Name / Email & Offer Badge (aligned to right side) */}
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                     <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
-                    {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
-                      <View style={{
-                        backgroundColor: '#FF6F00',
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        paddingHorizontal: 8,
-                        paddingVertical: 3,
-                        borderRadius: 8,
-                      }}>
-                        <Text style={{
-                          color: '#FFF',
-                          fontSize: 11,
-                          fontWeight: 'bold',
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      {(() => {
+                        const closingSoonText = isActive ? getClosingSoonStatus(item.closeTime, nowTime) : null;
+                        if (!closingSoonText) return null;
+                        return (
+                          <View style={{
+                            backgroundColor: '#D9534F',
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 8,
+                          }}>
+                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
+                              {closingSoonText}
+                            </Text>
+                          </View>
+                        );
+                      })()}
+                      {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
+                        <View style={{
+                          backgroundColor: '#FF6F00',
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 8,
                         }}>
-                          {item.offerTitle}
+                          <Text style={{
+                            color: '#FFF',
+                            fontSize: 11,
+                            fontWeight: 'bold',
+                          }}>
+                            {item.offerTitle}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+
+                  {/* Address Location & Distance */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                    {item.address ? (
+                      <View style={[styles.locationContainer, { flex: 1, marginRight: 8, marginBottom: 0 }]}>
+                        <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
+                        <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
+                      </View>
+                    ) : null}
+                    
+                    {roadDistances[item._id || item.restId] ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
+                          {roadDistances[item._id || item.restId]}
                         </Text>
                       </View>
                     ) : null}
                   </View>
-
-                  {/* Address Location */}
-                  {item.address ? (
-                    <View style={styles.locationContainer}>
-                      <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
-                      <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }]}>{item.address}</Text>
-                    </View>
-                  ) : null}
                 </View>
               </TouchableOpacity>
             );
@@ -533,6 +813,184 @@ export default function RestaurantListScreen() {
           </View>
         </Animated.View>
       )}
+
+      {/* Fetching Location Overlay Modal */}
+      <Modal transparent visible={showFetchingModal} animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
+            <Text style={styles.modalTitle}>Fetching Location</Text>
+            <Text style={styles.modalSub}>
+              Retrieving your coordinates and calculating delivery distances...
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
+      {/* GPS Off / Permission Denied Modal */}
+      <Modal transparent visible={showLocationModal} animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
+            <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
+              <FontAwesome name="map-marker" size={30} color="#E05A47" />
+            </View>
+            <Text style={styles.modalTitle}>Location Access Required</Text>
+            <Text style={styles.modalSub}>
+              {locationError || "Please turn on your device's location/GPS and allow permission to calculate delivery distance."}
+            </Text>
+            
+            <TouchableOpacity style={styles.primaryButton} onPress={handleEnableLocation}>
+              <Text style={styles.primaryButtonText}>Enable Location</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenSettings}>
+              <Text style={styles.secondaryButtonText}>Open Settings</Text>
+            </TouchableOpacity>
+
+
+
+            <TouchableOpacity 
+              style={[styles.secondaryButton, { marginTop: 10, backgroundColor: 'transparent', borderWidth: 0 }]} 
+              onPress={() => dispatch(skipLocation())}
+            >
+              <Text style={[styles.secondaryButtonText, { color: '#000000', textDecorationLine: 'underline' }]}>Skip & Browse</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Deliver To Selector Modal */}
+      <Modal transparent visible={showDeliverToModal} animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { height: 520, backgroundColor: 'rgb(224, 214, 188)' }]}>
+            <View style={[styles.modalIconContainer, { backgroundColor: '#F0F6F0' }]}>
+              <Feather name="map-pin" size={30} color="#2B783E" />
+            </View>
+            <Text style={styles.modalTitle}>Select Delivery Location</Text>
+            <Text style={[styles.modalSub, { marginBottom: 20 }]}>
+              Please choose where you would like your food delivered:
+            </Text>
+
+            <ScrollView style={{ width: '100%', marginBottom: 15 }} showsVerticalScrollIndicator={false}>
+              {/* Option A: Current Location */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  padding: 14,
+                  backgroundColor: '#FFF',
+                  borderColor: '#E4E1D8',
+                  borderWidth: 1,
+                  borderRadius: 12,
+                  marginBottom: 12,
+                  gap: 12
+                }}
+                activeOpacity={0.8}
+                onPress={() => {
+                  setShowDeliverToModal(false);
+                  dispatch(setSelectedSavedAddressId(null));
+                  dispatch(checkLocationAndCalculateDistances(restaurants));
+                }}
+              >
+                <Feather name="navigation" size={20} color="#2B783E" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1E3545' }}>Use Current Location</Text>
+                  <Text style={{ fontSize: 11, color: '#808C94' }}>Locate me using my device's GPS</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Option B: Saved Addresses list */}
+              {savedAddresses.length > 0 && (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: '#000000', fontWeight: 'bold', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Saved Addresses
+                  </Text>
+                  {savedAddresses.map((addr) => {
+                    const isSelected = selectedSavedAddressId === (addr.id || addr._id);
+                    return (
+                      <TouchableOpacity
+                        key={addr._id || addr.id}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          padding: 14,
+                          backgroundColor: isSelected ? '#F0F6F0' : '#FFF',
+                          borderColor: isSelected ? '#2B783E' : '#E4E1D8',
+                          borderWidth: 1,
+                          borderRadius: 12,
+                          marginBottom: 8,
+                          gap: 12
+                        }}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          setShowDeliverToModal(false);
+                          const addrId = addr.id || addr._id;
+                          dispatch(setSelectedSavedAddressId(addrId));
+                          const addrLat = addr.lat !== undefined ? addr.lat : addr.latitude;
+                          const addrLng = addr.lng !== undefined ? addr.lng : addr.longitude;
+                          if (addrLat !== undefined && addrLng !== undefined && addrLat !== null && addrLng !== null) {
+                            dispatch(checkLocationAndCalculateDistances({
+                              restaurantsList: restaurants,
+                              customCoords: { latitude: Number(addrLat), longitude: Number(addrLng) }
+                            }));
+                          } else {
+                            // Backup: if saved address has no coordinates, query GPS
+                            dispatch(checkLocationAndCalculateDistances(restaurants));
+                          }
+                        }}
+                      >
+                        <Feather name={addr.tag === 'Home' ? 'home' : addr.tag === 'Office' ? 'briefcase' : 'map-pin'} size={20} color={isSelected ? '#2B783E' : '#1E3545'} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: 'bold', color: isSelected ? '#2B783E' : '#1E3545' }}>
+                            {addr.tag || addr.label || 'Address'}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: '#808C94' }} numberOfLines={1}>
+                            {addr.flatNo ? `${addr.flatNo}, ` : ''}{addr.street || ''}
+                          </Text>
+                        </View>
+                        {isSelected && <Feather name="check" size={18} color="#2B783E" />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </ScrollView>
+
+            {/* Option C: Skip & Browse */}
+            <TouchableOpacity 
+              style={[styles.secondaryButton, { width: '100%', backgroundColor: 'transparent', borderWidth: 0, marginTop: 0 }]} 
+              onPress={() => {
+                setShowDeliverToModal(false);
+                dispatch(setSelectedSavedAddressId(null));
+                dispatch(skipLocation());
+              }}
+            >
+              <Text style={[styles.secondaryButtonText, { color: '#000000', textDecorationLine: 'underline' }]}>
+                Skip & Browse
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Out of Zone warning Modal */}
+      <Modal transparent visible={showOutOfZoneModal} animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
+              <FontAwesome name="exclamation-triangle" size={30} color="#E05A47" />
+            </View>
+            <Text style={styles.modalTitle}>Service Unavailable</Text>
+            <Text style={styles.modalSub}>
+              Sorry, we are currently only operational in Kurnool. You appear to be outside our service area.
+            </Text>
+            
+            <TouchableOpacity style={styles.primaryButton} onPress={() => dispatch(checkLocationAndCalculateDistances(restaurants))}>
+              <Text style={styles.primaryButtonText}>Retry Check</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

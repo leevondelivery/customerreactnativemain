@@ -4,7 +4,6 @@ import {
   View,
   TouchableOpacity,
   ScrollView,
-  ActivityIndicator,
   Modal,
   Pressable,
   Linking,
@@ -16,9 +15,12 @@ import { Feather, FontAwesome, FontAwesome5 } from '@expo/vector-icons';
 import { useDispatch, useSelector } from 'react-redux';
 
 import { useTabBar } from '../_layout';
-import { styles } from './profile.styles';
+import { styles } from '../../styles/profile.styles';
 import LoadingView from '../../components/LoadingView';
-import { fetchProfileData } from '../../store/restaurantsSlice';
+import { fetchProfileData, resetProfile } from '../../store/restaurantsSlice';
+import { resetLocationState } from '../../store/locationSlice';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import auth from '@react-native-firebase/auth';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -77,10 +79,10 @@ export default function ProfileScreen() {
         const userid = await AsyncStorage.getItem('userid');
         
         setUser({
-          name: name || 'Gsvinith',
-          phone: phone || '6300733511',
-          coins: coins !== null ? coins : '1890',
-          dateOfBirth: dateOfBirth || '',
+          name: name && name.toLowerCase() !== 'n/a' ? name : 'Customer',
+          phone: phone && phone.toLowerCase() !== 'n/a' ? phone : '',
+          coins: coins !== null && coins.toLowerCase() !== 'n/a' ? coins : '0',
+          dateOfBirth: dateOfBirth && dateOfBirth.toLowerCase() !== 'n/a' ? dateOfBirth : '',
         });
 
         if (userid && !profileLoaded) {
@@ -97,7 +99,25 @@ export default function ProfileScreen() {
 
   const handleLogout = async () => {
     try {
+      // Sign out from Firebase
+      if (auth().currentUser) {
+        await auth().signOut();
+      }
+    } catch (e) {
+      console.log('Firebase signout error:', e.message);
+    }
+
+    try {
+      // Sign out from Google (clears cached Google account selection)
+      await GoogleSignin.signOut();
+    } catch (e) {
+      console.log('Google signout error:', e.message);
+    }
+
+    try {
       await AsyncStorage.clear();
+      dispatch(resetLocationState());
+      dispatch(resetProfile());
       router.replace('/login');
     } catch (error) {
       console.error('Logout error:', error);

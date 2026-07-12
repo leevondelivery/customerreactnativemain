@@ -120,6 +120,12 @@ const restaurantsSlice = createSlice({
     setRestaurantsList: (state, action) => {
       state.list = action.payload;
       state.initialLoaded = true;
+    },
+    resetProfile: (state) => {
+      state.orders = [];
+      state.reviews = [];
+      state.profileLoaded = false;
+      state.profileLoading = false;
     }
   },
   extraReducers: (builder) => {
@@ -180,5 +186,5 @@ const restaurantsSlice = createSlice({
   },
 });
 
-export const { updateRestaurantStatuses, setRestaurantsList } = restaurantsSlice.actions;
+export const { updateRestaurantStatuses, setRestaurantsList, resetProfile } = restaurantsSlice.actions;
 export default restaurantsSlice.reducer;

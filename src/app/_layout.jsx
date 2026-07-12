@@ -2,10 +2,22 @@ import { FontAwesome, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Animated, Dimensions, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Dimensions, Platform, StyleSheet, Text, TouchableOpacity, View, Alert, PermissionsAndroid } from 'react-native';
 import { Provider } from 'react-redux';
 import { API_URL } from '../config';
 import { store } from '../store/store';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import messaging from '@react-native-firebase/messaging';
+
+if (Platform.OS !== 'web') {
+  GoogleSignin.configure({
+    webClientId: '549037342596-kkd837btqfu8dfprgtupmpprmiarc5e7.apps.googleusercontent.com',
+  });
+
+  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+    console.log('[FCM] Background message handled:', remoteMessage);
+  });
+}
 
 // Create context for communicating scroll-hide commands from children pages
 const TabBarContext = createContext({
@@ -80,6 +92,56 @@ export default function Layout() {
     const interval = setInterval(checkActiveOrder, 10000);
     return () => clearInterval(interval);
   }, [pathname]);
+
+  // Request FCM Push Notification Permission & Subscribe to Broadcast Topic
+  useEffect(() => {
+    if (Platform.OS === 'web') return;
+
+    const initPushNotifications = async () => {
+      try {
+        let enabled = false;
+
+        if (Platform.OS === 'android') {
+          if (Platform.Version >= 33) {
+            const granted = await PermissionsAndroid.request(
+              PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+            );
+            enabled = granted === PermissionsAndroid.RESULTS.GRANTED;
+          } else {
+            enabled = true; // Android 12 and below are granted on install
+          }
+        } else {
+          const authStatus = await messaging().requestPermission();
+          enabled =
+            authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+            authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+        }
+
+        if (enabled) {
+          console.log('[FCM] Permission granted. Subscribing to topic...');
+          await messaging().subscribeToTopic('all_customers');
+          console.log('[FCM] Subscribed to topic: all_customers');
+        } else {
+          console.log('[FCM] Permission denied.');
+        }
+      } catch (err) {
+        console.warn('[FCM] Init error:', err);
+      }
+    };
+
+    initPushNotifications();
+
+    // Listen for foreground notifications
+    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+      console.log('[FCM] Foreground notification received:', remoteMessage);
+      Alert.alert(
+        remoteMessage.notification?.title || 'Leevon Delivery',
+        remoteMessage.notification?.body || ''
+      );
+    });
+
+    return unsubscribe;
+  }, []);
 
   // Poll AsyncStorage for cart updates to keep badge synced in real-time
   useEffect(() => {

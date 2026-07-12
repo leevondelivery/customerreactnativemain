@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Modal,
@@ -16,8 +17,11 @@ import {
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useDispatch, useSelector } from 'react-redux';
+import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
+import auth from '@react-native-firebase/auth';
 
 // Razorpay standard script dynamic loader for Web
 const loadRazorpayScript = () => {
@@ -44,6 +48,12 @@ const loadRazorpayScript = () => {
 export default function CartScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const dispatch = useDispatch();
+  const userLocation = useSelector((state) => state.location.userLocation);
+  const roadDistances = useSelector((state) => state.location.roadDistances);
+  const locationStatus = useSelector((state) => state.location.locationStatus);
+  const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
+  const restaurants = useSelector((state) => state.restaurants.list);
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -61,8 +71,31 @@ export default function CartScreen() {
   const [selectedTag, setSelectedTag] = useState('Home'); // Home, Office, Apartment, Other
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
-  const [showAllAddresses, setShowAllAddresses] = useState(false);
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
+  const [hasActiveOrder, setHasActiveOrder] = useState(false);
+
+  // Phone OTP Verification States
+  const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
+  const [verificationPhone, setVerificationPhone] = useState('');
+  const [firstInputPhone, setFirstInputPhone] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [confirmResult, setConfirmResult] = useState(null);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [resendCount, setResendCount] = useState(0);
+  const [isBypassMode, setIsBypassMode] = useState(false);
+
+  useEffect(() => {
+    let interval = null;
+    if (resendTimer > 0) {
+      interval = setInterval(() => {
+        setResendTimer(prev => prev - 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [resendTimer]);
 
   const showAlert = (title, message) => {
     setCustomAlert({
@@ -183,19 +216,75 @@ export default function CartScreen() {
       const loadUserAndAddresses = async () => {
         const uid = await AsyncStorage.getItem('userid');
         setUserid(uid);
-        const userPhone = await AsyncStorage.getItem('phone');
-        setPhone(userPhone || '');
-        const userName = await AsyncStorage.getItem('name');
-        setName(userName || '');
-        const userEmail = await AsyncStorage.getItem('email');
-        setEmail(userEmail || '');
+        
+        // Load initial values from cache
+        const cachedPhone = await AsyncStorage.getItem('phone');
+        setPhone(cachedPhone && cachedPhone !== 'N/A' ? cachedPhone : '');
+        const cachedName = await AsyncStorage.getItem('name');
+        setName(cachedName && cachedName !== 'N/A' ? cachedName : '');
+        const cachedEmail = await AsyncStorage.getItem('email');
+        setEmail(cachedEmail && cachedEmail !== 'N/A' ? cachedEmail : '');
+
         if (uid) {
           fetchSavedAddresses(uid);
+          
+          // Sync profile details (including phone) live from backend database
+          try {
+            const userRes = await fetch(`${API_URL}/user/${uid}`);
+            const userData = await userRes.json();
+            if (userRes.ok && userData.success && userData.user) {
+              const liveUser = userData.user;
+              if (liveUser.phone && liveUser.phone !== 'N/A') {
+                await AsyncStorage.setItem('phone', liveUser.phone);
+                setPhone(liveUser.phone);
+              }
+              if (liveUser.name && liveUser.name !== 'N/A') {
+                await AsyncStorage.setItem('name', liveUser.name);
+                setName(liveUser.name);
+              }
+              if (liveUser.email && liveUser.email !== 'N/A') {
+                await AsyncStorage.setItem('email', liveUser.email);
+                setEmail(liveUser.email);
+              }
+            }
+          } catch (profileErr) {
+            console.warn('[Cart] Error syncing user profile from backend:', profileErr);
+          }
+
+          try {
+            const activeRes = await fetch(`${API_URL}/orderstatus/user/${uid}`);
+            const activeData = await activeRes.json();
+            if (activeRes.ok && activeData.success && activeData.orderStatus) {
+              setHasActiveOrder(true);
+            } else {
+              setHasActiveOrder(false);
+            }
+          } catch (activeErr) {
+            console.warn('[Cart] Error checking active order status:', activeErr);
+            setHasActiveOrder(false);
+          }
         }
       };
       loadUserAndAddresses();
     }, [userid])
   );
+
+  // Pre-fill selected address from Redux if set globally on startup
+  useEffect(() => {
+    if (selectedSavedAddressIdRedux && savedAddresses.length > 0) {
+      const found = savedAddresses.find(
+        (addr) => (addr.id || addr._id) === selectedSavedAddressIdRedux
+      );
+      if (found) {
+        setFlatNo(found.flatNo || '');
+        setStreet(found.street || '');
+        setLandmark(found.landmark || '');
+        setSelectedTag(found.tag || found.label || 'Home');
+        setSelectedSavedAddressId(selectedSavedAddressIdRedux);
+        setShowDeliveryForm(true);
+      }
+    }
+  }, [selectedSavedAddressIdRedux, savedAddresses]);
 
   const updateQuantity = async (itemId, change) => {
     try {
@@ -237,6 +326,19 @@ export default function CartScreen() {
       Alert.alert('Authentication Error', 'User not logged in.');
       return;
     }
+
+    const isDuplicate = savedAddresses.some(addr => {
+      const existingFlat = (addr.flatNo || '').toLowerCase().trim();
+      const existingStreet = (addr.street || '').toLowerCase().trim();
+      const newFlat = flatNo.toLowerCase().trim();
+      const newStreet = street.toLowerCase().trim();
+      return existingFlat === newFlat && existingStreet === newStreet;
+    });
+
+    if (isDuplicate) {
+      Alert.alert('Already Saved', 'This address is already saved in your address book.');
+      return;
+    }
     try {
       const response = await fetch(`${API_URL}/user/${userid}/addresses`, {
         method: 'POST',
@@ -248,6 +350,8 @@ export default function CartScreen() {
           street,
           landmark,
           tag: selectedTag,
+          lat: userLocation ? userLocation.latitude : null,
+          lng: userLocation ? userLocation.longitude : null,
         }),
       });
       const data = await response.json();
@@ -265,7 +369,7 @@ export default function CartScreen() {
       }
     } catch (error) {
       console.error('Error saving address:', error);
-      Alert.alert('Error', 'Could not connect to backend server.');
+      Alert.alert('Error', `Could not connect to backend: ${error.message}`);
     }
   };
 
@@ -304,12 +408,169 @@ export default function CartScreen() {
       setLandmark('');
       setSelectedTag('Home');
       setSelectedSavedAddressId(null);
+      // Restore calculations to current live device GPS location
+      console.log('[Cart] Address deselected, restoring current device coordinates...');
+      dispatch(checkLocationAndCalculateDistances(restaurants));
     } else {
       setFlatNo(addr.flatNo || '');
       setStreet(addr.street || '');
       setLandmark(addr.landmark || '');
       setSelectedTag(addr.tag || addr.label || 'Home');
       setSelectedSavedAddressId(addrId);
+      // Recalculate routing based on saved address coordinates
+      const addrLat = addr.lat !== undefined ? addr.lat : addr.latitude;
+      const addrLng = addr.lng !== undefined ? addr.lng : addr.longitude;
+      if (addrLat !== undefined && addrLng !== undefined && addrLat !== null && addrLng !== null) {
+        console.log('[Cart] Saved address selected. Recalculating distance using stored coordinates:', addrLat, addrLng);
+        dispatch(checkLocationAndCalculateDistances({
+          restaurantsList: restaurants,
+          customCoords: { latitude: Number(addrLat), longitude: Number(addrLng) }
+        }));
+      }
+    }
+  };
+
+  const saveVerifiedPhoneToBackend = async (cleanPhone, isVerified) => {
+    const activeUserId = await AsyncStorage.getItem('userid');
+    if (!activeUserId) throw new Error('User ID not found');
+
+    const response = await fetch(`${API_URL}/user/update`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userid: activeUserId,
+        phone: cleanPhone,
+        isPhoneVerified: isVerified
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to update phone number.');
+    }
+
+    await AsyncStorage.setItem('phone', cleanPhone);
+    await AsyncStorage.setItem('isPhoneVerified', String(isVerified));
+    setPhone(cleanPhone);
+
+    setShowPhoneOTPModal(false);
+    triggerToast(isVerified ? 'Phone verified successfully!' : 'Phone confirmed (verbal verification required).', 'success');
+
+    setTimeout(() => {
+      handleConfirmOrder();
+    }, 500);
+  };
+
+  const handleSendOTP = async (isResend = false) => {
+    if (!verificationPhone || verificationPhone.trim().length < 10) {
+      showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const formattedPhone = `+91${verificationPhone.trim().slice(-10)}`;
+      console.log('[Phone Auth] Requesting OTP for:', formattedPhone);
+
+      // Save the first input phone number (slice last 10 digits)
+      const cleanFirstPhone = verificationPhone.trim().slice(-10);
+      setFirstInputPhone(cleanFirstPhone);
+
+      const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+      setConfirmResult(confirmation);
+      
+      triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
+      setResendTimer(60);
+      
+      if (isResend) {
+        setResendCount(prev => {
+          const nextCount = prev + 1;
+          if (nextCount >= 2) {
+            setIsBypassMode(true);
+            setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+          }
+          return nextCount;
+        });
+      }
+    } catch (error) {
+      console.error('[Phone Auth] Send OTP Error:', error);
+      if (error.code === 'auth/too-many-requests' || error.message?.includes('blocked')) {
+        showAlert('Temporarily Blocked', 'Too many requests. Switching to verbal confirmation.');
+        const cleanFirstPhone = verificationPhone.trim().slice(-10);
+        setFirstInputPhone(cleanFirstPhone);
+        setIsBypassMode(true);
+        setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+      } else {
+        // If they click resend and it fails due to network/etc., check if resend count reached 2
+        if (isResend) {
+          setResendCount(prev => {
+            const nextCount = prev + 1;
+            if (nextCount >= 2) {
+              showAlert('Switching to Verbal Confirmation', 'SMS service is not responding. Please confirm your number.');
+              const cleanFirstPhone = verificationPhone.trim().slice(-10);
+              setFirstInputPhone(cleanFirstPhone);
+              setIsBypassMode(true);
+              setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+            } else {
+              showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
+            }
+            return nextCount;
+          });
+        } else {
+          showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
+        }
+      }
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!otpCode || otpCode.length < 6) {
+      showAlert('Invalid OTP', 'Please enter the 6-digit verification code.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      console.log('[Phone Auth] Confirming OTP code:', otpCode);
+      await confirmResult.confirm(otpCode);
+      console.log('[Phone Auth] Verification successful!');
+
+      const cleanPhone = verificationPhone.trim().slice(-10);
+      await saveVerifiedPhoneToBackend(cleanPhone, true);
+    } catch (error) {
+      console.error('[Phone Auth] OTP verification error:', error);
+      showAlert('Verification Failed', 'The code you entered is invalid or expired. Please try again.');
+      setOtpLoading(false);
+    }
+  };
+
+  const handleBypassSubmit = async () => {
+    if (!verificationPhone || verificationPhone.trim().length < 10) {
+      showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const cleanPhone = verificationPhone.trim().slice(-10);
+      
+      // Verify both phone numbers are the same
+      if (cleanPhone !== firstInputPhone) {
+        showAlert('Verification Error', 'The phone number entered does not match the first number you entered. Please verify your number.');
+        setOtpLoading(false);
+        return;
+      }
+
+      console.log('[Phone Auth] Bypassing OTP, saving number as unverified:', cleanPhone);
+      await saveVerifiedPhoneToBackend(cleanPhone, false);
+    } catch (error) {
+      console.error('[Phone Auth] Bypass submit error:', error);
+      showAlert('Error saving number', 'Failed to save your phone number. Please try again.');
+      setOtpLoading(false);
     }
   };
 
@@ -319,18 +580,35 @@ export default function CartScreen() {
       return;
     }
 
+    // Gated Phone Verification Check
+    const activePhone = await AsyncStorage.getItem('phone');
+    if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '') {
+      setVerificationPhone('');
+      setOtpCode('');
+      setConfirmResult(null);
+      setIsBypassMode(false);
+      setFirstInputPhone('');
+      setResendCount(0);
+      setResendTimer(0);
+      setShowPhoneOTPModal(true);
+      return;
+    }
+
     const subTotal = calculateTotal();
     const gstAmount = subTotal * 0.05;
     const pFee = 2.00;
-    const gTotal = subTotal + gstAmount + pFee;
+    const restId = cartItems[0]?.restId || '';
+    const distanceStr = roadDistances[restId] || '';
+    const distanceVal = parseFloat(distanceStr) || 0;
+    const deliveryFee = distanceVal * 20;
+    const gTotal = subTotal + gstAmount + pFee + deliveryFee;
     const coins = subTotal > 200 ? 10 + Math.floor((subTotal - 200) / 100) * 5 : 0;
     const restName = cartItems[0]?.restaurantName || 'Restaurant';
-    const restId = cartItems[0]?.restId || '';
 
     const activeUserId = await AsyncStorage.getItem('userid');
-    const activePhone = await AsyncStorage.getItem('phone');
     const activeName = await AsyncStorage.getItem('name');
     const activeEmail = await AsyncStorage.getItem('email');
+    const activePhoneVerified = (await AsyncStorage.getItem('isPhoneVerified')) === 'true';
 
     setIsProcessingPayment(true);
 
@@ -396,12 +674,18 @@ export default function CartScreen() {
                   userName: activeName,
                   userEmail: activeEmail,
                   userPhone: activePhone,
+                  isPhoneVerified: activePhoneVerified,
                   deliveryAddressInfo: {
                     flatNo,
                     street,
                     landmark,
                     tag: selectedTag,
                   },
+                  userCoordinates: userLocation ? {
+                    lat: userLocation.latitude,
+                    lng: userLocation.longitude
+                  } : null,
+                  deliveryDistance: roadDistances[restId] || null,
                 }),
               });
 
@@ -433,7 +717,16 @@ export default function CartScreen() {
         rzp.open();
       } else {
         // Mobile (Android / iOS)
-        const RazorpayCheckout = require('react-native-razorpay').default;
+        const { NativeModules } = require('react-native');
+        const hasNativeRazorpay = NativeModules && NativeModules.RazorpayCheckout;
+
+        let RazorpayCheckout = null;
+        try {
+          const RazorpayModule = require('react-native-razorpay');
+          RazorpayCheckout = RazorpayModule.default || RazorpayModule;
+        } catch (e) {
+          console.warn('[Razorpay] Failed to load react-native-razorpay native module:', e);
+        }
 
         const options = {
           description: `Order from ${restName}`,
@@ -450,6 +743,79 @@ export default function CartScreen() {
           },
           theme: { color: '#27AE60' },
         };
+
+        if (!RazorpayCheckout || !RazorpayCheckout.open || !hasNativeRazorpay) {
+          console.warn('[Razorpay] Native module not available. Simulating success for testing...');
+          Alert.alert(
+            'Expo Go Testing Mode',
+            'react-native-razorpay native module is not linked in Expo Go. Would you like to simulate a successful payment for testing?',
+            [
+              {
+                text: 'Cancel',
+                onPress: () => setIsProcessingPayment(false),
+                style: 'cancel',
+              },
+              {
+                text: 'Simulate Success',
+                onPress: async () => {
+                  try {
+                    const mockPaymentId = `pay_mock_${Date.now()}`;
+                    const mockSignature = `sig_mock_${Date.now()}`;
+                    const verifyResponse = await fetch(`${API_URL}/payment/verify`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        razorpay_order_id: orderData.orderId,
+                        razorpay_payment_id: mockPaymentId,
+                        razorpay_signature: mockSignature,
+                        userId: activeUserId,
+                        cartItems: cartItems,
+                        restaurantId: restId,
+                        restaurantName: restName,
+                        totalPrice: subTotal,
+                        gst: gstAmount,
+                        platformFee: pFee,
+                        grandTotal: gTotal,
+                        coinsEarned: coins,
+                        userName: activeName,
+                        userEmail: activeEmail,
+                        userPhone: activePhone,
+                        isPhoneVerified: activePhoneVerified,
+                        deliveryAddressInfo: {
+                          flatNo,
+                          street,
+                          landmark,
+                          tag: selectedTag,
+                        },
+                        userCoordinates: userLocation ? {
+                          lat: userLocation.latitude,
+                          lng: userLocation.longitude
+                        } : null,
+                        deliveryDistance: roadDistances[restId] || null,
+                        deliveryFee: deliveryFee,
+                      }),
+                    });
+
+                    const verifyData = await verifyResponse.json();
+                    if (verifyData.success) {
+                      await AsyncStorage.removeItem('cart');
+                      setIsProcessingPayment(false);
+                      setShowSuccessModal(true);
+                    } else {
+                      setIsProcessingPayment(false);
+                      showAlert('Verification Failed', verifyData.message || 'Unable to verify payment.');
+                    }
+                  } catch (verifyError) {
+                    setIsProcessingPayment(false);
+                    console.error('Verify payment error on mock checkout:', verifyError);
+                    showAlert('Server Error', 'Failed to connect to backend server for verification.');
+                  }
+                }
+              }
+            ]
+          );
+          return;
+        }
 
         RazorpayCheckout.open(options)
           .then(async (paymentResult) => {
@@ -473,12 +839,19 @@ export default function CartScreen() {
                   userName: activeName,
                   userEmail: activeEmail,
                   userPhone: activePhone,
+                  isPhoneVerified: activePhoneVerified,
                   deliveryAddressInfo: {
                     flatNo,
                     street,
                     landmark,
                     tag: selectedTag,
                   },
+                  userCoordinates: userLocation ? {
+                    lat: userLocation.latitude,
+                    lng: userLocation.longitude
+                  } : null,
+                  deliveryDistance: roadDistances[restId] || null,
+                  deliveryFee: deliveryFee,
                 }),
               });
 
@@ -533,7 +906,11 @@ export default function CartScreen() {
   const total = calculateTotal();
   const gst = total * 0.05; // 5% GST
   const platformFee = 2.00; // Constant platform fee
-  const grandTotal = total + gst + platformFee;
+  const restId = cartItems[0]?.restId || '';
+  const distanceStr = roadDistances[restId] || '';
+  const distanceVal = parseFloat(distanceStr) || 0;
+  const deliveryFee = distanceVal * 20;
+  const grandTotal = total + gst + platformFee + deliveryFee;
   const coinsEarned = total > 200 ? 10 + Math.floor((total - 200) / 100) * 5 : 0;
 
   if (cartItems.length === 0 && !showSuccessModal) {
@@ -638,6 +1015,12 @@ export default function CartScreen() {
             <Text style={styles.billLabel}>Platform fee</Text>
             <Text style={styles.billValue}>₹{platformFee.toFixed(2)}</Text>
           </View>
+          {distanceVal > 0 ? (
+            <View style={styles.billRow}>
+              <Text style={styles.billLabel}>Delivery fee ({distanceStr})</Text>
+              <Text style={styles.billValue}>₹{deliveryFee.toFixed(2)}</Text>
+            </View>
+          ) : null}
 
           <View style={styles.divider} />
 
@@ -661,6 +1044,60 @@ export default function CartScreen() {
           )}
         </View>
 
+        {/* Active Order warning banner inside Cart */}
+        {hasActiveOrder && (
+          <View style={{
+            backgroundColor: '#FDF0ED',
+            borderColor: '#F8D7DA',
+            borderWidth: 1,
+            borderRadius: 16,
+            padding: 16,
+            marginHorizontal: 16,
+            marginBottom: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12
+          }}>
+            <Ionicons name="alert-circle-outline" size={24} color="#D32F2F" />
+            <Text style={{
+              flex: 1,
+              fontSize: 13,
+              color: '#C62828',
+              lineHeight: 18,
+              fontWeight: 'bold'
+            }}>
+              You already have an active order in progress. Please wait for your ongoing order to be completed before placing a new one.
+            </Text>
+          </View>
+        )}
+
+        {/* Location warning banner inside Cart if skipped */}
+        {locationStatus !== 'inside' && !hasActiveOrder && (
+          <View style={{
+            backgroundColor: '#FFF9E6',
+            borderColor: '#FFE0B2',
+            borderWidth: 1,
+            borderRadius: 16,
+            padding: 16,
+            marginHorizontal: 16,
+            marginBottom: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12
+          }}>
+            <Ionicons name="location-outline" size={24} color="#FF9800" />
+            <Text style={{
+              flex: 1,
+              fontSize: 13,
+              color: '#B78103',
+              lineHeight: 18,
+              fontWeight: '500'
+            }}>
+              GPS / Location access is required to place orders. Please enable device location settings to verify service area and calculate delivery road distance.
+            </Text>
+          </View>
+        )}
+
         {/* Action Buttons Row */}
         <View style={styles.actionsRow}>
           <TouchableOpacity style={styles.clearButton} onPress={clearCart} activeOpacity={0.85}>
@@ -668,9 +1105,9 @@ export default function CartScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.checkoutButton, showDeliveryForm && styles.checkoutButtonDisabled]}
+            style={[styles.checkoutButton, (showDeliveryForm || locationStatus !== 'inside' || hasActiveOrder) && styles.checkoutButtonDisabled]}
             onPress={handlePlaceOrder}
-            disabled={showDeliveryForm}
+            disabled={showDeliveryForm || locationStatus !== 'inside' || hasActiveOrder}
             activeOpacity={0.85}
           >
             <Text style={styles.checkoutButtonText}>Place the order</Text>
@@ -727,8 +1164,9 @@ export default function CartScreen() {
 
             {/* Save Address Button */}
             <TouchableOpacity
-              style={styles.saveAddressButton}
+              style={[styles.saveAddressButton, hasActiveOrder && { backgroundColor: '#CCC' }]}
               onPress={handleSaveAddress}
+              disabled={hasActiveOrder}
               activeOpacity={0.85}
             >
               <Text style={styles.saveAddressButtonText}>Save Address</Text>
@@ -739,7 +1177,7 @@ export default function CartScreen() {
               <View style={styles.savedSection}>
                 <Text style={styles.savedAddressesLabel}>Use a saved address:</Text>
 
-                {(showAllAddresses ? savedAddresses : savedAddresses.slice(0, 1)).map((addr) => {
+                {savedAddresses.map((addr) => {
                   const isSelected = selectedSavedAddressId === (addr.id || addr._id);
                   return (
                     <TouchableOpacity
@@ -775,27 +1213,14 @@ export default function CartScreen() {
                     </TouchableOpacity>
                   );
                 })}
-
-                {savedAddresses.length > 1 && (
-                  <TouchableOpacity
-                    style={styles.viewMoreButton}
-                    onPress={() => setShowAllAddresses(!showAllAddresses)}
-                    activeOpacity={0.8}
-                  >
-                    <Text style={styles.viewMoreButtonText}>
-                      {showAllAddresses
-                        ? 'Hide addresses ∧'
-                        : `View ${savedAddresses.length - 1} more addresses ∨`}
-                    </Text>
-                  </TouchableOpacity>
-                )}
               </View>
             )}
 
             {/* Confirm Order Button */}
             <TouchableOpacity
-              style={styles.confirmOrderButton}
+              style={[styles.confirmOrderButton, (locationStatus !== 'inside' || hasActiveOrder) && { backgroundColor: '#CCC' }]}
               onPress={handleConfirmOrder}
+              disabled={locationStatus !== 'inside' || hasActiveOrder}
               activeOpacity={0.85}
             >
               <Text style={styles.confirmOrderButtonText}>
@@ -903,6 +1328,178 @@ export default function CartScreen() {
           </View>
         </Animated.View>
       )}
+
+      {/* Phone Number OTP Verification Modal */}
+      <Modal
+        visible={showPhoneOTPModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!otpLoading) setShowPhoneOTPModal(false);
+        }}
+      >
+        <View style={styles.alertBackdrop}>
+          <View style={[styles.alertCard, { backgroundColor: '#F9F9F6', padding: 24, maxWidth: 320 }]}>
+            <View style={[styles.alertIconContainer, { backgroundColor: '#1E3545', marginBottom: 15 }]}>
+              <Feather name="phone" size={28} color="#FFFFFF" />
+            </View>
+
+            {!confirmResult && !isBypassMode ? (
+              // Step 1: Input Phone Number
+              <>
+                <Text style={styles.alertTitle}>Verify Phone Number</Text>
+                <Text style={styles.alertMessage}>
+                  Please enter your 10-digit mobile number to complete your order.
+                </Text>
+                
+                <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#1A1A1A', padding: 0 }}
+                    placeholder="Enter Mobile Number"
+                    placeholderTextColor="#A19E95"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    value={verificationPhone}
+                    onChangeText={setVerificationPhone}
+                    disabled={otpLoading}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.alertButton, otpLoading && { opacity: 0.6 }]}
+                  onPress={() => handleSendOTP(false)}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.alertButtonText}>Send OTP</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ marginTop: 15 }}
+                  onPress={() => setShowPhoneOTPModal(false)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : isBypassMode ? (
+              // Bypass Mode: Input Number directly (manual verbal confirmation)
+              <>
+                <Text style={styles.alertTitle}>Confirm Phone Number</Text>
+                <Text style={[styles.alertMessage, { color: '#B78103', fontWeight: '600', marginBottom: 12 }]}>
+                  SMS services are delayed. Please confirm your 10-digit number below. We will call you to verify your order details.
+                </Text>
+
+                {/* First Input: Already Entered Number (Disabled/ReadOnly) */}
+                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Original Number Entered:</Text>
+                <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFEFEF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 12, opacity: 0.8 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#7E7C77', padding: 0 }}
+                    value={firstInputPhone}
+                    editable={false}
+                  />
+                </View>
+
+                {/* Second Input: Manually Entered Confirmation Number */}
+                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Confirm Mobile Number:</Text>
+                <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#1A1A1A', padding: 0 }}
+                    placeholder="Re-enter Mobile Number"
+                    placeholderTextColor="#A19E95"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    value={verificationPhone}
+                    onChangeText={setVerificationPhone}
+                    disabled={otpLoading}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.alertButton, { backgroundColor: '#B78103' }, otpLoading && { opacity: 0.6 }]}
+                  onPress={handleBypassSubmit}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.alertButtonText}>Confirm & Checkout</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ marginTop: 15 }}
+                  onPress={() => setShowPhoneOTPModal(false)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              // Step 2: Input OTP Code
+              <>
+                <Text style={styles.alertTitle}>Enter OTP</Text>
+                <Text style={styles.alertMessage}>
+                  We sent a 6-digit verification code to +91 {verificationPhone.trim().slice(-10)}.
+                </Text>
+                
+                <TextInput
+                  style={[styles.addressInput, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', textAlign: 'center', fontSize: 20, letterSpacing: 5, fontWeight: 'bold', marginBottom: 20 }]}
+                  placeholder="------"
+                  placeholderTextColor="#A19E95"
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={otpCode}
+                  onChangeText={setOtpCode}
+                  disabled={otpLoading}
+                />
+
+                <TouchableOpacity
+                  style={[styles.alertButton, otpLoading && { opacity: 0.6 }]}
+                  onPress={handleVerifyOTP}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.alertButtonText}>Verify & Pay</Text>
+                  )}
+                </TouchableOpacity>
+
+                {resendTimer > 0 ? (
+                  <Text style={{ marginTop: 15, color: '#7E7C77', fontSize: 13, fontWeight: '600' }}>
+                    Resend code in {resendTimer}s
+                  </Text>
+                ) : (
+                  <TouchableOpacity
+                    style={{ marginTop: 15 }}
+                    onPress={() => handleSendOTP(true)}
+                    disabled={otpLoading}
+                  >
+                    <Text style={{ color: '#1E3545', fontWeight: '700', fontSize: 14 }}>Resend OTP</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={{ marginTop: 12 }}
+                  onPress={() => setConfirmResult(null)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Back</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1269,11 +1866,12 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(249, 249, 246, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 9999,
   },
   loadingText: {
     marginTop: 16,

@@ -16,8 +16,10 @@ import {
 } from 'react-native';
 
 import { API_URL } from '../../config';
-import { styles } from './login.styles';
+import { styles } from '../../styles/login.styles';
 import LoadingView from '../../components/LoadingView';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import auth, { GoogleAuthProvider } from '@react-native-firebase/auth';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -29,6 +31,88 @@ export default function LoginScreen() {
   // Custom Alert States
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    try {
+      console.log('[Google Login] Checking play services...');
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      
+      console.log('[Google Login] Requesting user account...');
+      // Sign out from any existing session first to force the Google Account Chooser
+      try {
+        await GoogleSignin.signOut();
+      } catch (signOutError) {
+        console.log('[Google Login] Error signing out before sign in:', signOutError);
+      }
+      
+      await GoogleSignin.signIn();
+      
+      console.log('[Google Login] Fetching access and ID tokens...');
+      const tokens = await GoogleSignin.getTokens();
+      const idToken = tokens.idToken;
+      const accessToken = tokens.accessToken;
+      
+      console.log('[Google Login] Firebase authenticating credential...');
+      const googleCredential = GoogleAuthProvider.credential(idToken, accessToken);
+      const userCredential = await auth().signInWithCredential(googleCredential);
+      
+      console.log('[Google Login] Fetching Firebase ID token...');
+      const firebaseIdToken = await userCredential.user.getIdToken();
+      
+      console.log('[Google Login] Syncing with backend at:', `${API_URL}/login/google`);
+      const response = await fetch(`${API_URL}/login/google`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ idToken: firebaseIdToken }),
+      });
+
+      const data = await response.json();
+      console.log('[Google Login] Backend response:', data);
+
+      if (response.ok && data.success) {
+        const user = data.user;
+        const logintime = new Date().toLocaleString();
+
+        // Save session in AsyncStorage
+        await AsyncStorage.setItem('userid', user._id || 'N/A');
+        await AsyncStorage.setItem('phone', user.phone || 'N/A');
+        
+        // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
+        const displayName = user.name && user.name.toLowerCase() !== 'n/a'
+          ? user.name
+          : (userCredential.user.displayName && userCredential.user.displayName.toLowerCase() !== 'n/a'
+              ? userCredential.user.displayName
+              : 'N/A');
+        await AsyncStorage.setItem('name', displayName);
+
+        // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
+        const displayEmail = user.email && user.email.toLowerCase() !== 'n/a'
+          ? user.email
+          : (userCredential.user.email && userCredential.user.email.toLowerCase() !== 'n/a'
+              ? userCredential.user.email
+              : 'N/A');
+        await AsyncStorage.setItem('email', displayEmail);
+        await AsyncStorage.setItem('logintime', logintime);
+        await AsyncStorage.setItem('coins', String(user.coins ?? 0));
+        await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+        router.replace('/restaurentlist');
+      } else {
+        setErrorMessage(data.message || 'Failed to sync account with backend.');
+        setShowErrorModal(true);
+      }
+    } catch (error) {
+      console.error('[Google Login] Flow error:', error);
+      setErrorMessage('Google Sign-in failed. Please verify your Google account or connection.');
+      setShowErrorModal(true);
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   // Check login status on mount
   useEffect(() => {
@@ -189,6 +273,39 @@ export default function LoginScreen() {
               <ActivityIndicator color="#000000" />
             ) : (
               <Text style={styles.buttonText}>Login</Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Divider */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', width: '85%', marginVertical: 10 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: '#DCD3C5' }} />
+            <Text style={{ marginHorizontal: 12, color: '#7E7C77', fontSize: 13, fontWeight: '700' }}>OR</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: '#DCD3C5' }} />
+          </View>
+
+          {/* Google Login Button */}
+          <TouchableOpacity
+            style={[
+              styles.buttonPill,
+              styles.shadow,
+              {
+                backgroundColor: '#FFFFFF',
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12,
+                paddingHorizontal: 30,
+              }
+            ]}
+            onPress={handleGoogleLogin}
+            disabled={googleLoading || loading}
+          >
+            {googleLoading ? (
+              <ActivityIndicator color="#000000" />
+            ) : (
+              <>
+                <FontAwesome name="google" size={18} color="#DB4437" />
+                <Text style={[styles.buttonText, { fontSize: 16 }]}>Continue with Google</Text>
+              </>
             )}
           </TouchableOpacity>
         </ScrollView>

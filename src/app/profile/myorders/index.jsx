@@ -12,7 +12,7 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 
 import { useTabBar } from '../../_layout';
-import { styles } from './myorders.styles';
+import { styles } from '../../../styles/myorders.styles';
 import LoadingView from '../../../components/LoadingView';
 import { fetchProfileData } from '../../../store/restaurantsSlice';
 

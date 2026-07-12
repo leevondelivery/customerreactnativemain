@@ -1,13 +1,12 @@
-import { Platform } from 'react-native';
-
 const getApiUrl = () => {
-  // For local development:
-  // - We use your machine's current local Wi-Fi IP address (10.93.153.192) for Android.
-  //   This allows connecting from a physical Android device on your local Wi-Fi.
-  if (Platform.OS === 'android') {
-    return 'http://10.93.153.192:5000';
-  }
-  return 'http://localhost:5000';
+  // For local web browser testing:
+  // return 'http://localhost:5000';
+  
+  // For Expo Go on physical mobile devices (configured with your local IP):
+  // return 'http://192.168.0.105:5000';
+  
+  // Current production URL:
+  return 'https://customerbackendfile-production.up.railway.app';
 };
 
 export const API_URL = getApiUrl();

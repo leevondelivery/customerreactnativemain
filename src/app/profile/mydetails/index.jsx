@@ -15,7 +15,7 @@ import {
 
 import { useTabBar } from '../../_layout';
 import { API_URL } from '../../../config';
-import { styles } from './mydetails.styles';
+import { styles } from '../../../styles/mydetails.styles';
 import LoadingView from '../../../components/LoadingView';
 
 export default function MyDetailsScreen() {
@@ -67,14 +67,14 @@ export default function MyDetailsScreen() {
 
         // Extract date component (YYYY-MM-DD) from ISO format if present
         let formattedDob = '2003-01-04';
-        if (dateOfBirth) {
+        if (dateOfBirth && dateOfBirth.toLowerCase() !== 'n/a') {
           formattedDob = dateOfBirth.includes('T') ? dateOfBirth.split('T')[0] : dateOfBirth;
         }
 
         setUser({
-          name: name || 'Gsvinith',
-          phone: phone || '6300733511',
-          email: email || 'gs@gmail.com',
+          name: name && name.toLowerCase() !== 'n/a' ? name : 'Customer',
+          phone: phone && phone.toLowerCase() !== 'n/a' ? phone : '',
+          email: email && email.toLowerCase() !== 'n/a' ? email : '',
           dateOfBirth: formattedDob,
         });
       } catch (e) {
