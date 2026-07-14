@@ -21,6 +21,7 @@ import { fetchProfileData, resetProfile } from '../../store/restaurantsSlice';
 import { resetLocationState } from '../../store/locationSlice';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import auth from '@react-native-firebase/auth';
+import { API_URL } from '../../config';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -39,6 +40,7 @@ export default function ProfileScreen() {
   });
   const [loading, setLoading] = useState(true);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [isCoinsActive, setIsCoinsActive] = useState(true);
 
   const [shineValue] = useState(() => new Animated.Value(-180));
 
@@ -72,21 +74,62 @@ export default function ProfileScreen() {
   useEffect(() => {
     const fetchUserData = async () => {
       try {
-        const name = await AsyncStorage.getItem('name');
-        const phone = await AsyncStorage.getItem('phone');
-        const coins = await AsyncStorage.getItem('coins');
-        const dateOfBirth = await AsyncStorage.getItem('dateOfBirth');
+        const cachedName = await AsyncStorage.getItem('name');
+        const cachedPhone = await AsyncStorage.getItem('phone');
+        const cachedCoins = await AsyncStorage.getItem('coins');
+        const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
         const userid = await AsyncStorage.getItem('userid');
         
         setUser({
-          name: name && name.toLowerCase() !== 'n/a' ? name : 'Customer',
-          phone: phone && phone.toLowerCase() !== 'n/a' ? phone : '',
-          coins: coins !== null && coins.toLowerCase() !== 'n/a' ? coins : '0',
-          dateOfBirth: dateOfBirth && dateOfBirth.toLowerCase() !== 'n/a' ? dateOfBirth : '',
+          name: cachedName && cachedName.toLowerCase() !== 'n/a' ? cachedName : 'Customer',
+          phone: cachedPhone && cachedPhone.toLowerCase() !== 'n/a' ? cachedPhone : '',
+          coins: cachedCoins !== null && cachedCoins.toLowerCase() !== 'n/a' ? cachedCoins : '0',
+          dateOfBirth: cachedDateOfBirth && cachedDateOfBirth.toLowerCase() !== 'n/a' ? cachedDateOfBirth : '',
         });
 
-        if (userid && !profileLoaded) {
-          dispatch(fetchProfileData(userid));
+        if (userid) {
+          // Fetch global toggle status for coins
+          try {
+            const feesRes = await fetch(`${API_URL}/fees-config`);
+            const feesData = await feesRes.json();
+            if (feesRes.ok && feesData.success && feesData.config) {
+              setIsCoinsActive(feesData.config.isCoinsActive !== false);
+            }
+          } catch (feesErr) {
+            console.warn('[Profile] Error loading fees configuration:', feesErr);
+          }
+
+          // Fetch live user coins balance
+          try {
+            const userRes = await fetch(`${API_URL}/user/${userid}`);
+            const userData = await userRes.json();
+            if (userRes.ok && userData.success && userData.user) {
+              const liveCoins = String(userData.user.coins ?? 0);
+              const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
+              const livePhone = userData.user.phone && userData.user.phone !== 'N/A' ? userData.user.phone : cachedPhone;
+              
+              await AsyncStorage.setItem('coins', liveCoins);
+              if (userData.user.name && userData.user.name !== 'N/A') {
+                await AsyncStorage.setItem('name', userData.user.name);
+              }
+              if (userData.user.phone && userData.user.phone !== 'N/A') {
+                await AsyncStorage.setItem('phone', userData.user.phone);
+              }
+
+              setUser(prev => ({
+                ...prev,
+                coins: liveCoins,
+                name: liveName,
+                phone: livePhone
+              }));
+            }
+          } catch (profileErr) {
+            console.warn('[Profile] Error syncing live profile details:', profileErr);
+          }
+
+          if (!profileLoaded) {
+            dispatch(fetchProfileData(userid));
+          }
         }
       } catch (e) {
         console.error('Error fetching user data:', e);
@@ -210,26 +253,28 @@ export default function ProfileScreen() {
         </View>
 
         {/* Available Coins Banner */}
-        <View style={[styles.coinsCard, styles.shadow]}>
-          <View style={styles.coinsCircle}>
-            <FontAwesome5 name="coins" size={24} color="#FFFFFF" />
+        {isCoinsActive && (
+          <View style={[styles.coinsCard, styles.shadow]}>
+            <View style={styles.coinsCircle}>
+              <FontAwesome5 name="coins" size={24} color="#FFFFFF" />
+            </View>
+            <View style={styles.coinsContent}>
+              <Text style={styles.coinsLabel}>AVAILABLE COINS</Text>
+              <Text style={styles.coinsValue}>{user.coins}</Text>
+            </View>
+            <Animated.View
+              style={[
+                styles.shineOverlay,
+                {
+                  transform: [
+                    { translateX: shineValue },
+                    { rotate: '30deg' }
+                  ]
+                }
+              ]}
+            />
           </View>
-          <View style={styles.coinsContent}>
-            <Text style={styles.coinsLabel}>AVAILABLE COINS</Text>
-            <Text style={styles.coinsValue}>{user.coins}</Text>
-          </View>
-          <Animated.View
-            style={[
-              styles.shineOverlay,
-              {
-                transform: [
-                  { translateX: shineValue },
-                  { rotate: '30deg' }
-                ]
-              }
-            ]}
-          />
-        </View>
+        )}
 
         {/* Menu Buttons Container */}
         <View style={[styles.buttonsContainer, styles.shadow]}>

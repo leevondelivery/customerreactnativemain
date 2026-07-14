@@ -42,9 +42,6 @@ const loadRazorpayScript = () => {
   });
 };
 
-
-
-
 export default function CartScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -59,9 +56,6 @@ export default function CartScreen() {
 
   // Address flow states
   const [userid, setUserid] = useState(null);
-  const [phone, setPhone] = useState('');
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
   const [showDeliveryForm, setShowDeliveryForm] = useState(false);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
@@ -73,6 +67,66 @@ export default function CartScreen() {
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
+  const [feesConfig, setFeesConfig] = useState({
+    deliveryFeeBase: 20,
+    deliveryFeePerKm: 10,
+    surgeFee: 0,
+    isSurgeActive: false
+  });
+
+  // Coupon states
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null); // { couponCode, influencerName, discountType, discountValue, discountAmount }
+  const [couponError, setCouponError] = useState('');
+  const [isValidatingCoupon, setIsValidatingCoupon] = useState(false);
+
+  const handleApplyCoupon = async () => {
+    if (!couponInput.trim()) {
+      setCouponError('Please enter a coupon code.');
+      return;
+    }
+    setIsValidatingCoupon(true);
+    setCouponError('');
+    try {
+      const response = await fetch(`${API_URL}/api/coupon/validate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          couponCode: couponInput.trim(),
+          cartTotal: calculateTotal(),
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setAppliedCoupon({
+          couponCode: data.couponCode,
+          influencerName: data.influencerName,
+          discountType: data.discountType,
+          discountValue: data.discountValue,
+          discountAmount: data.discountAmount,
+        });
+        triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
+      } else {
+        setCouponError(data.message || 'Invalid coupon code.');
+        setAppliedCoupon(null);
+      }
+    } catch (error) {
+      console.error('Error validating coupon:', error);
+      setCouponError('Failed to validate coupon. Please try again.');
+      setAppliedCoupon(null);
+    } finally {
+      setIsValidatingCoupon(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError('');
+    triggerToast('Coupon removed.', 'warning');
+  };
 
   // Phone OTP Verification States
   const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
@@ -82,7 +136,7 @@ export default function CartScreen() {
   const [confirmResult, setConfirmResult] = useState(null);
   const [otpLoading, setOtpLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
-  const [resendCount, setResendCount] = useState(0);
+  const resendCountRef = useRef(0);
   const [isBypassMode, setIsBypassMode] = useState(false);
 
   useEffect(() => {
@@ -181,7 +235,7 @@ export default function CartScreen() {
     return () => loop.stop();
   }, [floatAnim]);
 
-  const loadCart = async () => {
+  const loadCart = useCallback(async () => {
     try {
       const cartData = await AsyncStorage.getItem('cart');
       if (cartData) {
@@ -194,9 +248,9 @@ export default function CartScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchSavedAddresses = async (uid) => {
+  const fetchSavedAddresses = useCallback(async (uid) => {
     const targetUid = uid || userid;
     if (!targetUid) return;
     try {
@@ -208,23 +262,28 @@ export default function CartScreen() {
     } catch (error) {
       console.error("Error fetching saved addresses:", error);
     }
-  };
+  }, [userid]);
+
+  const fetchFeesConfig = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/fees-config`);
+      const data = await response.json();
+      if (data.success && data.config) {
+        setFeesConfig(data.config);
+      }
+    } catch (error) {
+      console.error("Error fetching fees config:", error);
+    }
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       loadCart();
+      fetchFeesConfig();
       const loadUserAndAddresses = async () => {
         const uid = await AsyncStorage.getItem('userid');
         setUserid(uid);
         
-        // Load initial values from cache
-        const cachedPhone = await AsyncStorage.getItem('phone');
-        setPhone(cachedPhone && cachedPhone !== 'N/A' ? cachedPhone : '');
-        const cachedName = await AsyncStorage.getItem('name');
-        setName(cachedName && cachedName !== 'N/A' ? cachedName : '');
-        const cachedEmail = await AsyncStorage.getItem('email');
-        setEmail(cachedEmail && cachedEmail !== 'N/A' ? cachedEmail : '');
-
         if (uid) {
           fetchSavedAddresses(uid);
           
@@ -236,15 +295,12 @@ export default function CartScreen() {
               const liveUser = userData.user;
               if (liveUser.phone && liveUser.phone !== 'N/A') {
                 await AsyncStorage.setItem('phone', liveUser.phone);
-                setPhone(liveUser.phone);
               }
               if (liveUser.name && liveUser.name !== 'N/A') {
                 await AsyncStorage.setItem('name', liveUser.name);
-                setName(liveUser.name);
               }
               if (liveUser.email && liveUser.email !== 'N/A') {
                 await AsyncStorage.setItem('email', liveUser.email);
-                setEmail(liveUser.email);
               }
             }
           } catch (profileErr) {
@@ -266,7 +322,7 @@ export default function CartScreen() {
         }
       };
       loadUserAndAddresses();
-    }, [userid])
+    }, [loadCart, fetchFeesConfig, fetchSavedAddresses])
   );
 
   // Pre-fill selected address from Redux if set globally on startup
@@ -276,12 +332,14 @@ export default function CartScreen() {
         (addr) => (addr.id || addr._id) === selectedSavedAddressIdRedux
       );
       if (found) {
-        setFlatNo(found.flatNo || '');
-        setStreet(found.street || '');
-        setLandmark(found.landmark || '');
-        setSelectedTag(found.tag || found.label || 'Home');
-        setSelectedSavedAddressId(selectedSavedAddressIdRedux);
-        setShowDeliveryForm(true);
+        setTimeout(() => {
+          setFlatNo(found.flatNo || '');
+          setStreet(found.street || '');
+          setLandmark(found.landmark || '');
+          setSelectedTag(found.tag || found.label || 'Home');
+          setSelectedSavedAddressId(selectedSavedAddressIdRedux);
+          setShowDeliveryForm(true);
+        }, 0);
       }
     }
   }, [selectedSavedAddressIdRedux, savedAddresses]);
@@ -453,7 +511,6 @@ export default function CartScreen() {
 
     await AsyncStorage.setItem('phone', cleanPhone);
     await AsyncStorage.setItem('isPhoneVerified', String(isVerified));
-    setPhone(cleanPhone);
 
     setShowPhoneOTPModal(false);
     triggerToast(isVerified ? 'Phone verified successfully!' : 'Phone confirmed (verbal verification required).', 'success');
@@ -480,19 +537,15 @@ export default function CartScreen() {
 
       const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
       setConfirmResult(confirmation);
-      
       triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
-      setResendTimer(60);
-      
+      setResendTimer(30);
+
       if (isResend) {
-        setResendCount(prev => {
-          const nextCount = prev + 1;
-          if (nextCount >= 2) {
-            setIsBypassMode(true);
-            setVerificationPhone(''); // Clear it so they must re-enter to confirm!
-          }
-          return nextCount;
-        });
+        resendCountRef.current += 1;
+        if (resendCountRef.current >= 2) {
+          setIsBypassMode(true);
+          setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+        }
       }
     } catch (error) {
       console.error('[Phone Auth] Send OTP Error:', error);
@@ -505,19 +558,16 @@ export default function CartScreen() {
       } else {
         // If they click resend and it fails due to network/etc., check if resend count reached 2
         if (isResend) {
-          setResendCount(prev => {
-            const nextCount = prev + 1;
-            if (nextCount >= 2) {
-              showAlert('Switching to Verbal Confirmation', 'SMS service is not responding. Please confirm your number.');
-              const cleanFirstPhone = verificationPhone.trim().slice(-10);
-              setFirstInputPhone(cleanFirstPhone);
-              setIsBypassMode(true);
-              setVerificationPhone(''); // Clear it so they must re-enter to confirm!
-            } else {
-              showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
-            }
-            return nextCount;
-          });
+          resendCountRef.current += 1;
+          if (resendCountRef.current >= 2) {
+            showAlert('Switching to Verbal Confirmation', 'SMS service is not responding. Please confirm your number.');
+            const cleanFirstPhone = verificationPhone.trim().slice(-10);
+            setFirstInputPhone(cleanFirstPhone);
+            setIsBypassMode(true);
+            setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+          } else {
+            showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
+          }
         } else {
           showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
         }
@@ -582,27 +632,58 @@ export default function CartScreen() {
 
     // Gated Phone Verification Check
     const activePhone = await AsyncStorage.getItem('phone');
-    if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '') {
-      setVerificationPhone('');
+    const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
+    if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '' || isPhoneVerified !== 'true') {
+      setVerificationPhone(activePhone && activePhone !== 'N/A' ? activePhone : '');
       setOtpCode('');
       setConfirmResult(null);
       setIsBypassMode(false);
       setFirstInputPhone('');
-      setResendCount(0);
+      resendCountRef.current = 0;
       setResendTimer(0);
       setShowPhoneOTPModal(true);
       return;
     }
 
     const subTotal = calculateTotal();
+
+    // Coupon Discount Calculation
+    let discountValAmount = 0;
+    if (appliedCoupon) {
+      if (appliedCoupon.discountType === 'flat') {
+        discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
+      } else if (appliedCoupon.discountType === 'percentage') {
+        discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+      }
+      discountValAmount = Math.round(discountValAmount * 100) / 100;
+    }
+
     const gstAmount = subTotal * 0.05;
     const pFee = 2.00;
     const restId = cartItems[0]?.restId || '';
     const distanceStr = roadDistances[restId] || '';
     const distanceVal = parseFloat(distanceStr) || 0;
-    const deliveryFee = distanceVal * 20;
-    const gTotal = subTotal + gstAmount + pFee + deliveryFee;
-    const coins = subTotal > 200 ? 10 + Math.floor((subTotal - 200) / 100) * 5 : 0;
+    const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
+    const surgeFee = (feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && distanceVal > 0) ? feesConfig.surgeFee : 0;
+    const deliveryFee = baseDeliveryFee + surgeFee;
+    const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + pFee + deliveryFee);
+    // Dynamic Coins Calculation
+    const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
+    const coinsBase = feesConfig.coinBaseAmount ?? 10;
+    const coinsStep = feesConfig.coinStepAmount ?? 100;
+    const coinsStepVal = feesConfig.coinStepValue ?? 5;
+    const coinsMax = feesConfig.coinMaxLimit ?? 100;
+    const coinsMaxOrder = feesConfig.coinMaxThreshold ?? 1000;
+
+    let coins = 0;
+    if (feesConfig.isCoinsActive !== false) {
+      if (subTotal >= coinsMaxOrder) {
+        coins = coinsMax;
+      } else if (subTotal > coinsMin) {
+        coins = coinsBase + Math.floor((subTotal - coinsMin) / coinsStep) * coinsStepVal;
+        coins = Math.min(coins, coinsMax);
+      }
+    }
     const restName = cartItems[0]?.restaurantName || 'Restaurant';
 
     const activeUserId = await AsyncStorage.getItem('userid');
@@ -686,6 +767,10 @@ export default function CartScreen() {
                     lng: userLocation.longitude
                   } : null,
                   deliveryDistance: roadDistances[restId] || null,
+                  deliveryFee: deliveryFee,
+                  couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
+                  influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                  discountAmount: discountValAmount,
                 }),
               });
 
@@ -793,6 +878,9 @@ export default function CartScreen() {
                         } : null,
                         deliveryDistance: roadDistances[restId] || null,
                         deliveryFee: deliveryFee,
+                        couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
+                        influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                        discountAmount: discountValAmount,
                       }),
                     });
 
@@ -852,6 +940,9 @@ export default function CartScreen() {
                   } : null,
                   deliveryDistance: roadDistances[restId] || null,
                   deliveryFee: deliveryFee,
+                  couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
+                  influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                  discountAmount: discountValAmount,
                 }),
               });
 
@@ -904,14 +995,44 @@ export default function CartScreen() {
 
   const restaurantName = cartItems[0]?.restaurantName || 'Restaurant Cart';
   const total = calculateTotal();
+
+  // Dynamic Coupon Discount Calculation
+  let discountAmount = 0;
+  if (appliedCoupon) {
+    if (appliedCoupon.discountType === 'flat') {
+      discountAmount = Math.min(appliedCoupon.discountValue, total);
+    } else if (appliedCoupon.discountType === 'percentage') {
+      discountAmount = total * (appliedCoupon.discountValue / 100);
+    }
+    discountAmount = Math.round(discountAmount * 100) / 100;
+  }
+
   const gst = total * 0.05; // 5% GST
   const platformFee = 2.00; // Constant platform fee
   const restId = cartItems[0]?.restId || '';
   const distanceStr = roadDistances[restId] || '';
   const distanceVal = parseFloat(distanceStr) || 0;
-  const deliveryFee = distanceVal * 20;
-  const grandTotal = total + gst + platformFee + deliveryFee;
-  const coinsEarned = total > 200 ? 10 + Math.floor((total - 200) / 100) * 5 : 0;
+  const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
+  const surgeFee = (feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && distanceVal > 0) ? feesConfig.surgeFee : 0;
+  const deliveryFee = baseDeliveryFee + surgeFee;
+  const grandTotal = Math.max(0, total - discountAmount + gst + platformFee + deliveryFee);
+  // Dynamic Coins Calculation
+  const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
+  const coinsBase = feesConfig.coinBaseAmount ?? 10;
+  const coinsStep = feesConfig.coinStepAmount ?? 100;
+  const coinsStepVal = feesConfig.coinStepValue ?? 5;
+  const coinsMax = feesConfig.coinMaxLimit ?? 100;
+  const coinsMaxOrder = feesConfig.coinMaxThreshold ?? 1000;
+
+  let coinsEarned = 0;
+  if (feesConfig.isCoinsActive !== false) {
+    if (total >= coinsMaxOrder) {
+      coinsEarned = coinsMax;
+    } else if (total > coinsMin) {
+      coinsEarned = coinsBase + Math.floor((total - coinsMin) / coinsStep) * coinsStepVal;
+      coinsEarned = Math.min(coinsEarned, coinsMax);
+    }
+  }
 
   if (cartItems.length === 0 && !showSuccessModal) {
     return (
@@ -1001,6 +1122,59 @@ export default function CartScreen() {
           })}
         </View>
 
+        {/* Coupon Card */}
+        <View style={styles.couponCard}>
+          <Text style={styles.couponTitle}>Influencer Coupon</Text>
+          {!appliedCoupon ? (
+            <View style={styles.couponInputContainer}>
+              <TextInput
+                style={styles.couponInput}
+                placeholder="Enter Coupon Code"
+                placeholderTextColor="#8A8A8A"
+                value={couponInput}
+                onChangeText={(text) => {
+                  setCouponInput(text);
+                  if (couponError) setCouponError('');
+                }}
+                autoCapitalize="characters"
+                editable={!isValidatingCoupon}
+              />
+              <TouchableOpacity
+                style={styles.couponApplyBtn}
+                onPress={handleApplyCoupon}
+                disabled={isValidatingCoupon}
+              >
+                {isValidatingCoupon ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.couponApplyBtnText}>Apply</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.appliedCouponContainer}>
+              <View style={styles.appliedCouponLeft}>
+                <Ionicons name="pricetag" size={18} color="#27AE60" style={{ marginRight: 8 }} />
+                <View>
+                  <Text style={styles.appliedCouponCode}>{appliedCoupon.couponCode}</Text>
+                  <Text style={styles.appliedCouponSub}>
+                    Code from {appliedCoupon.influencerName}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity style={styles.couponRemoveBtn} onPress={handleRemoveCoupon}>
+                <Text style={styles.couponRemoveBtnText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {couponError ? <Text style={styles.couponErrorText}>{couponError}</Text> : null}
+          {appliedCoupon ? (
+            <Text style={styles.couponSuccessText}>
+              Savings of ₹{discountAmount.toFixed(2)} applied!
+            </Text>
+          ) : null}
+        </View>
+
         {/* Bill Details Card */}
         <View style={styles.billCard}>
           <View style={styles.billRow}>
@@ -1016,9 +1190,31 @@ export default function CartScreen() {
             <Text style={styles.billValue}>₹{platformFee.toFixed(2)}</Text>
           </View>
           {distanceVal > 0 ? (
+            <>
+              <View style={styles.billRow}>
+                <Text style={styles.billLabel}>Delivery fee ({distanceStr})</Text>
+                <Text style={styles.billValue}>₹{baseDeliveryFee.toFixed(2)}</Text>
+              </View>
+              {feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && (
+                <View style={styles.billRow}>
+                  <Text style={[styles.billLabel, { color: '#FF5E5E', fontWeight: '600' }]}>
+                    ⚡ Surge fee (high demand)
+                  </Text>
+                  <Text style={[styles.billValue, { color: '#FF5E5E', fontWeight: '600' }]}>
+                    ₹{feesConfig.surgeFee.toFixed(2)}
+                  </Text>
+                </View>
+              )}
+            </>
+          ) : null}
+          {discountAmount > 0 ? (
             <View style={styles.billRow}>
-              <Text style={styles.billLabel}>Delivery fee ({distanceStr})</Text>
-              <Text style={styles.billValue}>₹{deliveryFee.toFixed(2)}</Text>
+              <Text style={[styles.billLabel, { color: '#27AE60', fontWeight: '600' }]}>
+                Coupon Discount ({appliedCoupon?.couponCode})
+              </Text>
+              <Text style={[styles.billValue, { color: '#27AE60', fontWeight: '600' }]}>
+                -₹{discountAmount.toFixed(2)}
+              </Text>
             </View>
           ) : null}
 
@@ -1029,7 +1225,7 @@ export default function CartScreen() {
             <Text style={styles.grandTotalValue}>₹{grandTotal.toFixed(2)}</Text>
           </View>
 
-          {coinsEarned > 0 && (
+          {coinsEarned > 0 && feesConfig.isCoinsActive !== false && (
             <>
               <View style={styles.dottedDivider} />
               {/* Coins Earned Badge */}
@@ -1873,231 +2069,116 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 9999,
   },
-  loadingText: {
-    marginTop: 16,
+  couponCard: {
+    backgroundColor: 'rgb(224, 214, 188)',
+    borderRadius: 20,
+    padding: 16,
+    marginVertical: 10,
+  },
+  couponTitle: {
     fontSize: 16,
-    fontWeight: '600',
-    color: '#1C5C36',
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    backgroundColor: '#F9F9F6',
-    borderRadius: 28,
-    padding: 30,
-    width: '85%',
-    maxWidth: 360,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 5,
-  },
-  checkmarkOuter: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: '#27AE60',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  checkmarkInner: {
-    width: 74,
-    height: 74,
-    borderRadius: 37,
-    backgroundColor: '#1C5C36',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#1C5C36',
-    textAlign: 'center',
-    marginVertical: 12,
-    lineHeight: 32,
-    fontFamily: Platform.OS === 'web' ? 'Georgia, serif' : 'serif',
-  },
-  modalDivider: {
-    width: 40,
-    height: 3,
-    backgroundColor: '#27AE60',
-    borderRadius: 1.5,
-    marginBottom: 16,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: '#555555',
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: 24,
-    paddingHorizontal: 10,
-  },
-  modalButton: {
-    width: '100%',
-    backgroundColor: '#1C5C36',
-    borderRadius: 25,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalButtonText: {
-    color: '#FFFFFF',
     fontWeight: 'bold',
-    fontSize: 15,
+    color: '#1A1A1A',
+    marginBottom: 10,
   },
-  toastContainer: {
-    position: 'absolute',
-    bottom: 110,
-    left: 16,
-    right: 16,
-    zIndex: 9999,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toastContent: {
-    backgroundColor: '#008000',
-    borderRadius: 25,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+  couponInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 6,
-    width: '100%',
+    gap: 10,
   },
-  toastIconContainer: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  toastText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
-  },
-  alertBackdrop: {
+  couponInput: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  alertCard: {
-    backgroundColor: 'rgb(224, 214, 188)',
-    borderRadius: 40,
-    width: '85%',
-    maxWidth: 320,
-    paddingTop: 40,
-    paddingBottom: 32,
-    paddingHorizontal: 24,
-    alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.15,
-        shadowRadius: 20,
-      },
-      android: {
-        elevation: 10,
-      },
-      default: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.15,
-        shadowRadius: 20,
-      },
-    }),
-  },
-  alertIconContainer: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: '#FF5E5E',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#FF5E5E',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-      },
-      android: {
-        elevation: 6,
-      },
-      default: {
-        shadowColor: '#FF5E5E',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-      },
-    }),
-  },
-  alertTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#000000',
-    textAlign: 'center',
-    lineHeight: 26,
-    marginBottom: 12,
-  },
-  alertMessage: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 15,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
     fontSize: 14,
-    color: '#555555',
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 28,
-    paddingHorizontal: 8,
+    color: '#1A1A1A',
+    borderWidth: 1,
+    borderColor: '#C8BEA7',
   },
-  alertButton: {
+  couponApplyBtn: {
     backgroundColor: '#1E3545',
-    borderRadius: 9999,
-    paddingVertical: 14,
-    width: '90%',
-    maxWidth: 240,
+    borderRadius: 15,
+    paddingVertical: 11,
+    paddingHorizontal: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 6,
-      },
-      android: {
-        elevation: 3,
-      },
-      default: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 6,
-      },
-    }),
   },
-  alertButtonText: {
+  couponApplyBtnText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  appliedCouponContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#E2F0D9',
+    borderRadius: 15,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#27AE60',
+  },
+  appliedCouponLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  appliedCouponCode: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#27AE60',
+  },
+  appliedCouponSub: {
+    fontSize: 12,
+    color: '#666',
+  },
+  couponRemoveBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  couponRemoveBtnText: {
+    color: '#FF5E5E',
+    fontWeight: 'bold',
+    fontSize: 13,
+  },
+  couponErrorText: {
+    color: '#D32F2F',
+    fontSize: 13,
+    marginTop: 8,
+    fontWeight: '600',
+  },
+  couponSuccessText: {
+    color: '#27AE60',
+    fontSize: 13,
+    marginTop: 8,
+    fontWeight: '600',
   },
 });
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

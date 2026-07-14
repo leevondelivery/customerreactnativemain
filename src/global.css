@@ -7,3 +7,16 @@
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
 }
+/* Hide native Edge / IE password reveal button */
+input::-ms-reveal,
+input::-ms-clear {
+  display: none !important;
+}
+
+/* Hide native browser password reveal/auto-fill icons if present */
+input::-webkit-contacts-auto-fill-button,
+input::-webkit-credentials-auto-fill-button {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}

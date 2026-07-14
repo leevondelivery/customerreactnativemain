@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Animated, Easing, Image, Platform, StyleSheet, Text, View } from 'react-native';
 
 export default function LoadingView() {
-  const rotateAnim = useRef(new Animated.Value(0)).current;
+  const rotateAnim = useMemo(() => new Animated.Value(0), []);
 
   useEffect(() => {
     Animated.loop(
@@ -13,7 +13,7 @@ export default function LoadingView() {
         useNativeDriver: Platform.OS !== 'web', // avoid issue on web if native driver not supported for rotation
       })
     ).start();
-  }, []);
+  }, [rotateAnim]);
 
   const rotate = rotateAnim.interpolate({
     inputRange: [0, 1],

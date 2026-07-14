@@ -895,7 +895,7 @@ export default function RestaurantListScreen() {
                 <Feather name="navigation" size={20} color="#2B783E" />
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1E3545' }}>Use Current Location</Text>
-                  <Text style={{ fontSize: 11, color: '#808C94' }}>Locate me using my device's GPS</Text>
+                  <Text style={{ fontSize: 11, color: '#808C94' }}>{"Locate me using my device's GPS"}</Text>
                 </View>
               </TouchableOpacity>
 
