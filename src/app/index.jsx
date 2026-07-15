@@ -12,6 +12,28 @@ export default function Index() {
   useEffect(() => {
     const checkSession = async () => {
       try {
+        // Daily Fields Verification (Once per day when the app starts)
+        const todayStr = new Date().toDateString();
+        const lastCheckStr = await AsyncStorage.getItem('lastDailyFieldsCheck');
+
+        if (lastCheckStr !== todayStr) {
+          const storedUserId = await AsyncStorage.getItem('userid');
+          if (storedUserId) {
+            const phone = await AsyncStorage.getItem('phone');
+            const name = await AsyncStorage.getItem('name');
+            const email = await AsyncStorage.getItem('email');
+            const logintime = await AsyncStorage.getItem('logintime');
+            const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
+
+            if (!phone || !name || !email || !logintime || !isPhoneVerified) {
+              console.log('[Session] Daily check: Required session fields are missing. Clearing storage.');
+              await AsyncStorage.clear();
+            } else {
+              await AsyncStorage.setItem('lastDailyFieldsCheck', todayStr);
+            }
+          }
+        }
+
         // Check if session has expired (exceeded 15 days)
         const logintimeStr = await AsyncStorage.getItem('logintime');
         if (logintimeStr) {

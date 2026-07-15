@@ -86,6 +86,7 @@ export default function ProfileScreen() {
           coins: cachedCoins !== null && cachedCoins.toLowerCase() !== 'n/a' ? cachedCoins : '0',
           dateOfBirth: cachedDateOfBirth && cachedDateOfBirth.toLowerCase() !== 'n/a' ? cachedDateOfBirth : '',
         });
+        setLoading(false);
 
         if (userid) {
           // Fetch global toggle status for coins
@@ -133,7 +134,6 @@ export default function ProfileScreen() {
         }
       } catch (e) {
         console.error('Error fetching user data:', e);
-      } finally {
         setLoading(false);
       }
     };
@@ -167,7 +167,7 @@ export default function ProfileScreen() {
     }
   };
 
-  const isAppLoading = loading || profileLoading;
+  const isAppLoading = loading;
 
   if (isAppLoading) {
     return <LoadingView />;

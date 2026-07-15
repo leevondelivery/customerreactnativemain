@@ -816,7 +816,7 @@ export default function RestaurantListScreen() {
 
       {/* Fetching Location Overlay Modal */}
       <Modal transparent visible={showFetchingModal} animationType="fade">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={styles.modalContent}>
             <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
             <Text style={styles.modalTitle}>Fetching Location</Text>
@@ -829,7 +829,7 @@ export default function RestaurantListScreen() {
 
       {/* GPS Off / Permission Denied Modal */}
       <Modal transparent visible={showLocationModal} animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
               <FontAwesome name="map-marker" size={30} color="#E05A47" />
@@ -861,7 +861,7 @@ export default function RestaurantListScreen() {
 
       {/* Deliver To Selector Modal */}
       <Modal transparent visible={showDeliverToModal} animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { height: 520, backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#F0F6F0' }]}>
               <Feather name="map-pin" size={30} color="#2B783E" />
@@ -975,7 +975,7 @@ export default function RestaurantListScreen() {
 
       {/* Out of Zone warning Modal */}
       <Modal transparent visible={showOutOfZoneModal} animationType="slide">
-        <View style={styles.modalOverlay}>
+        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={styles.modalContent}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
               <FontAwesome name="exclamation-triangle" size={30} color="#E05A47" />

@@ -135,6 +135,28 @@ export default function LoginScreen() {
   useEffect(() => {
     const checkLoginStatus = async () => {
       try {
+        // Daily Fields Verification (Once per day when the app starts)
+        const todayStr = new Date().toDateString();
+        const lastCheckStr = await AsyncStorage.getItem('lastDailyFieldsCheck');
+
+        if (lastCheckStr !== todayStr) {
+          const storedUserId = await AsyncStorage.getItem('userid');
+          if (storedUserId) {
+            const phone = await AsyncStorage.getItem('phone');
+            const name = await AsyncStorage.getItem('name');
+            const email = await AsyncStorage.getItem('email');
+            const logintime = await AsyncStorage.getItem('logintime');
+            const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
+
+            if (!phone || !name || !email || !logintime || !isPhoneVerified) {
+              console.log('[Session] Daily check: Required session fields are missing. Clearing storage.');
+              await AsyncStorage.clear();
+            } else {
+              await AsyncStorage.setItem('lastDailyFieldsCheck', todayStr);
+            }
+          }
+        }
+
         // Check if session has expired (exceeded 15 days)
         const logintimeStr = await AsyncStorage.getItem('logintime');
         if (logintimeStr) {
@@ -377,7 +399,7 @@ export default function LoginScreen() {
     setForgotPasswordError('');
   };
 
-  if (checkingAuth) {
+  if (checkingAuth || loading || googleLoading) {
     return <LoadingView />;
   }
 
@@ -458,7 +480,8 @@ export default function LoginScreen() {
                     placeholderTextColor="#9C9C9C"
                     keyboardType="phone-pad"
                     value={forgotPasswordPhone}
-                    onChangeText={setForgotPasswordPhone}
+                    onChangeText={(text) => setForgotPasswordPhone(text.replace(/[^0-9]/g, ''))}
+                    maxLength={10}
                     autoCapitalize="none"
                   />
                 </View>
@@ -602,7 +625,8 @@ export default function LoginScreen() {
                 placeholderTextColor="#9C9C9C"
                 keyboardType="phone-pad"
                 value={mobile}
-                onChangeText={setMobile}
+                onChangeText={(text) => setMobile(text.replace(/[^0-9]/g, ''))}
+                maxLength={10}
                 autoCapitalize="none"
               />
             </View>
@@ -658,7 +682,7 @@ export default function LoginScreen() {
                   }}
                   style={{ paddingVertical: 4 }}
                 >
-                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 13 }}>
+                  <Text style={{ color: '#000000', fontWeight: '700', fontSize: 13 }}>
                     Forgot Password?
                   </Text>
                 </TouchableOpacity>
@@ -668,7 +692,7 @@ export default function LoginScreen() {
                 onPress={() => setIsSignUp(!isSignUp)}
                 style={{ paddingVertical: 4, flex: 1, alignItems: 'flex-end' }}
               >
-                <Text style={{ color: '#E05A47', fontWeight: 'bold', fontSize: 13 }}>
+                <Text style={{ color: '#000000', fontWeight: 'bold', fontSize: 13 }}>
                   {isSignUp ? 'Already have an account? Login' : 'Create an Account'}
                 </Text>
               </TouchableOpacity>
@@ -690,9 +714,9 @@ export default function LoginScreen() {
 
           {/* Divider */}
           <View style={{ flexDirection: 'row', alignItems: 'center', width: '85%', marginVertical: 10 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: '#DCD3C5' }} />
+            <View style={{ flex: 1, height: 1, backgroundColor: '#7E7C77' }} />
             <Text style={{ marginHorizontal: 12, color: '#7E7C77', fontSize: 13, fontWeight: '700' }}>OR</Text>
-            <View style={{ flex: 1, height: 1, backgroundColor: '#DCD3C5' }} />
+            <View style={{ flex: 1, height: 1, backgroundColor: '#7E7C77' }} />
           </View>
 
           {/* Google Login Button */}

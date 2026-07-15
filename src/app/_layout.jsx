@@ -93,6 +93,48 @@ export default function Layout() {
     return () => clearInterval(interval);
   }, [pathname]);
 
+  // Global Authentication and Session Verification Check
+  useEffect(() => {
+    const verifySession = async () => {
+      if (pathname === '/login' || pathname === '/' || pathname === '') {
+        return;
+      }
+
+      const userid = await AsyncStorage.getItem('userid');
+      const phone = await AsyncStorage.getItem('phone');
+      const name = await AsyncStorage.getItem('name');
+      const email = await AsyncStorage.getItem('email');
+      const logintime = await AsyncStorage.getItem('logintime');
+      const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
+
+      if (!userid || !phone || !name || !email || !logintime || !isPhoneVerified) {
+        console.log('[Layout] Session verification failed: Missing required fields. Redirecting to login.');
+        await AsyncStorage.clear();
+        router.replace('/login');
+      }
+    };
+
+    verifySession();
+  }, [pathname, router]);
+
+  // Inject CSS to hide browser-native password reveal/clear buttons on Web
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      const style = document.createElement('style');
+      style.textContent = `
+        input::-ms-reveal,
+        input::-ms-clear,
+        input::-webkit-contacts-auto-fill-button,
+        input::-webkit-credentials-auto-fill-button {
+          display: none !important;
+          visibility: hidden !important;
+          pointer-events: none !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }, []);
+
   // Request FCM Push Notification Permission & Subscribe to Broadcast Topic
   useEffect(() => {
     if (Platform.OS === 'web') return;
