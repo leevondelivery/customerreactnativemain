@@ -6,7 +6,7 @@ const getApiUrl = () => {
   // return 'http://192.168.0.105:5000';
   
   // Current production URL:
-  return 'https://customerbackendfile-production.up.railway.app';
+  return 'https://api.leevondelivery.in';
 };
 
 export const API_URL = getApiUrl();

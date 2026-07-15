@@ -12,6 +12,30 @@ export default function Index() {
   useEffect(() => {
     const checkSession = async () => {
       try {
+        // Check if session has expired (exceeded 15 days)
+        const logintimeStr = await AsyncStorage.getItem('logintime');
+        if (logintimeStr) {
+          let loginTimeMs = parseInt(logintimeStr, 10);
+          if (isNaN(loginTimeMs)) {
+            // Fallback for old legacy logintime format (toLocaleString string)
+            loginTimeMs = Date.parse(logintimeStr);
+          }
+
+          if (!isNaN(loginTimeMs)) {
+            const fifteenDaysInMs = 15 * 24 * 60 * 60 * 1000;
+            if (Date.now() - loginTimeMs > fifteenDaysInMs) {
+              console.log('[Session] Session expired (> 15 days). Clearing credentials.');
+              await AsyncStorage.clear();
+            } else {
+              // Session is active and valid. Extend it for another 15 days.
+              await AsyncStorage.setItem('logintime', String(Date.now()));
+            }
+          } else {
+            console.log('[Session] Invalid session timestamp. Clearing credentials.');
+            await AsyncStorage.clear();
+          }
+        }
+
         const userid = await AsyncStorage.getItem('userid');
         if (userid) {
           setIsLoggedIn(true);
