@@ -697,13 +697,25 @@ export default function RestaurantListScreen() {
                 if (restType !== 'Non-Veg' && restType !== 'Both') return false;
               }
 
-              // Filter by selected category (case-insensitive checks)
+              // Filter by selected category (case-insensitive and plural/singular tolerant checks)
               if (selectedCategory) {
                 const normalSelected = selectedCategory.toLowerCase().trim();
+                const singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
+
                 const hasCategory = item.categories && item.categories.some(
                   c => {
+                    if (!c || typeof c !== 'string') return false;
                     const normalC = c.toLowerCase().trim();
-                    return normalC.includes(normalSelected) || normalSelected.includes(normalC);
+                    const singularC = normalC.endsWith('s') ? normalC.slice(0, -1) : normalC;
+
+                    return (
+                      normalC.includes(normalSelected) ||
+                      normalSelected.includes(normalC) ||
+                      normalC.includes(singularSelected) ||
+                      normalSelected.includes(singularC) ||
+                      singularC.includes(singularSelected) ||
+                      singularSelected.includes(singularC)
+                    );
                   }
                 );
                 if (!hasCategory) return false;

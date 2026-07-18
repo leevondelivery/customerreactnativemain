@@ -32,11 +32,7 @@ export const fetchRestaurants = createAsyncThunk(
 
 export const fetchRestaurantMenu = createAsyncThunk(
   'restaurants/fetchRestaurantMenu',
-  async (restaurantId, { rejectWithValue, getState }) => {
-    const state = getState();
-    if (state.restaurants.menus && state.restaurants.menus[restaurantId]) {
-      return { restaurantId, items: state.restaurants.menus[restaurantId], fromCache: true };
-    }
+  async (restaurantId, { rejectWithValue }) => {
     try {
       const response = await fetch(`${API_URL}/restaurants/${restaurantId}/menu`);
       if (!response.ok) throw new Error('Failed to fetch menu');
@@ -152,10 +148,8 @@ const restaurantsSlice = createSlice({
         state.menuLoading[restaurantId] = true;
       })
       .addCase(fetchRestaurantMenu.fulfilled, (state, action) => {
-        const { restaurantId, items, fromCache } = action.payload;
-        if (!fromCache) {
-          state.menus[restaurantId] = items;
-        }
+        const { restaurantId, items } = action.payload;
+        state.menus[restaurantId] = items;
         state.menuLoading[restaurantId] = false;
         state.error = null;
       })
