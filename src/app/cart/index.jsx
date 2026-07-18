@@ -21,7 +21,15 @@ import { useDispatch, useSelector } from 'react-redux';
 import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
-import auth from '@react-native-firebase/auth';
+// Lazily require Firebase Auth to avoid crash when native module is not linked
+let auth = null;
+if (Platform.OS !== 'web') {
+  try {
+    auth = require('@react-native-firebase/auth').default;
+  } catch (e) {
+    console.warn('[Cart] Firebase Auth native module not available:', e.message);
+  }
+}
 
 // Razorpay standard script dynamic loader for Web
 const loadRazorpayScript = () => {

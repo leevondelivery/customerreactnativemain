@@ -18,8 +18,24 @@ import {
 import { API_URL } from '../../config';
 import { styles } from '../../styles/login.styles';
 import LoadingView from '../../components/LoadingView';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import auth, { GoogleAuthProvider } from '@react-native-firebase/auth';
+// Native-only modules: lazily required to avoid crashes when not linked
+let GoogleSignin = null;
+let auth = null;
+let GoogleAuthProvider = null;
+if (Platform.OS !== 'web') {
+  try {
+    GoogleSignin = require('@react-native-google-signin/google-signin').GoogleSignin;
+  } catch (e) {
+    console.warn('[Login] GoogleSignin native module not available:', e.message);
+  }
+  try {
+    const firebaseAuth = require('@react-native-firebase/auth');
+    auth = firebaseAuth.default;
+    GoogleAuthProvider = firebaseAuth.GoogleAuthProvider;
+  } catch (e) {
+    console.warn('[Login] Firebase Auth native module not available:', e.message);
+  }
+}
 
 export default function LoginScreen() {
   const router = useRouter();

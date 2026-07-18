@@ -8,6 +8,7 @@ import {
   Pressable,
   Linking,
   Animated,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
@@ -19,8 +20,21 @@ import { styles } from '../../styles/profile.styles';
 import LoadingView from '../../components/LoadingView';
 import { fetchProfileData, resetProfile } from '../../store/restaurantsSlice';
 import { resetLocationState } from '../../store/locationSlice';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import auth from '@react-native-firebase/auth';
+// Native-only modules: lazily required to avoid crashes when not linked
+let GoogleSignin = null;
+let auth = null;
+if (Platform.OS !== 'web') {
+  try {
+    GoogleSignin = require('@react-native-google-signin/google-signin').GoogleSignin;
+  } catch (e) {
+    console.warn('[Profile] GoogleSignin native module not available:', e.message);
+  }
+  try {
+    auth = require('@react-native-firebase/auth').default;
+  } catch (e) {
+    console.warn('[Profile] Firebase Auth native module not available:', e.message);
+  }
+}
 import { API_URL } from '../../config';
 
 export default function ProfileScreen() {

@@ -6,17 +6,29 @@ import { Animated, Dimensions, Platform, StyleSheet, Text, TouchableOpacity, Vie
 import { Provider } from 'react-redux';
 import { API_URL } from '../config';
 import { store } from '../store/store';
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import messaging from '@react-native-firebase/messaging';
+// Native-only modules: lazily required to avoid crashes when native binary
+// does not include these modules (e.g. Expo Go, or missing native linking).
+let GoogleSignin = null;
+let messaging = null;
 
 if (Platform.OS !== 'web') {
-  GoogleSignin.configure({
-    webClientId: '549037342596-kkd837btqfu8dfprgtupmpprmiarc5e7.apps.googleusercontent.com',
-  });
+  try {
+    GoogleSignin = require('@react-native-google-signin/google-signin').GoogleSignin;
+    GoogleSignin.configure({
+      webClientId: '549037342596-kkd837btqfu8dfprgtupmpprmiarc5e7.apps.googleusercontent.com',
+    });
+  } catch (e) {
+    console.warn('[Layout] GoogleSignin native module not available:', e.message);
+  }
 
-  messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-    console.log('[FCM] Background message handled:', remoteMessage);
-  });
+  try {
+    messaging = require('@react-native-firebase/messaging').default;
+    messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+      console.log('[FCM] Background message handled:', remoteMessage);
+    });
+  } catch (e) {
+    console.warn('[Layout] Firebase Messaging native module not available:', e.message);
+  }
 }
 
 // Create context for communicating scroll-hide commands from children pages
@@ -137,7 +149,7 @@ export default function Layout() {
 
   // Request FCM Push Notification Permission & Subscribe to Broadcast Topic
   useEffect(() => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web' || !messaging) return;
 
     const initPushNotifications = async () => {
       try {
