@@ -221,12 +221,36 @@ export default function RestaurantListScreen() {
       if (locationStatus === 'idle') {
         if (uid) {
           try {
+            // Load cached addresses first
+            const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
+            if (cached) {
+              const addresses = JSON.parse(cached);
+              if (addresses.length > 0) {
+                setSavedAddresses(addresses);
+                setShowDeliverToModal(true);
+                // Refresh background cache
+                fetch(`${API_URL}/user/${uid}/addresses`)
+                  .then(res => res.json())
+                  .then(async (data) => {
+                    if (data.success && data.addresses) {
+                      setSavedAddresses(data.addresses);
+                      await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+                    }
+                  })
+                  .catch(e => console.warn(e));
+                return;
+              }
+            }
+
             const response = await fetch(`${API_URL}/user/${uid}/addresses`);
             const data = await response.json();
-            if (data.success && data.addresses && data.addresses.length > 0) {
+            if (data.success && data.addresses) {
               setSavedAddresses(data.addresses);
-              setShowDeliverToModal(true);
-              return;
+              await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+              if (data.addresses.length > 0) {
+                setShowDeliverToModal(true);
+                return;
+              }
             }
           } catch (err) {
             console.warn('[RestaurantList] Error loading addresses on startup:', err);
@@ -235,15 +259,23 @@ export default function RestaurantListScreen() {
         // Guest user or user with no saved addresses: default to live GPS check
         dispatch(checkLocationAndCalculateDistances(restaurants));
       } else if (uid) {
-        // If not idle, still fetch saved addresses so they are available in the top bar dropdown
+        // Try cached first, then background update
         try {
-          const response = await fetch(`${API_URL}/user/${uid}/addresses`);
-          const data = await response.json();
-          if (data.success && data.addresses) {
-            setSavedAddresses(data.addresses);
+          const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
+          if (cached) {
+            setSavedAddresses(JSON.parse(cached));
           }
+          fetch(`${API_URL}/user/${uid}/addresses`)
+            .then(res => res.json())
+            .then(async (data) => {
+              if (data.success && data.addresses) {
+                setSavedAddresses(data.addresses);
+                await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+              }
+            })
+            .catch(e => console.warn(e));
         } catch (err) {
-          console.warn('[RestaurantList] Error loading addresses:', err);
+          console.warn('[RestaurantList] Error loading cached addresses:', err);
         }
       }
     };
@@ -257,10 +289,17 @@ export default function RestaurantListScreen() {
         const uid = await AsyncStorage.getItem('userid');
         if (uid) {
           try {
+            // Load cached addresses first
+            const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
+            if (cached) {
+              setSavedAddresses(JSON.parse(cached));
+            }
+
             const response = await fetch(`${API_URL}/user/${uid}/addresses`);
             const data = await response.json();
             if (data.success && data.addresses) {
               setSavedAddresses(data.addresses);
+              await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
             }
           } catch (err) {
             console.warn('[RestaurantList] Error loading addresses on focus:', err);
@@ -649,13 +688,13 @@ export default function RestaurantListScreen() {
               const matchesSearch = nameField.startsWith(query);
               if (!matchesSearch) return false;
 
-              // Filter by Veg/Non-Veg
+              // Filter by Veg/Non-Veg (Veg shows only Veg, Non-Veg shows Non-Veg and Both)
               const restType = item.vegOrNonVeg || 'Both';
               if (activeType === 'Veg') {
                 if (restType !== 'Veg') return false;
               }
               if (activeType === 'Non-Veg') {
-                if (restType !== 'Non-Veg') return false;
+                if (restType !== 'Non-Veg' && restType !== 'Both') return false;
               }
 
               // Filter by selected category (case-insensitive checks)
@@ -862,7 +901,7 @@ export default function RestaurantListScreen() {
       {/* Deliver To Selector Modal */}
       <Modal transparent visible={showDeliverToModal} animationType="slide">
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
-          <View style={[styles.modalContent, { height: 520, backgroundColor: 'rgb(224, 214, 188)' }]}>
+          <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#F0F6F0' }]}>
               <Feather name="map-pin" size={30} color="#2B783E" />
             </View>
@@ -871,7 +910,7 @@ export default function RestaurantListScreen() {
               Please choose where you would like your food delivered:
             </Text>
 
-            <ScrollView style={{ width: '100%', marginBottom: 15 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ width: '100%', maxHeight: 310, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
               {/* Option A: Current Location */}
               <TouchableOpacity
                 style={{

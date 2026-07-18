@@ -254,10 +254,18 @@ export default function CartScreen() {
     const targetUid = uid || userid;
     if (!targetUid) return;
     try {
+      // Load cached addresses from AsyncStorage first to eliminate latency
+      const cached = await AsyncStorage.getItem(`saved_addresses_${targetUid}`);
+      if (cached) {
+        setSavedAddresses(JSON.parse(cached));
+      }
+
+      // Fetch fresh addresses from database in background
       const response = await fetch(`${API_URL}/user/${targetUid}/addresses`);
       const data = await response.json();
       if (data.success) {
         setSavedAddresses(data.addresses || []);
+        await AsyncStorage.setItem(`saved_addresses_${targetUid}`, JSON.stringify(data.addresses || []));
       }
     } catch (error) {
       console.error("Error fetching saved addresses:", error);
@@ -397,65 +405,115 @@ export default function CartScreen() {
       Alert.alert('Already Saved', 'This address is already saved in your address book.');
       return;
     }
-    try {
-      const response = await fetch(`${API_URL}/user/${userid}/addresses`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          flatNo,
-          street,
-          landmark,
-          tag: selectedTag,
-          lat: userLocation ? userLocation.latitude : null,
-          lng: userLocation ? userLocation.longitude : null,
-        }),
+
+    // --- OPTIMISTIC UPDATE FOR NO LATENCY ---
+    const tempId = `temp_${Date.now()}`;
+    const newAddressObj = {
+      _id: tempId,
+      id: tempId,
+      flatNo,
+      street,
+      landmark,
+      tag: selectedTag,
+      lat: userLocation ? userLocation.latitude : null,
+      lng: userLocation ? userLocation.longitude : null,
+    };
+
+    const updatedAddresses = [...savedAddresses, newAddressObj];
+    
+    // 1. Instantly update state & cache
+    setSavedAddresses(updatedAddresses);
+    await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(updatedAddresses));
+    
+    // 2. Instantly show toast
+    triggerToast('ADDRESS SAVED SUCCESSFULLY!', 'success');
+
+    // 3. Keep inputs backup and instantly reset fields
+    const savedFlatNo = flatNo;
+    const savedStreet = street;
+    const savedLandmark = landmark;
+    const savedTag = selectedTag;
+
+    setFlatNo('');
+    setStreet('');
+    setLandmark('');
+    setSelectedTag('Home');
+    setSelectedSavedAddressId(null);
+
+    // 4. Send POST to DB in the background
+    fetch(`${API_URL}/user/${userid}/addresses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        flatNo: savedFlatNo,
+        street: savedStreet,
+        landmark: savedLandmark,
+        tag: savedTag,
+        lat: newAddressObj.lat,
+        lng: newAddressObj.lng,
+      }),
+    })
+      .then(res => res.json())
+      .then(async (data) => {
+        if (data.success) {
+          // Sync state and cache with actual DB response (receives actual database ID)
+          setSavedAddresses(data.addresses || []);
+          await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(data.addresses || []));
+        } else {
+          // Revert and fetch actual db addresses
+          fetchSavedAddresses(userid);
+          Alert.alert('Error', data.message || 'Failed to save address to database.');
+        }
+      })
+      .catch(error => {
+        console.error('Error saving address to backend:', error);
       });
-      const data = await response.json();
-      if (data.success) {
-        triggerToast('ADDRESS SAVED SUCCESSFULLY!', 'success');
-        setSavedAddresses(data.addresses || []);
-        // Reset manual fields after save
-        setFlatNo('');
-        setStreet('');
-        setLandmark('');
-        setSelectedTag('Home');
-        setSelectedSavedAddressId(null);
-      } else {
-        Alert.alert('Error', data.message || 'Failed to save address.');
-      }
-    } catch (error) {
-      console.error('Error saving address:', error);
-      Alert.alert('Error', `Could not connect to backend: ${error.message}`);
-    }
   };
 
   const handleDeleteAddress = async (addressId) => {
     if (!userid || !addressId) return;
-    try {
-      const response = await fetch(`${API_URL}/user/${userid}/addresses/${addressId}`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (data.success) {
-        setSavedAddresses(data.addresses || []);
-        // If the selected address was deleted, reset selection and manual fields
-        if (selectedSavedAddressId === addressId) {
-          setSelectedSavedAddressId(null);
-          setFlatNo('');
-          setStreet('');
-          setLandmark('');
-          setSelectedTag('Home');
-        }
-        triggerToast('ADDRESS DELETED SUCCESSFULLY!', 'warning');
-      } else {
-        Alert.alert('Error', data.message || 'Failed to delete address.');
-      }
-    } catch (error) {
-      console.error('Error deleting address:', error);
-      Alert.alert('Error', 'Could not connect to backend.');
+
+    // --- OPTIMISTIC UPDATE FOR NO LATENCY ---
+    const updatedAddresses = savedAddresses.filter(addr => (addr.id || addr._id) !== addressId);
+    
+    // 1. Instantly update state & cache
+    setSavedAddresses(updatedAddresses);
+    await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(updatedAddresses));
+
+    // 2. Reset selection and manual fields if the selected address was deleted
+    if (selectedSavedAddressId === addressId) {
+      setSelectedSavedAddressId(null);
+      setFlatNo('');
+      setStreet('');
+      setLandmark('');
+      setSelectedTag('Home');
     }
+
+    // 3. Instantly show toast
+    triggerToast('ADDRESS DELETED SUCCESSFULLY!', 'warning');
+
+    // 4. Send DELETE to DB in the background
+    fetch(`${API_URL}/user/${userid}/addresses/${addressId}`, {
+      method: 'DELETE',
+    })
+      .then(res => res.json())
+      .then(async (data) => {
+        if (data.success) {
+          // Sync state and cache with actual DB response
+          setSavedAddresses(data.addresses || []);
+          await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(data.addresses || []));
+        } else {
+          // Revert on error
+          fetchSavedAddresses(userid);
+          Alert.alert('Error', data.message || 'Failed to delete address from database.');
+        }
+      })
+      .catch(error => {
+        console.error('Error deleting address from backend:', error);
+        fetchSavedAddresses(userid);
+      });
   };
 
   const handlePrefillAddress = (addr) => {
@@ -1014,7 +1072,8 @@ export default function CartScreen() {
   const distanceVal = parseFloat(distanceStr) || 0;
   const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
   const surgeFee = (feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && distanceVal > 0) ? feesConfig.surgeFee : 0;
-  const deliveryFee = baseDeliveryFee + surgeFee;
+  const isLocationFetched = locationStatus === 'inside';
+  const deliveryFee = isLocationFetched ? (baseDeliveryFee + surgeFee) : 0;
   const grandTotal = Math.max(0, total - discountAmount + gst + platformFee + deliveryFee);
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
@@ -1124,7 +1183,7 @@ export default function CartScreen() {
 
         {/* Coupon Card */}
         <View style={styles.couponCard}>
-          <Text style={styles.couponTitle}>Influencer Coupon</Text>
+          <Text style={styles.couponTitle}>Coupon Code</Text>
           {!appliedCoupon ? (
             <View style={styles.couponInputContainer}>
               <TextInput
@@ -1189,24 +1248,24 @@ export default function CartScreen() {
             <Text style={styles.billLabel}>Platform fee</Text>
             <Text style={styles.billValue}>₹{platformFee.toFixed(2)}</Text>
           </View>
-          {distanceVal > 0 ? (
-            <>
-              <View style={styles.billRow}>
-                <Text style={styles.billLabel}>Delivery fee ({distanceStr})</Text>
-                <Text style={styles.billValue}>₹{baseDeliveryFee.toFixed(2)}</Text>
-              </View>
-              {feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && (
-                <View style={styles.billRow}>
-                  <Text style={[styles.billLabel, { color: '#FF5E5E', fontWeight: '600' }]}>
-                    ⚡ Surge fee (high demand)
-                  </Text>
-                  <Text style={[styles.billValue, { color: '#FF5E5E', fontWeight: '600' }]}>
-                    ₹{feesConfig.surgeFee.toFixed(2)}
-                  </Text>
-                </View>
-              )}
-            </>
-          ) : null}
+          <View style={styles.billRow}>
+            <Text style={styles.billLabel}>
+              Delivery fee {isLocationFetched ? `(${distanceStr})` : ''}
+            </Text>
+            <Text style={styles.billValue}>
+              {isLocationFetched ? `₹${baseDeliveryFee.toFixed(2)}` : 'To be calculated'}
+            </Text>
+          </View>
+          {isLocationFetched && feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && (
+            <View style={styles.billRow}>
+              <Text style={[styles.billLabel, { color: '#FF5E5E', fontWeight: '600' }]}>
+                ⚡ Surge fee (high demand)
+              </Text>
+              <Text style={[styles.billValue, { color: '#FF5E5E', fontWeight: '600' }]}>
+                ₹{feesConfig.surgeFee.toFixed(2)}
+              </Text>
+            </View>
+          )}
           {discountAmount > 0 ? (
             <View style={styles.billRow}>
               <Text style={[styles.billLabel, { color: '#27AE60', fontWeight: '600' }]}>
@@ -1301,9 +1360,9 @@ export default function CartScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.checkoutButton, (showDeliveryForm || locationStatus !== 'inside' || hasActiveOrder) && styles.checkoutButtonDisabled]}
+            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder) && styles.checkoutButtonDisabled]}
             onPress={handlePlaceOrder}
-            disabled={showDeliveryForm || locationStatus !== 'inside' || hasActiveOrder}
+            disabled={showDeliveryForm || hasActiveOrder}
             activeOpacity={0.85}
           >
             <Text style={styles.checkoutButtonText}>Place the order</Text>
@@ -1420,7 +1479,7 @@ export default function CartScreen() {
               activeOpacity={0.85}
             >
               <Text style={styles.confirmOrderButtonText}>
-                Confirm order and pay ₹{grandTotal.toFixed(2)}
+                {locationStatus !== 'inside' ? 'Please select/verify delivery address' : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2153,6 +2212,44 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 8,
     fontWeight: '600',
+  },
+  toastContainer: {
+    position: 'absolute',
+    bottom: 110,
+    left: 16,
+    right: 16,
+    zIndex: 9999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastContent: {
+    borderRadius: 25,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 6,
+    width: '100%',
+  },
+  toastIconContainer: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  toastText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
   },
 });
 
