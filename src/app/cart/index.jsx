@@ -594,11 +594,23 @@ export default function CartScreen() {
 
     setOtpLoading(true);
     try {
-      const formattedPhone = `+91${verificationPhone.trim().slice(-10)}`;
+      const cleanFirstPhone = verificationPhone.trim().slice(-10);
+      const activeUserId = await AsyncStorage.getItem('userid');
+
+      // 1. Check if phone number already exists in database
+      console.log('[Phone Auth] Checking phone uniqueness for:', cleanFirstPhone);
+      const checkRes = await fetch(`${API_URL}/check-phone/${cleanFirstPhone}?excludeUserId=${activeUserId || ''}`);
+      const checkData = await checkRes.json();
+      if (checkRes.ok && checkData.success && checkData.exists) {
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+        return;
+      }
+
+      const formattedPhone = `+91${cleanFirstPhone}`;
       console.log('[Phone Auth] Requesting OTP for:', formattedPhone);
 
-      // Save the first input phone number (slice last 10 digits)
-      const cleanFirstPhone = verificationPhone.trim().slice(-10);
+      // Save the first input phone number
       setFirstInputPhone(cleanFirstPhone);
 
       const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
@@ -650,17 +662,29 @@ export default function CartScreen() {
     }
 
     setOtpLoading(true);
+    let verified = false;
+
     try {
       console.log('[Phone Auth] Confirming OTP code:', otpCode);
       await confirmResult.confirm(otpCode);
       console.log('[Phone Auth] Verification successful!');
-
-      const cleanPhone = verificationPhone.trim().slice(-10);
-      await saveVerifiedPhoneToBackend(cleanPhone, true);
-    } catch (error) {
-      console.error('[Phone Auth] OTP verification error:', error);
+      verified = true;
+    } catch (otpError) {
+      console.error('[Phone Auth] OTP verification error:', otpError);
       showAlert('Verification Failed', 'The code you entered is invalid or expired. Please try again.');
       setOtpLoading(false);
+      return;
+    }
+
+    if (verified) {
+      try {
+        const cleanPhone = verificationPhone.trim().slice(-10);
+        await saveVerifiedPhoneToBackend(cleanPhone, true);
+      } catch (dbError) {
+        console.error('[Phone Auth] Backend database update error:', dbError);
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+      }
     }
   };
 
@@ -673,7 +697,18 @@ export default function CartScreen() {
     setOtpLoading(true);
     try {
       const cleanPhone = verificationPhone.trim().slice(-10);
-      
+      const activeUserId = await AsyncStorage.getItem('userid');
+
+      // Check phone uniqueness
+      console.log('[Phone Auth] Bypass checking phone uniqueness for:', cleanPhone);
+      const checkRes = await fetch(`${API_URL}/check-phone/${cleanPhone}?excludeUserId=${activeUserId || ''}`);
+      const checkData = await checkRes.json();
+      if (checkRes.ok && checkData.success && checkData.exists) {
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+        return;
+      }
+
       // Verify both phone numbers are the same
       if (cleanPhone !== firstInputPhone) {
         showAlert('Verification Error', 'The phone number entered does not match the first number you entered. Please verify your number.');
@@ -690,6 +725,34 @@ export default function CartScreen() {
     }
   };
 
+  const handleEnableLocation = async () => {
+    try {
+      console.log('[Cart] User clicked Enable Location. Dispatching location verification...');
+      if (Platform.OS === 'android') {
+        try {
+          await Location.enableNetworkProviderAsync();
+        } catch (e) {
+          console.warn('Network provider enable failed:', e);
+        }
+      }
+      const resultAction = await dispatch(checkLocationAndCalculateDistances(restaurants));
+      if (checkLocationAndCalculateDistances.rejected.match(resultAction)) {
+        const type = resultAction.payload?.type;
+        const errMsg = resultAction.payload?.message || 'Failed to verify location. Please make sure location is enabled on your device.';
+        if (type === 'OUT_OF_ZONE') {
+          showAlert('Service Unavailable', 'You are currently outside our service area (Kurnool). Orders can only be placed within Kurnool.');
+        } else {
+          showAlert('Location Error', errMsg);
+        }
+      } else {
+        triggerToast('Location enabled and distance calculated!', 'success');
+      }
+    } catch (err) {
+      console.error('[Cart] Error enabling location:', err);
+      showAlert('Location Error', 'An unexpected error occurred while fetching location.');
+    }
+  };
+
   const handleConfirmOrder = async () => {
     if (!flatNo || !street) {
       showAlert('Delivery Address Required', 'Please select a saved address or enter a delivery address manually to proceed.');
@@ -699,8 +762,9 @@ export default function CartScreen() {
     // Gated Phone Verification Check
     const activePhone = await AsyncStorage.getItem('phone');
     const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
-    if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '' || isPhoneVerified !== 'true') {
-      setVerificationPhone(activePhone && activePhone !== 'N/A' ? activePhone : '');
+    const isTempPhone = activePhone && (activePhone.startsWith('google_temp_') || activePhone.startsWith('temp_google_'));
+    if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '' || isTempPhone || isPhoneVerified !== 'true') {
+      setVerificationPhone(activePhone && activePhone !== 'N/A' && !isTempPhone ? activePhone : '');
       setOtpCode('');
       setConfirmResult(null);
       setIsBypassMode(false);
@@ -1344,20 +1408,41 @@ export default function CartScreen() {
             padding: 16,
             marginHorizontal: 16,
             marginBottom: 16,
-            flexDirection: 'row',
+            flexDirection: 'column',
             alignItems: 'center',
             gap: 12
           }}>
-            <Ionicons name="location-outline" size={24} color="#FF9800" />
-            <Text style={{
-              flex: 1,
-              fontSize: 13,
-              color: '#B78103',
-              lineHeight: 18,
-              fontWeight: '500'
-            }}>
-              GPS / Location access is required to place orders. Please enable device location settings to verify service area and calculate delivery road distance.
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: '100%' }}>
+              <Ionicons name="location-outline" size={24} color="#FF9800" />
+              <Text style={{
+                flex: 1,
+                fontSize: 14,
+                color: '#B78103',
+                lineHeight: 18,
+                fontWeight: '600'
+              }}>
+                To place order, you need to turn on location
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#FF9800',
+                borderRadius: 20,
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                width: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 4
+              }}
+              onPress={handleEnableLocation}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 }}>
+                Enable Location
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -2258,6 +2343,132 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: 'bold',
     letterSpacing: 0.5,
+  },
+  alertBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  alertCard: {
+    backgroundColor: '#F9F9F6',
+    borderRadius: 30,
+    width: '85%',
+    maxWidth: 340,
+    padding: 24,
+    alignItems: 'center',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+  },
+  modalContent: {
+    backgroundColor: '#F9F9F6',
+    borderRadius: 30,
+    width: '85%',
+    maxWidth: 340,
+    padding: 24,
+    alignItems: 'center',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+  },
+  alertIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#1E3545',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  checkmarkOuter: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(39, 174, 96, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  checkmarkInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#27AE60',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  alertTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1A1A1A',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#1E3545',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  alertMessage: {
+    fontSize: 14,
+    color: '#555555',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: '#555555',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  modalDivider: {
+    width: '100%',
+    height: 1,
+    backgroundColor: '#E8E8E8',
+    marginVertical: 15,
+  },
+  alertButton: {
+    backgroundColor: '#1E3545',
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalButton: {
+    backgroundColor: '#27AE60',
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  alertButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
   },
 });
 

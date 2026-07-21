@@ -94,9 +94,10 @@ export default function ProfileScreen() {
         const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
         const userid = await AsyncStorage.getItem('userid');
         
+        const isTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
         setUser({
           name: cachedName && cachedName.toLowerCase() !== 'n/a' ? cachedName : 'Customer',
-          phone: cachedPhone && cachedPhone.toLowerCase() !== 'n/a' ? cachedPhone : '',
+          phone: cachedPhone && cachedPhone.toLowerCase() !== 'n/a' && !isTemp ? cachedPhone : '',
           coins: cachedCoins !== null && cachedCoins.toLowerCase() !== 'n/a' ? cachedCoins : '0',
           dateOfBirth: cachedDateOfBirth && cachedDateOfBirth.toLowerCase() !== 'n/a' ? cachedDateOfBirth : '',
         });
@@ -121,7 +122,9 @@ export default function ProfileScreen() {
             if (userRes.ok && userData.success && userData.user) {
               const liveCoins = String(userData.user.coins ?? 0);
               const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
-              const livePhone = userData.user.phone && userData.user.phone !== 'N/A' ? userData.user.phone : cachedPhone;
+               const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
+              const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
+              const livePhone = userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp ? userData.user.phone : (cachedPhone && !isCachedTemp ? cachedPhone : '');
               
               await AsyncStorage.setItem('coins', liveCoins);
               if (userData.user.name && userData.user.name !== 'N/A') {
@@ -129,6 +132,9 @@ export default function ProfileScreen() {
               }
               if (userData.user.phone && userData.user.phone !== 'N/A') {
                 await AsyncStorage.setItem('phone', userData.user.phone);
+              }
+              if (userData.user.isPhoneVerified !== undefined) {
+                await AsyncStorage.setItem('isPhoneVerified', String(userData.user.isPhoneVerified));
               }
 
               setUser(prev => ({

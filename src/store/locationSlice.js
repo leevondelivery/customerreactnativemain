@@ -1,6 +1,7 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Platform } from 'react-native';
 import { API_URL } from '../config';
 
 // Geofence check boundary
@@ -69,7 +70,25 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
         // 1. Check if location services are enabled globally (GPS is ON)
-        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        let servicesEnabled = await Location.hasServicesEnabledAsync();
+        if (!servicesEnabled && Platform.OS === 'android') {
+          try {
+            console.log('[Location Redux] GPS is off, prompting user system-wide via enableNetworkProviderAsync...');
+            await Location.enableNetworkProviderAsync();
+            // Wait 500ms for system to register provider bootup
+            await new Promise(resolve => setTimeout(resolve, 500));
+            servicesEnabled = await Location.hasServicesEnabledAsync();
+          } catch (e) {
+            console.warn('[Location Redux] enableNetworkProviderAsync prompt failed or cancelled:', e);
+          }
+        }
+
+        if (!servicesEnabled) {
+          console.log('[Location Redux] GPS is still off, waiting 1000ms to verify again...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          servicesEnabled = await Location.hasServicesEnabledAsync();
+        }
+
         console.log('[Location Redux] GPS services enabled globally:', servicesEnabled);
         if (!servicesEnabled) {
           return rejectWithValue({
@@ -113,11 +132,24 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           latitude = location.coords.latitude;
           longitude = location.coords.longitude;
         } else {
-          const location = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-          });
-          latitude = location.coords.latitude;
-          longitude = location.coords.longitude;
+          try {
+            const location = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+              timeout: 5000,
+            });
+            latitude = location.coords.latitude;
+            longitude = location.coords.longitude;
+          } catch (posErr) {
+            console.warn('[Location Redux] getCurrentPositionAsync failed, attempting getLastKnownPositionAsync:', posErr);
+            const fallbackLoc = await Location.getLastKnownPositionAsync();
+            if (fallbackLoc) {
+              latitude = fallbackLoc.coords.latitude;
+              longitude = fallbackLoc.coords.longitude;
+              console.log('[Location Redux] Successfully retrieved coordinates from last known position:', latitude, longitude);
+            } else {
+              throw posErr; // rethrow if fallback also fails
+            }
+          }
         }
       }
       console.log('[Location Redux] Location coordinates verified:', latitude, longitude);

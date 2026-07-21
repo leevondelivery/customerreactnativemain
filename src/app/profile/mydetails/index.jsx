@@ -11,12 +11,24 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  Alert,
+  Platform,
+  StyleSheet,
 } from 'react-native';
 
 import { useTabBar } from '../../_layout';
 import { API_URL } from '../../../config';
 import { styles } from '../../../styles/mydetails.styles';
 import LoadingView from '../../../components/LoadingView';
+
+let auth = null;
+try {
+  if (Platform.OS !== 'web') {
+    auth = require('@react-native-firebase/auth').default;
+  }
+} catch (e) {
+  console.warn('Firebase auth import failed in profile details', e);
+}
 
 export default function MyDetailsScreen() {
   const router = useRouter();
@@ -42,6 +54,30 @@ export default function MyDetailsScreen() {
   const [calYear, setCalYear] = useState(1972);
   const [showMonthSelect, setShowMonthSelect] = useState(false);
   const [showYearSelect, setShowYearSelect] = useState(false);
+
+  const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
+  const [verificationPhone, setVerificationPhone] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [confirmResult, setConfirmResult] = useState(null);
+  const [resendTimer, setResendTimer] = useState(0);
+  const [firstInputPhone, setFirstInputPhone] = useState('');
+  const [isBypassMode, setIsBypassMode] = useState(false);
+  const resendCountRef = useRef(0);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    if (resendTimer > 0) {
+      timerRef.current = setTimeout(() => {
+        setResendTimer(prev => prev - 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    }
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [resendTimer]);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -71,9 +107,10 @@ export default function MyDetailsScreen() {
           formattedDob = dateOfBirth.includes('T') ? dateOfBirth.split('T')[0] : dateOfBirth;
         }
 
+        const isTemp = phone && (phone.startsWith('google_temp_') || phone.startsWith('temp_google_'));
         setUser({
           name: name && name.toLowerCase() !== 'n/a' ? name : 'Customer',
-          phone: phone && phone.toLowerCase() !== 'n/a' ? phone : '',
+          phone: phone && phone.toLowerCase() !== 'n/a' && !isTemp ? phone : '',
           email: email && email.toLowerCase() !== 'n/a' ? email : '',
           dateOfBirth: formattedDob,
         });
@@ -105,6 +142,198 @@ export default function MyDetailsScreen() {
 
     setShowCalendar(false);
     setShowEditModal(true);
+  };
+
+  const showAlert = (title, message) => {
+    Alert.alert(title, message, [{ text: 'OK' }]);
+  };
+
+  const handleOpenPhoneVerification = () => {
+    setVerificationPhone('');
+    setOtpCode('');
+    setConfirmResult(null);
+    setResendTimer(0);
+    setIsBypassMode(false);
+    resendCountRef.current = 0;
+    setShowPhoneOTPModal(true);
+  };
+
+  const handleSendOTP = async (isResend = false) => {
+    if (!verificationPhone || verificationPhone.trim().length < 10) {
+      showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const cleanFirstPhone = verificationPhone.trim().slice(-10);
+      const activeUserId = await AsyncStorage.getItem('userid');
+
+      // Check if phone number already exists in database
+      console.log('[Phone Auth Profile] Checking phone uniqueness for:', cleanFirstPhone);
+      const checkRes = await fetch(`${API_URL}/check-phone/${cleanFirstPhone}?excludeUserId=${activeUserId || ''}`);
+      const checkData = await checkRes.json();
+      if (checkRes.ok && checkData.success && checkData.exists) {
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+        return;
+      }
+
+      if (Platform.OS === 'web') {
+        showAlert('Not Supported', 'SMS verification is not supported in the web browser.');
+        setOtpLoading(false);
+        return;
+      }
+
+      const formattedPhone = `+91${cleanFirstPhone}`;
+      console.log('[Phone Auth Profile] Requesting OTP for:', formattedPhone);
+
+      // Save the first input phone number
+      setFirstInputPhone(cleanFirstPhone);
+
+      const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+      setConfirmResult(confirmation);
+      showAlert('OTP Sent', isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!');
+      setResendTimer(30);
+
+      if (isResend) {
+        resendCountRef.current += 1;
+        if (resendCountRef.current >= 2) {
+          setIsBypassMode(true);
+          setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+        }
+      }
+    } catch (error) {
+      console.error('[Phone Auth Profile] Send OTP Error:', error);
+      if (error.code === 'auth/too-many-requests' || error.message?.includes('blocked')) {
+        showAlert('Temporarily Blocked', 'Too many requests. Switching to verbal confirmation.');
+        const cleanFirstPhone = verificationPhone.trim().slice(-10);
+        setFirstInputPhone(cleanFirstPhone);
+        setIsBypassMode(true);
+        setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+      } else {
+        // If they click resend and it fails due to network/etc., check if resend count reached 2
+        if (isResend) {
+          resendCountRef.current += 1;
+          if (resendCountRef.current >= 2) {
+            showAlert('Switching to Verbal Confirmation', 'SMS service is not responding. Please confirm your number.');
+            const cleanFirstPhone = verificationPhone.trim().slice(-10);
+            setFirstInputPhone(cleanFirstPhone);
+            setIsBypassMode(true);
+            setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+          } else {
+            showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
+          }
+        } else {
+          showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
+        }
+      }
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const saveVerifiedPhoneToBackend = async (cleanPhone, isVerified) => {
+    const activeUserId = await AsyncStorage.getItem('userid');
+    if (!activeUserId) throw new Error('User ID not found');
+
+    const response = await fetch(`${API_URL}/user/update`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userid: activeUserId,
+        phone: cleanPhone,
+        isPhoneVerified: isVerified
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || !data.success) {
+      throw new Error(data.message || 'Failed to update phone number.');
+    }
+
+    await AsyncStorage.setItem('phone', cleanPhone);
+    await AsyncStorage.setItem('isPhoneVerified', String(isVerified));
+
+    setUser(prev => ({
+      ...prev,
+      phone: cleanPhone
+    }));
+
+    setShowPhoneOTPModal(false);
+    showAlert('Success', 'Phone number linked and verified successfully!');
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!otpCode || otpCode.length < 6) {
+      showAlert('Invalid OTP', 'Please enter the 6-digit verification code.');
+      return;
+    }
+
+    setOtpLoading(true);
+    let verified = false;
+
+    try {
+      console.log('[Phone Auth Profile] Confirming OTP code:', otpCode);
+      await confirmResult.confirm(otpCode);
+      console.log('[Phone Auth Profile] Verification successful!');
+      verified = true;
+    } catch (otpError) {
+      console.error('[Phone Auth Profile] OTP verification error:', otpError);
+      showAlert('Verification Failed', 'The code you entered is invalid or expired. Please try again.');
+      setOtpLoading(false);
+      return;
+    }
+
+    if (verified) {
+      try {
+        const cleanPhone = verificationPhone.trim().slice(-10);
+        await saveVerifiedPhoneToBackend(cleanPhone, true);
+      } catch (dbError) {
+        console.error('[Phone Auth Profile] Backend database update error:', dbError);
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+      }
+    }
+  };
+
+  const handleBypassSubmit = async () => {
+    if (!verificationPhone || verificationPhone.trim().length < 10) {
+      showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const cleanPhone = verificationPhone.trim().slice(-10);
+      const activeUserId = await AsyncStorage.getItem('userid');
+
+      // Check phone uniqueness
+      console.log('[Phone Auth Profile] Bypass checking phone uniqueness for:', cleanPhone);
+      const checkRes = await fetch(`${API_URL}/check-phone/${cleanPhone}?excludeUserId=${activeUserId || ''}`);
+      const checkData = await checkRes.json();
+      if (checkRes.ok && checkData.success && checkData.exists) {
+        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setOtpLoading(false);
+        return;
+      }
+
+      // Verify both phone numbers are the same
+      if (cleanPhone !== firstInputPhone) {
+        showAlert('Verification Error', 'The phone number entered does not match the first number you entered. Please verify your number.');
+        setOtpLoading(false);
+        return;
+      }
+
+      console.log('[Phone Auth Profile] Bypassing OTP, saving number as unverified:', cleanPhone);
+      await saveVerifiedPhoneToBackend(cleanPhone, false);
+    } catch (error) {
+      console.error('[Phone Auth Profile] Bypass submit error:', error);
+      showAlert('Error saving number', 'Failed to save your phone number. Please try again.');
+      setOtpLoading(false);
+    }
   };
 
   const handleUpdateProfile = async () => {
@@ -291,9 +520,29 @@ export default function MyDetailsScreen() {
           </View>
 
           {/* Row 2: Phone */}
-          <View style={styles.detailRow}>
-            <Feather name="phone" size={20} color="#000000" />
-            <Text style={styles.detailText}>{user.phone}</Text>
+          <View style={[styles.detailRow, { justifyContent: 'space-between', alignItems: 'center' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+              <Feather name="phone" size={20} color="#000000" />
+              <Text style={user.phone ? styles.detailText : [styles.detailText, { color: '#8E8E93', fontStyle: 'italic', fontWeight: '500' }]}>
+                {user.phone || 'No phone number'}
+              </Text>
+            </View>
+            {!user.phone && (
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#FF9800',
+                  borderRadius: 15,
+                  paddingVertical: 6,
+                  paddingHorizontal: 16,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+                activeOpacity={0.8}
+                onPress={handleOpenPhoneVerification}
+              >
+                <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' }}>Verify</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Row 3: Email */}
@@ -540,6 +789,247 @@ export default function MyDetailsScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Phone Number OTP Verification Modal */}
+      <Modal
+        visible={showPhoneOTPModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          if (!otpLoading) setShowPhoneOTPModal(false);
+        }}
+      >
+        <View style={localStyles.alertBackdrop}>
+          <View style={[localStyles.alertCard, { backgroundColor: '#F9F9F6', padding: 24 }]}>
+            <View style={[localStyles.alertIconContainer, { backgroundColor: '#1E3545', marginBottom: 15 }]}>
+              <Feather name="phone" size={28} color="#FFFFFF" />
+            </View>
+
+            {!confirmResult && !isBypassMode ? (
+              // Step 1: Input Phone Number
+              <>
+                <Text style={localStyles.alertTitle}>Verify Phone Number</Text>
+                <Text style={localStyles.alertMessage}>
+                  Please enter your 10-digit mobile number to complete verification.
+                </Text>
+                
+                <View style={[localStyles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20, width: '100%', height: 50, borderRadius: 25 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#1A1A1A', padding: 0 }}
+                    placeholder="Enter Mobile Number"
+                    placeholderTextColor="#A19E95"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    value={verificationPhone}
+                    onChangeText={setVerificationPhone}
+                    disabled={otpLoading}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[localStyles.alertButton, otpLoading && { opacity: 0.6 }]}
+                  onPress={() => handleSendOTP(false)}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={localStyles.alertButtonText}>Send OTP</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ marginTop: 15 }}
+                  onPress={() => setShowPhoneOTPModal(false)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : isBypassMode ? (
+              // Bypass Mode: Input Number directly (manual verbal confirmation)
+              <>
+                <Text style={localStyles.alertTitle}>Confirm Phone Number</Text>
+                <Text style={[localStyles.alertMessage, { color: '#B78103', fontWeight: '600', marginBottom: 12 }]}>
+                  SMS services are delayed. Please confirm your 10-digit number below. We will call you to verify your profile details.
+                </Text>
+
+                {/* First Input: Already Entered Number (Disabled/ReadOnly) */}
+                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Original Number Entered:</Text>
+                <View style={[localStyles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFEFEF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 12, opacity: 0.8, width: '100%', height: 50, borderRadius: 25 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#7E7C77', padding: 0 }}
+                    value={firstInputPhone}
+                    editable={false}
+                  />
+                </View>
+
+                {/* Second Input: Manually Entered Confirmation Number */}
+                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Confirm Mobile Number:</Text>
+                <View style={[localStyles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20, width: '100%', height: 50, borderRadius: 25 }]}>
+                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, color: '#1A1A1A', padding: 0 }}
+                    placeholder="Re-enter Mobile Number"
+                    placeholderTextColor="#A19E95"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    value={verificationPhone}
+                    onChangeText={setVerificationPhone}
+                    disabled={otpLoading}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[localStyles.alertButton, { backgroundColor: '#B78103' }, otpLoading && { opacity: 0.6 }]}
+                  onPress={handleBypassSubmit}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={localStyles.alertButtonText}>Confirm & Save</Text>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ marginTop: 15 }}
+                  onPress={() => setShowPhoneOTPModal(false)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              // Step 2: Input OTP Code
+              <>
+                <Text style={localStyles.alertTitle}>Enter OTP</Text>
+                <Text style={localStyles.alertMessage}>
+                  We sent a 6-digit verification code to +91 {verificationPhone.trim().slice(-10)}.
+                </Text>
+                
+                <TextInput
+                  style={[localStyles.addressInput, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', textAlign: 'center', fontSize: 20, letterSpacing: 5, fontWeight: 'bold', marginBottom: 20, width: '100%', height: 50, borderRadius: 25 }]}
+                  placeholder="------"
+                  placeholderTextColor="#A19E95"
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={otpCode}
+                  onChangeText={setOtpCode}
+                  disabled={otpLoading}
+                />
+
+                <TouchableOpacity
+                  style={[localStyles.alertButton, otpLoading && { opacity: 0.6 }]}
+                  onPress={handleVerifyOTP}
+                  disabled={otpLoading}
+                >
+                  {otpLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={localStyles.alertButtonText}>Verify & Save</Text>
+                  )}
+                </TouchableOpacity>
+
+                {resendTimer > 0 ? (
+                  <Text style={{ marginTop: 15, color: '#7E7C77', fontSize: 13, fontWeight: '600' }}>
+                    Resend code in {resendTimer}s
+                  </Text>
+                ) : (
+                  <TouchableOpacity
+                    style={{ marginTop: 15 }}
+                    onPress={() => handleSendOTP(true)}
+                    disabled={otpLoading}
+                  >
+                    <Text style={{ color: '#1E3545', fontWeight: '700', fontSize: 14 }}>Resend OTP</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  style={{ marginTop: 12 }}
+                  onPress={() => setConfirmResult(null)}
+                  disabled={otpLoading}
+                >
+                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Back</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
+
+const localStyles = StyleSheet.create({
+  alertBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center'
+  },
+  alertCard: {
+    backgroundColor: '#F9F9F6',
+    borderRadius: 24,
+    padding: 24,
+    width: '85%',
+    maxWidth: 320,
+    alignItems: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  alertIconContainer: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#1E3545',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 15
+  },
+  alertTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1E3545',
+    marginBottom: 8,
+    textAlign: 'center'
+  },
+  alertMessage: {
+    fontSize: 14,
+    color: '#7E7C77',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20
+  },
+  alertButton: {
+    backgroundColor: '#FF9800',
+    borderRadius: 25,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  alertButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold'
+  },
+  addressInput: {
+    width: '100%',
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#DCD3C5',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+  }
+});
