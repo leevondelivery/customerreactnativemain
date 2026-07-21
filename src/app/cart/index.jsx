@@ -108,17 +108,20 @@ export default function CartScreen() {
       });
       const data = await response.json();
       if (data.success) {
-        setAppliedCoupon({
+        const couponObj = {
           couponCode: data.couponCode,
           influencerName: data.influencerName,
           discountType: data.discountType,
           discountValue: data.discountValue,
           discountAmount: data.discountAmount,
-        });
+        };
+        setAppliedCoupon(couponObj);
+        await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
         triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
       } else {
         setCouponError(data.message || 'Invalid coupon code.');
         setAppliedCoupon(null);
+        await AsyncStorage.removeItem('applied_coupon');
       }
     } catch (error) {
       console.error('Error validating coupon:', error);
@@ -129,10 +132,11 @@ export default function CartScreen() {
     }
   };
 
-  const handleRemoveCoupon = () => {
+  const handleRemoveCoupon = async () => {
     setAppliedCoupon(null);
     setCouponInput('');
     setCouponError('');
+    await AsyncStorage.removeItem('applied_coupon');
     triggerToast('Coupon removed.', 'warning');
   };
 
@@ -251,6 +255,10 @@ export default function CartScreen() {
       } else {
         setCartItems([]);
       }
+      const storedCoupon = await AsyncStorage.getItem('applied_coupon');
+      if (storedCoupon) {
+        setAppliedCoupon(JSON.parse(storedCoupon));
+      }
     } catch (error) {
       console.error('Error loading cart:', error);
     } finally {
@@ -282,10 +290,17 @@ export default function CartScreen() {
 
   const fetchFeesConfig = useCallback(async () => {
     try {
+      // 1. Read cached fees_config first for instant zero-latency loading
+      const cached = await AsyncStorage.getItem('fees_config');
+      if (cached) {
+        setFeesConfig(JSON.parse(cached));
+      }
+      // 2. Fetch fresh config from backend
       const response = await fetch(`${API_URL}/fees-config`);
       const data = await response.json();
       if (data.success && data.config) {
         setFeesConfig(data.config);
+        await AsyncStorage.setItem('fees_config', JSON.stringify(data.config));
       }
     } catch (error) {
       console.error("Error fetching fees config:", error);
@@ -794,7 +809,8 @@ export default function CartScreen() {
     const distanceStr = roadDistances[restId] || '';
     const distanceVal = parseFloat(distanceStr) || 0;
     const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
-    const surgeFee = (feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && distanceVal > 0) ? feesConfig.surgeFee : 0;
+    const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
+    const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
     const deliveryFee = baseDeliveryFee + surgeFee;
     const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + pFee + deliveryFee);
     // Dynamic Coins Calculation
@@ -898,6 +914,7 @@ export default function CartScreen() {
                   } : null,
                   deliveryDistance: roadDistances[restId] || null,
                   deliveryFee: deliveryFee,
+                  surgeFee: surgeFee,
                   couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                   influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
                   discountAmount: discountValAmount,
@@ -908,6 +925,7 @@ export default function CartScreen() {
               if (verifyData.success) {
                 // Clear cart in AsyncStorage
                 await AsyncStorage.removeItem('cart');
+                await AsyncStorage.removeItem('applied_coupon');
                 setIsProcessingPayment(false);
                 setShowSuccessModal(true);
               } else {
@@ -1008,6 +1026,7 @@ export default function CartScreen() {
                         } : null,
                         deliveryDistance: roadDistances[restId] || null,
                         deliveryFee: deliveryFee,
+                        surgeFee: surgeFee,
                         couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                         influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
                         discountAmount: discountValAmount,
@@ -1017,6 +1036,7 @@ export default function CartScreen() {
                     const verifyData = await verifyResponse.json();
                     if (verifyData.success) {
                       await AsyncStorage.removeItem('cart');
+                      await AsyncStorage.removeItem('applied_coupon');
                       setIsProcessingPayment(false);
                       setShowSuccessModal(true);
                     } else {
@@ -1070,6 +1090,7 @@ export default function CartScreen() {
                   } : null,
                   deliveryDistance: roadDistances[restId] || null,
                   deliveryFee: deliveryFee,
+                  surgeFee: surgeFee,
                   couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                   influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
                   discountAmount: discountValAmount,
@@ -1080,6 +1101,7 @@ export default function CartScreen() {
               if (verifyData.success) {
                 // Clear cart in AsyncStorage
                 await AsyncStorage.removeItem('cart');
+                await AsyncStorage.removeItem('applied_coupon');
                 setIsProcessingPayment(false);
                 setShowSuccessModal(true);
               } else {
@@ -1143,9 +1165,10 @@ export default function CartScreen() {
   const distanceStr = roadDistances[restId] || '';
   const distanceVal = parseFloat(distanceStr) || 0;
   const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
-  const surgeFee = (feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && distanceVal > 0) ? feesConfig.surgeFee : 0;
+  const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
+  const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
   const isLocationFetched = locationStatus === 'inside';
-  const deliveryFee = isLocationFetched ? (baseDeliveryFee + surgeFee) : 0;
+  const deliveryFee = baseDeliveryFee + surgeFee;
   const grandTotal = Math.max(0, total - discountAmount + gst + platformFee + deliveryFee);
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
@@ -1328,13 +1351,13 @@ export default function CartScreen() {
               {isLocationFetched ? `₹${baseDeliveryFee.toFixed(2)}` : 'To be calculated'}
             </Text>
           </View>
-          {isLocationFetched && feesConfig.isSurgeActive && feesConfig.surgeFee > 0 && (
+          {isSurgeOn && (
             <View style={styles.billRow}>
               <Text style={[styles.billLabel, { color: '#FF5E5E', fontWeight: '600' }]}>
                 ⚡ Surge fee (high demand)
               </Text>
               <Text style={[styles.billValue, { color: '#FF5E5E', fontWeight: '600' }]}>
-                ₹{feesConfig.surgeFee.toFixed(2)}
+                ₹{Number(feesConfig.surgeFee).toFixed(2)}
               </Text>
             </View>
           )}

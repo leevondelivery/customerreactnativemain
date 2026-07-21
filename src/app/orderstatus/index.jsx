@@ -195,11 +195,36 @@ export default function OrderStatusScreen() {
   const hasDeliveryBoy = !!(deliveryBoyName && deliveryBoyName.toString().trim().length > 0);
 
   const items = orderStatus.items || orderStatus.orderItems || [];
-  const subTotal = orderStatus.subTotal || orderStatus.subtotal || '';
-  const deliveryCharges = orderStatus.deliveryCharges || orderStatus.deliveryCharge || '';
-  const gst = orderStatus.gst || orderStatus.GST || '';
-  const platformFee = orderStatus.platformFee || orderStatus.platform_fee || '';
-  const grandTotal = orderStatus.grandTotal || orderStatus.totalPrice || orderStatus.total || '';
+  const subTotal = orderStatus.subTotal ?? orderStatus.subtotal ?? (orderStatus.totalPrice && orderStatus.totalPrice !== orderStatus.grandTotal ? orderStatus.totalPrice : '') ?? '';
+  
+  let deliveryCharges = orderStatus.deliveryFee
+    ?? orderStatus.delivery_fee
+    ?? orderStatus.deliveryCharges
+    ?? orderStatus.deliveryCharge
+    ?? orderStatus.delivery_charge
+    ?? orderStatus.delivery_charges
+    ?? orderStatus.deliveryCost
+    ?? orderStatus.delivery_cost
+    ?? orderStatus.deliveryAmount
+    ?? orderStatus.delivery_amount
+    ?? '';
+
+  const gst = orderStatus.gst ?? orderStatus.GST ?? orderStatus.tax ?? '';
+  const platformFee = orderStatus.platformFee ?? orderStatus.platform_fee ?? orderStatus.platformFeeAmount ?? '';
+  const surgeFee = orderStatus.surgeFee ?? orderStatus.surge_fee ?? '';
+  const grandTotal = orderStatus.grandTotal ?? orderStatus.totalPrice ?? orderStatus.total ?? orderStatus.finalTotal ?? '';
+
+  if ((deliveryCharges === undefined || deliveryCharges === null || deliveryCharges === '') && grandTotal !== '' && subTotal !== '') {
+    const calcSub = Number(subTotal) || 0;
+    const calcGst = Number(gst) || 0;
+    const calcPlat = Number(platformFee) || 0;
+    const calcGrand = Number(grandTotal) || 0;
+    const calcDiscount = Number(orderStatus.discountAmount || orderStatus.discount || 0);
+    const diff = calcGrand - (calcSub + calcGst + calcPlat - calcDiscount);
+    if (!isNaN(diff) && diff >= 0) {
+      deliveryCharges = diff;
+    }
+  }
 
   const paymentStatus = orderStatus.paymentStatus || 'Paid';
   const paymentId = orderStatus.razorpayPaymentId || orderStatus.paymentId || '';
@@ -294,10 +319,18 @@ export default function OrderStatusScreen() {
                 </View>
               </>
             )}
-            {deliveryCharges !== '' && (
+            {(deliveryCharges !== '' && deliveryCharges !== null && deliveryCharges !== undefined) && (
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Delivery Charges</Text>
-                <Text style={styles.summaryValue}>{formatCurrency(deliveryCharges)}</Text>
+                <Text style={styles.summaryValue}>
+                  {formatCurrency(surgeFee !== '' && Number(surgeFee) > 0 ? Math.max(0, Number(deliveryCharges) - Number(surgeFee)) : deliveryCharges)}
+                </Text>
+              </View>
+            )}
+            {surgeFee !== '' && Number(surgeFee) > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryLabel, { color: '#FF5E5E' }]}>⚡ Surge Fee</Text>
+                <Text style={[styles.summaryValue, { color: '#FF5E5E' }]}>{formatCurrency(surgeFee)}</Text>
               </View>
             )}
             {gst !== '' && (

@@ -105,9 +105,9 @@ export default function Layout() {
     return () => clearInterval(interval);
   }, [pathname]);
 
-  // Global Authentication and Session Verification Check
+  // Global Authentication, Session Verification & Data Pre-Caching
   useEffect(() => {
-    const verifySession = async () => {
+    const syncSessionAndData = async () => {
       if (pathname === '/login' || pathname === '/' || pathname === '') {
         return;
       }
@@ -123,10 +123,45 @@ export default function Layout() {
         console.log('[Layout] Session verification failed: Missing required fields. Redirecting to login.');
         await AsyncStorage.clear();
         router.replace('/login');
+        return;
+      }
+
+      // 1. Sync live user coins & profile details to local storage
+      try {
+        const userRes = await fetch(`${API_URL}/user/${userid}`);
+        const userData = await userRes.json();
+        if (userRes.ok && userData.success && userData.user) {
+          const liveUser = userData.user;
+          if (liveUser.coins !== undefined && liveUser.coins !== null) {
+            await AsyncStorage.setItem('coins', String(liveUser.coins));
+          }
+          if (liveUser.phone && liveUser.phone !== 'N/A') {
+            await AsyncStorage.setItem('phone', liveUser.phone);
+          }
+          if (liveUser.name && liveUser.name !== 'N/A') {
+            await AsyncStorage.setItem('name', liveUser.name);
+          }
+          if (liveUser.email && liveUser.email !== 'N/A') {
+            await AsyncStorage.setItem('email', liveUser.email);
+          }
+        }
+      } catch (userErr) {
+        console.warn('[Layout] User sync error:', userErr.message);
+      }
+
+      // 2. Pre-cache global feesConfig into AsyncStorage
+      try {
+        const feesRes = await fetch(`${API_URL}/fees-config`);
+        const feesData = await feesRes.json();
+        if (feesRes.ok && feesData.success && feesData.config) {
+          await AsyncStorage.setItem('fees_config', JSON.stringify(feesData.config));
+        }
+      } catch (feesErr) {
+        console.warn('[Layout] Fees config sync error:', feesErr.message);
       }
     };
 
-    verifySession();
+    syncSessionAndData();
   }, [pathname, router]);
 
   // Inject CSS to hide browser-native password reveal/clear buttons on Web

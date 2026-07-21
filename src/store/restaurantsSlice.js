@@ -102,12 +102,14 @@ const restaurantsSlice = createSlice({
     updateRestaurantStatuses: (state, action) => {
       const polledList = action.payload;
       state.list = state.list.map(existing => {
-        const found = polledList.find(p => p._id === existing._id);
+        const found = polledList.find(p => (p._id && p._id === existing._id) || (p.restId && p.restId === existing.restId));
         if (found) {
+          const isAct = found.isActive !== false && found.isActive !== 'false' && found.isactive !== false && found.isactive !== 'false' && found.isActive !== 0 && found.isactive !== 0 && found.status !== 'closed' && found.status !== 'INACTIVE';
           return {
             ...existing,
-            isActive: found.isActive !== false && found.isactive !== false,
-            isactive: found.isActive !== false && found.isactive !== false,
+            ...found,
+            isActive: isAct,
+            isactive: isAct,
           };
         }
         return existing;

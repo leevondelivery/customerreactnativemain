@@ -132,6 +132,25 @@ export default function RestaurantMenuScreen() {
     }, type === 'warning' ? 3000 : 2000);
   };
 
+  const formatTimeAMPM = (timeStr) => {
+    if (!timeStr) return '';
+    const str = String(timeStr).trim();
+    if (str.toUpperCase().includes('AM') || str.toUpperCase().includes('PM')) {
+      return str;
+    }
+    const parts = str.split(':');
+    if (parts.length >= 2) {
+      let hours = parseInt(parts[0], 10);
+      const minutes = parts[1].slice(0, 2);
+      if (isNaN(hours)) return str;
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      if (hours === 0) hours = 12;
+      return `${hours}:${minutes} ${ampm}`;
+    }
+    return str;
+  };
+
   useEffect(() => {
     return () => {
       if (toastTimeoutRef.current) {
@@ -198,7 +217,7 @@ export default function RestaurantMenuScreen() {
   const distanceText = roadDistances[restaurantDetail?._id || restaurantDetail?.restId || restId];
   const openTime = restaurantDetail?.openTime || passedOpenTime;
   const closeTime = restaurantDetail?.closeTime || passedCloseTime;
-  const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isactive !== false) : true;
+  const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
   // Fetch restaurant menu on mount
   useEffect(() => {
@@ -433,9 +452,27 @@ export default function RestaurantMenuScreen() {
                       <Text style={styles.heroSpecTextWhite}>{distanceText}</Text>
                     </View>
                   ) : null}
-                  {/* Closing soon highlight badge */}
+                  {/* Closing soon / Opening time highlight badge */}
                   {(() => {
-                    const closingSoonText = isActive ? getClosingSoonStatus(closeTime, nowTime) : null;
+                    if (!isActive) {
+                      return (
+                        <View style={{
+                          backgroundColor: '#DC2626',
+                          borderRadius: 12,
+                          paddingHorizontal: 12,
+                          paddingVertical: 5,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 4
+                        }}>
+                          <Feather name="clock" size={13} color="#FFF" />
+                          <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#FFF' }}>
+                            {openTime ? `Opens at ${formatTimeAMPM(openTime)}` : 'Currently Closed'}
+                          </Text>
+                        </View>
+                      );
+                    }
+                    const closingSoonText = getClosingSoonStatus(closeTime, nowTime);
                     if (!closingSoonText) return null;
                     return (
                       <View style={{

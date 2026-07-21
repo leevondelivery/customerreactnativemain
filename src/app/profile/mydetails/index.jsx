@@ -41,7 +41,7 @@ export default function MyDetailsScreen() {
     email: 'gs@gmail.com',
     dateOfBirth: '2003-01-04',
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editEmail, setEditEmail] = useState('');
   const [editDob, setEditDob] = useState('');

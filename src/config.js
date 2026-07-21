@@ -3,7 +3,7 @@ const getApiUrl = () => {
   // return 'http://localhost:5000';
   
   // For Expo Go on physical mobile devices (configured with your local IP):
-  // return 'http://192.168.0.105:5000';
+  // return 'http://192.168.1.113:5000';
   
   // Current production URL:
   return 'https://api.leevondelivery.in';

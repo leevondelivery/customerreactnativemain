@@ -310,8 +310,32 @@ export default function RestaurantListScreen() {
     }, [])
   );
 
+  const formatTimeAMPM = (timeStr) => {
+    if (!timeStr) return '';
+    const str = String(timeStr).trim();
+    if (str.toUpperCase().includes('AM') || str.toUpperCase().includes('PM')) {
+      return str;
+    }
+    const parts = str.split(':');
+    if (parts.length >= 2) {
+      let hours = parseInt(parts[0], 10);
+      const minutes = parts[1].slice(0, 2);
+      if (isNaN(hours)) return str;
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      hours = hours % 12;
+      if (hours === 0) hours = 12;
+      return `${hours}:${minutes} ${ampm}`;
+    }
+    return str;
+  };
+
+  const isRestActive = (item) => {
+    if (!item) return true;
+    return item.isActive !== false && item.isActive !== 'false' && item.isactive !== false && item.isactive !== 'false' && item.isActive !== 0 && item.isactive !== 0 && item.status !== 'closed' && item.status !== 'INACTIVE';
+  };
+
   const handlePressRestaurant = (item, displayName) => {
-    const isActive = item.isActive !== false && item.isactive !== false;
+    const isActive = isRestActive(item);
     if (!isActive) {
       triggerToast('THIS RESTAURANT IS CURRENTLY CLOSED!', 'warning');
       return;
@@ -420,7 +444,7 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Background Polling for Restaurant active status updates (every 5 seconds)
+  // Background Polling for Restaurant active status updates (every 3 seconds for instant updates)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -432,7 +456,7 @@ export default function RestaurantListScreen() {
       } catch (error) {
         console.error('[RestaurantList] Background polling error:', error);
       }
-    }, 5000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [dispatch]);
@@ -724,8 +748,8 @@ export default function RestaurantListScreen() {
               return true;
             })
             .sort((a, b) => {
-              const aActive = a.isActive !== false && a.isactive !== false;
-              const bActive = b.isActive !== false && b.isactive !== false;
+              const aActive = isRestActive(a);
+              const bActive = isRestActive(b);
               if (aActive && !bActive) return -1;
               if (!aActive && bActive) return 1;
               return 0;
@@ -734,8 +758,8 @@ export default function RestaurantListScreen() {
           console.log(`[RestaurantList Filter] selectedCategory: "${selectedCategory}", activeType: "${activeType}", total restaurants: ${restaurants?.length}, filtered: ${filteredList.length}`);
 
           return filteredList.map((item) => {
-            // Retrieve isactive/isActive from DB (default to true if not specified)
-            const isActive = item.isActive !== false && item.isactive !== false;
+            // Retrieve isactive/isActive status
+            const isActive = isRestActive(item);
 
             // Default fallback image if logoUrl is not present
             const baseUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
@@ -784,7 +808,25 @@ export default function RestaurantListScreen() {
                     <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       {(() => {
-                        const closingSoonText = isActive ? getClosingSoonStatus(item.closeTime, nowTime) : null;
+                        if (!isActive) {
+                          return (
+                            <View style={{
+                              backgroundColor: '#DC2626',
+                              paddingHorizontal: 8,
+                              paddingVertical: 3,
+                              borderRadius: 8,
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              gap: 4
+                            }}>
+                              <Feather name="clock" size={11} color="#FFF" />
+                              <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>
+                                {item.openTime ? `Opens at ${formatTimeAMPM(item.openTime)}` : 'Closed'}
+                              </Text>
+                            </View>
+                          );
+                        }
+                        const closingSoonText = getClosingSoonStatus(item.closeTime, nowTime);
                         if (!closingSoonText) return null;
                         return (
                           <View style={{

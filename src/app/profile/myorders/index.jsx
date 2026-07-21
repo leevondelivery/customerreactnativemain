@@ -144,12 +144,21 @@ export default function MyOrdersScreen() {
 
               {/* Footer */}
               <View style={styles.orderFooter}>
-                <View style={styles.statusContainer}>
-                  <Feather name="check-circle" size={14} color="#15803D" />
-                  <Text style={styles.statusText}>Completed</Text>
-                </View>
+                {order.isRejected || (order.status && order.status.toLowerCase().includes('reject')) ? (
+                  <View style={[styles.statusContainer, { backgroundColor: '#FEE2E2' }]}>
+                    <Feather name="x-circle" size={14} color="#DC2626" />
+                    <Text style={[styles.statusText, { color: '#DC2626' }]}>
+                      {order.status || 'Rejected'}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.statusContainer}>
+                    <Feather name="check-circle" size={14} color="#15803D" />
+                    <Text style={styles.statusText}>{order.status || 'Completed'}</Text>
+                  </View>
+                )}
                 <Text style={styles.dateText}>
-                  {formatDate(order.orderDate || order.completedAt)}
+                  {formatDate(order.orderDate || order.completedAt || order.createdAt)}
                 </Text>
               </View>
             </View>
