@@ -60,7 +60,7 @@ export default function LoginScreen() {
   const [showForgotPasswordNewPassword, setShowForgotPasswordNewPassword] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
 
-  // Custom Alert States
+
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
