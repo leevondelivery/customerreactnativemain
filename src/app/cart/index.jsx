@@ -583,10 +583,29 @@ export default function CartScreen() {
     }
   };
 
-  const openGoogleMaps = () => {
-    const latitude = userLocation?.latitude || 15.8281;
-    const longitude = userLocation?.longitude || 78.0373;
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  const openGoogleMapsForSelectedLocation = () => {
+    let lat, lng, addressQuery;
+
+    if (selectedSavedAddressId) {
+      const selectedSavedAddressObj = savedAddresses.find(
+        (addr) => (addr.id || addr._id) === selectedSavedAddressId
+      );
+      if (selectedSavedAddressObj) {
+        lat = selectedSavedAddressObj.lat !== undefined ? selectedSavedAddressObj.lat : selectedSavedAddressObj.latitude;
+        lng = selectedSavedAddressObj.lng !== undefined ? selectedSavedAddressObj.lng : selectedSavedAddressObj.longitude;
+        addressQuery = `${selectedSavedAddressObj.flatNo || ''} ${selectedSavedAddressObj.street || ''} Kurnool`;
+      }
+    }
+
+    if (!lat || !lng) {
+      lat = userLocation?.latitude || 15.8281;
+      lng = userLocation?.longitude || 78.0373;
+    }
+
+    const mapsUrl = (lat && lng)
+      ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+      : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressQuery || 'Kurnool')}`;
+
     Linking.openURL(mapsUrl).catch((err) => {
       console.error('Failed to open Google Maps URL:', err);
       showAlert('Maps Error', 'Could not open Google Maps on your device.');
@@ -601,7 +620,6 @@ export default function CartScreen() {
     setSelectedTag('Home');
     setIsSavedAddressesExpanded(false);
     handleEnableLocation();
-    openGoogleMaps();
   };
 
   const saveVerifiedPhoneToBackend = async (cleanPhone, isVerified) => {
@@ -1498,70 +1516,38 @@ export default function CartScreen() {
               <Text style={styles.addressSectionTitle}>Delivery address</Text>
 
               {/* Option 1: Use Current Location Button */}
-              <View style={{ marginBottom: 16 }}>
-                <TouchableOpacity
-                  style={[
-                    styles.savedAddressCard,
-                    !selectedSavedAddressId && styles.savedAddressCardSelected,
-                    {
-                      backgroundColor: !selectedSavedAddressId ? '#E8F5E9' : 'rgb(224, 214, 188)',
-                      borderColor: !selectedSavedAddressId ? '#2E7D32' : '#C8BEA7',
-                      marginBottom: !selectedSavedAddressId ? 6 : 0
-                    }
-                  ]}
-                  onPress={handleUseCurrentLocation}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.savedCardLeft}>
-                    <Ionicons
-                      name="navigate-circle"
-                      size={26}
-                      color={!selectedSavedAddressId ? '#2E7D32' : '#FF9800'}
-                      style={{ marginRight: 12 }}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.savedCardTag, !selectedSavedAddressId && { color: '#1B5E20' }]}>
-                        Use Current Location
-                      </Text>
-                      <Text style={styles.savedCardDetails} numberOfLines={2}>
-                        {userLocation ? 'Live GPS location active • Fill door details below' : 'Tap to fetch live device GPS location & open Google Maps'}
-                      </Text>
-                    </View>
-                  </View>
-                  {!selectedSavedAddressId && (
-                    <View style={{ backgroundColor: '#27AE60', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4 }}>
-                      <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: 'bold' }}>SELECTED</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-
-                {!selectedSavedAddressId && (
-                  <TouchableOpacity
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      backgroundColor: '#FFFFFF',
-                      borderColor: '#2E7D32',
-                      borderWidth: 1,
-                      borderRadius: 14,
-                      paddingVertical: 8,
-                      paddingHorizontal: 14,
-                      alignSelf: 'flex-start',
-                      marginTop: 4,
-                      marginLeft: 4
-                    }}
-                    onPress={openGoogleMaps}
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons name="map-outline" size={16} color="#2E7D32" />
-                    <Text style={{ color: '#2E7D32', fontSize: 12, fontWeight: 'bold' }}>
-                      Open in Google Maps ↗
+              <TouchableOpacity
+                style={[
+                  styles.savedAddressCard,
+                  !selectedSavedAddressId && styles.savedAddressCardSelected,
+                  {
+                    backgroundColor: !selectedSavedAddressId ? '#E8F5E9' : 'rgb(224, 214, 188)',
+                    borderColor: !selectedSavedAddressId ? '#2E7D32' : '#C8BEA7',
+                    marginBottom: 16
+                  }
+                ]}
+                onPress={handleUseCurrentLocation}
+                activeOpacity={0.85}
+              >
+                <View style={styles.savedCardLeft}>
+                  <Ionicons
+                    name="navigate-circle"
+                    size={26}
+                    color={!selectedSavedAddressId ? '#2E7D32' : '#FF9800'}
+                    style={{ marginRight: 12 }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.savedCardTag, !selectedSavedAddressId && { color: '#1B5E20' }]}>
+                      Use Current Location
                     </Text>
-                  </TouchableOpacity>
+                  </View>
+                </View>
+                {!selectedSavedAddressId && (
+                  <View style={{ backgroundColor: '#27AE60', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4 }}>
+                    <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: 'bold' }}>SELECTED</Text>
+                  </View>
                 )}
-              </View>
+              </TouchableOpacity>
 
               {/* Option 2: Address Button Dropdown (if user has saved addresses) */}
               {savedAddresses.length > 0 && (
@@ -1718,18 +1704,22 @@ export default function CartScreen() {
                 </View>
               )}
 
-              {/* Delivery Intimation Banner */}
-              <View style={{
-                backgroundColor: '#E8F5E9',
-                borderColor: '#2E7D32',
-                borderWidth: 1.5,
-                borderRadius: 20,
-                padding: 14,
-                marginBottom: 16,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 12
-              }}>
+              {/* Delivery Intimation Banner (Clickable to open Google Maps) */}
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#E8F5E9',
+                  borderColor: '#2E7D32',
+                  borderWidth: 1.5,
+                  borderRadius: 20,
+                  padding: 14,
+                  marginBottom: 16,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 12
+                }}
+                onPress={openGoogleMapsForSelectedLocation}
+                activeOpacity={0.85}
+              >
                 <View style={{
                   width: 40,
                   height: 40,
@@ -1741,7 +1731,7 @@ export default function CartScreen() {
                   <Ionicons name="location" size={22} color="#FFFFFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ fontSize: 11, fontWeight: '800', color: '#1B5E20', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       Order will be delivered to:
                     </Text>
@@ -1749,15 +1739,23 @@ export default function CartScreen() {
                       <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: 'bold' }}>SELECTED</Text>
                     </View>
                   </View>
+
                   <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1A1A1A' }} numberOfLines={2}>
                     {selectedSavedAddressId && selectedSavedAddressObj
                       ? `${selectedSavedAddressObj.tag || 'Selected Location'}: ${selectedSavedAddressObj.flatNo || ''}, ${selectedSavedAddressObj.street || ''}${selectedSavedAddressObj.landmark ? ' (Near ' + selectedSavedAddressObj.landmark + ')' : ''}`
                       : (flatNo.trim() || street.trim())
                       ? `Live GPS Location (${selectedTag}): ${flatNo ? flatNo + ', ' : ''}${street}${landmark ? ' (Near ' + landmark + ')' : ''}`
-                      : 'Live GPS Location (Please enter door/flat details above)'}
+                      : 'Current GPS Location'}
                   </Text>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                    <Ionicons name="map-outline" size={13} color="#2E7D32" />
+                    <Text style={{ fontSize: 11, color: '#2E7D32', fontWeight: 'bold' }}>
+                      Tap to open in Google Maps ↗
+                    </Text>
+                  </View>
                 </View>
-              </View>
+              </TouchableOpacity>
 
               {/* Confirm Order Button */}
               <TouchableOpacity
