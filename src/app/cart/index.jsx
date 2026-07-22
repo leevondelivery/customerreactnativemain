@@ -1,4 +1,4 @@
-import { Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Feather, FontAwesome, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -435,11 +435,11 @@ export default function CartScreen() {
 
   const handleSaveAddress = async () => {
     if (!flatNo || !street) {
-      Alert.alert('Validation Error', 'Please enter Flat/House No and Street.');
+      showAlert('Validation Error', 'Please enter Flat/House No and Street.');
       return;
     }
     if (!userid) {
-      Alert.alert('Authentication Error', 'User not logged in.');
+      showAlert('Authentication Error', 'User not logged in.');
       return;
     }
 
@@ -452,7 +452,7 @@ export default function CartScreen() {
     });
 
     if (isDuplicate) {
-      Alert.alert('Already Saved', 'This address is already saved in your address book.');
+      showAlert('Already Saved', 'This address is already saved in your address book.');
       return;
     }
 
@@ -514,7 +514,7 @@ export default function CartScreen() {
         } else {
           // Revert and fetch actual db addresses
           fetchSavedAddresses(userid);
-          Alert.alert('Error', data.message || 'Failed to save address to database.');
+          showAlert('Error', data.message || 'Failed to save address to database.');
         }
       })
       .catch(error => {
@@ -557,7 +557,7 @@ export default function CartScreen() {
         } else {
           // Revert on error
           fetchSavedAddresses(userid);
-          Alert.alert('Error', data.message || 'Failed to delete address from database.');
+          showAlert('Error', data.message || 'Failed to delete address from database.');
         }
       })
       .catch(error => {
@@ -1869,8 +1869,8 @@ export default function CartScreen() {
       >
         <View style={styles.alertBackdrop}>
           <View style={styles.alertCard}>
-            <View style={styles.alertIconContainer}>
-              <Feather name="alert-triangle" size={32} color="#FFFFFF" />
+            <View style={[styles.alertIconContainer, { backgroundColor: '#FDF0ED' }]}>
+              <FontAwesome name="map-marker" size={30} color="#E05A47" />
             </View>
             <Text style={styles.alertTitle}>{customAlert.title}</Text>
             <Text style={styles.alertMessage}>{customAlert.message}</Text>
@@ -2691,13 +2691,13 @@ const styles = StyleSheet.create({
   },
   alertBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -2731,7 +2731,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#1E3545',
+    backgroundColor: '#FDF0ED',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 15,
@@ -2788,7 +2788,7 @@ const styles = StyleSheet.create({
     marginVertical: 15,
   },
   alertButton: {
-    backgroundColor: '#1E3545',
+    backgroundColor: '#E05A47',
     borderRadius: 20,
     paddingVertical: 12,
     paddingHorizontal: 24,
