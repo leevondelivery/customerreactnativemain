@@ -15,9 +15,9 @@ import {
   View,
 } from 'react-native';
 
+import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { styles } from '../../styles/login.styles';
-import LoadingView from '../../components/LoadingView';
 // Native-only modules: lazily required to avoid crashes when not linked
 let GoogleSignin = null;
 let auth = null;
@@ -70,7 +70,7 @@ export default function LoginScreen() {
     try {
       console.log('[Google Login] Checking play services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-      
+
       console.log('[Google Login] Requesting user account...');
       // Sign out from any existing session first to force the Google Account Chooser
       try {
@@ -78,21 +78,21 @@ export default function LoginScreen() {
       } catch (signOutError) {
         console.log('[Google Login] Error signing out before sign in:', signOutError);
       }
-      
+
       await GoogleSignin.signIn();
-      
+
       console.log('[Google Login] Fetching access and ID tokens...');
       const tokens = await GoogleSignin.getTokens();
       const idToken = tokens.idToken;
       const accessToken = tokens.accessToken;
-      
+
       console.log('[Google Login] Firebase authenticating credential...');
       const googleCredential = GoogleAuthProvider.credential(idToken, accessToken);
       const userCredential = await auth().signInWithCredential(googleCredential);
-      
+
       console.log('[Google Login] Fetching Firebase ID token...');
       const firebaseIdToken = await userCredential.user.getIdToken();
-      
+
       console.log('[Google Login] Syncing with backend at:', `${API_URL}/login/google`);
       const response = await fetch(`${API_URL}/login/google`, {
         method: 'POST',
@@ -113,21 +113,21 @@ export default function LoginScreen() {
         await AsyncStorage.setItem('userid', user._id || 'N/A');
         await AsyncStorage.setItem('phone', user.phone || 'N/A');
         await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
-        
+
         // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
         const displayName = user.name && user.name.toLowerCase() !== 'n/a'
           ? user.name
           : (userCredential.user.displayName && userCredential.user.displayName.toLowerCase() !== 'n/a'
-              ? userCredential.user.displayName
-              : 'N/A');
+            ? userCredential.user.displayName
+            : 'N/A');
         await AsyncStorage.setItem('name', displayName);
 
         // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
         const displayEmail = user.email && user.email.toLowerCase() !== 'n/a'
           ? user.email
           : (userCredential.user.email && userCredential.user.email.toLowerCase() !== 'n/a'
-              ? userCredential.user.email
-              : 'N/A');
+            ? userCredential.user.email
+            : 'N/A');
         await AsyncStorage.setItem('email', displayEmail);
         await AsyncStorage.setItem('logintime', logintime);
         await AsyncStorage.setItem('coins', String(user.coins ?? 0));
@@ -334,7 +334,7 @@ export default function LoginScreen() {
       const formattedPhone = `+91${forgotPasswordPhone.trim().slice(-10)}`;
       console.log(`[Forgot Password] Triggering Firebase OTP for: ${formattedPhone}`);
       const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
-      
+
       setForgotPasswordConfirmResult(confirmation);
       setForgotPasswordStep(2);
     } catch (error) {
@@ -458,8 +458,8 @@ export default function LoginScreen() {
               }}
             >
               <Text style={styles.modalButtonText}>
-                {errorMessage === 'User not found' 
-                  ? 'Create Account' 
+                {errorMessage === 'User not found'
+                  ? 'Create Account'
                   : (errorMessage.includes('successfully') ? 'OK' : 'Try Again')}
               </Text>
             </Pressable>
@@ -703,7 +703,7 @@ export default function LoginScreen() {
                   </Text>
                 </TouchableOpacity>
               )}
-              
+
               <TouchableOpacity
                 onPress={() => setIsSignUp(!isSignUp)}
                 style={{ paddingVertical: 4, flex: 1, alignItems: 'flex-end' }}

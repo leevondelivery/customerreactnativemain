@@ -408,4 +408,22 @@ export const styles = StyleSheet.create({
     color: '#1A1A1A',
     letterSpacing: 3,
   },
+
+  // Review Button
+  reviewButton: {
+    marginTop: 14,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 24,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  reviewButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
+  },
 });

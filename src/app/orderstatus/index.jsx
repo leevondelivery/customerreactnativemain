@@ -24,8 +24,8 @@ import LoadingView from '../../components/LoadingView';
 const getStageInfo = (status) => {
   if (!status) return { percent: 10 };
   const s = status.trim().toLowerCase();
-  // Stage 4 — Out for delivery
-  if (s.includes('out for delivery') || s.includes('out for')) return { percent: 100 };
+  // Stage 4 — Out for delivery / Delivered
+  if (s.includes('delivered') || s.includes('completed') || s.includes('out for delivery') || s.includes('out for')) return { percent: 100 };
   // Stage 3 — Delivered soon (waiting to pickup)
   if (s.includes('delivered soon') || s.includes('pickup') || s.includes('pick up') || s.includes('waiting to pickup')) return { percent: 75 };
   // Stage 2 — Waiting for delivery boy to accept
@@ -38,6 +38,7 @@ const getStageInfo = (status) => {
 const getNotificationMessage = (status) => {
   if (!status) return null;
   const s = status.trim().toLowerCase();
+  if (s.includes('delivered') || s.includes('completed')) return `Your order has been delivered! Enjoy your meal! 🎉`;
   if (s.includes('out for delivery') || s.includes('out for')) return `Clear the table! Greatness is on its way... 🛵`;
   if (s.includes('delivered soon') || s.includes('pickup') || s.includes('waiting to pickup')) return `Your order is packed and ready for pickup! 📦`;
   if (s.includes('waiting for delivery') || s.includes('delivery boy')) return `Searching for your hunger savior... 🚴`;
@@ -75,24 +76,6 @@ export default function OrderStatusScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-
-  const hadActiveOrder = useRef(false);
-
-  // Redirect to reviews screen once the order completes
-  useEffect(() => {
-    if (orderStatus) {
-      const statusLower = orderStatus.status?.toLowerCase() || '';
-      if (statusLower.includes('delivered') || statusLower.includes('completed')) {
-        hadActiveOrder.current = false;
-        router.replace('/profile/myreviews');
-      } else {
-        hadActiveOrder.current = true;
-      }
-    } else if (hadActiveOrder.current && !loading) {
-      hadActiveOrder.current = false;
-      router.replace('/profile/myreviews');
-    }
-  }, [orderStatus, loading, router]);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -373,6 +356,18 @@ export default function OrderStatusScreen() {
             <View style={styles.otpBox}>
               <Text style={styles.otpText}>OTP - {otp}</Text>
             </View>
+          ) : null}
+
+          {/* Rate & Review Button (if delivered or completed) */}
+          {(statusText.toLowerCase().includes('delivered') || statusText.toLowerCase().includes('completed')) ? (
+            <TouchableOpacity
+              style={styles.reviewButton}
+              onPress={() => router.push('/profile/myreviews')}
+              activeOpacity={0.85}
+            >
+              <FontAwesome5 name="star" size={14} color="#FFC107" />
+              <Text style={styles.reviewButtonText}>Rate & Review Order</Text>
+            </TouchableOpacity>
           ) : null}
 
         </View>
