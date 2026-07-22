@@ -75,6 +75,9 @@ export default function CartScreen() {
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
+
+  // Location check is satisfied if device GPS is verified, userLocation exists, a saved address is selected, or flat & street are entered
+  const isLocationVerified = locationStatus === 'inside' || Boolean(userLocation) || Boolean(selectedSavedAddressId) || (Boolean(flatNo.trim()) && Boolean(street.trim()));
   const [feesConfig, setFeesConfig] = useState({
     deliveryFeeBase: 20,
     deliveryFeePerKm: 10,
@@ -1422,7 +1425,7 @@ export default function CartScreen() {
         )}
 
         {/* Location warning banner inside Cart if skipped */}
-        {locationStatus !== 'inside' && !hasActiveOrder && (
+        {!isLocationVerified && !hasActiveOrder && (
           <View style={{
             backgroundColor: '#FFF9E6',
             borderColor: '#FFE0B2',
@@ -1589,13 +1592,13 @@ export default function CartScreen() {
 
             {/* Confirm Order Button */}
             <TouchableOpacity
-              style={[styles.confirmOrderButton, (locationStatus !== 'inside' || hasActiveOrder) && { backgroundColor: '#CCC' }]}
+              style={[styles.confirmOrderButton, (!isLocationVerified || hasActiveOrder) && { backgroundColor: '#CCC' }]}
               onPress={handleConfirmOrder}
-              disabled={locationStatus !== 'inside' || hasActiveOrder}
+              disabled={!isLocationVerified || hasActiveOrder}
               activeOpacity={0.85}
             >
               <Text style={styles.confirmOrderButtonText}>
-                {locationStatus !== 'inside' ? 'Please select/verify delivery address' : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
+                {!isLocationVerified ? 'Please select/verify delivery address' : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
               </Text>
             </TouchableOpacity>
           </View>

@@ -3,18 +3,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   ScrollView,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
-import { useTabBar } from '../../_layout';
-import { styles } from '../../../styles/myreviews.styles';
 import LoadingView from '../../../components/LoadingView';
 import { fetchProfileData } from '../../../store/restaurantsSlice';
+import { styles } from '../../../styles/myreviews.styles';
+import { useTabBar } from '../../_layout';
 
 export default function MyReviewsScreen() {
   const router = useRouter();

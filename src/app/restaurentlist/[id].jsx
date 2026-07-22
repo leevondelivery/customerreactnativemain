@@ -241,6 +241,16 @@ export default function RestaurantMenuScreen() {
     return <LoadingView />;
   }
 
+const isItemAvailable = (item) => {
+  if (!item) return false;
+  if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0) return false;
+  if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0) return false;
+  if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'OUT_OF_STOCK' || item.status === 'inactive' || item.status === 0) return false;
+  if (item.available === false || item.available === 'false' || item.available === 0) return false;
+  if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0) return false;
+  return true;
+};
+
   // Extract all unique categories from database items
   const categories = [
     'All',
@@ -257,10 +267,6 @@ export default function RestaurantMenuScreen() {
   // Filter and sort items
   const sortedItems = menuItems
     .filter((item) => {
-      // Only display items marked for the customer app
-      const matchesDisplay = item.itemStatus !== false && item.itemtodisplayintherestuarentapp !== false;
-      if (!matchesDisplay) return false;
-
       // Filter by search query
       const name = item.itemName ? item.itemName.toLowerCase() : '';
       const query = searchQuery.trim().toLowerCase();
@@ -281,6 +287,13 @@ export default function RestaurantMenuScreen() {
       return matchesSearch && matchesType && matchesCategory;
     })
     .sort((a, b) => {
+      const availA = isItemAvailable(a);
+      const availB = isItemAvailable(b);
+
+      // Available items stay at top, items with status === false sit at the bottom
+      if (availA && !availB) return -1;
+      if (!availA && availB) return 1;
+
       if (sortBy === 'Low to High') {
         return (a.price || 0) - (b.price || 0);
       }
@@ -291,6 +304,10 @@ export default function RestaurantMenuScreen() {
     });
 
   const handleUpdateQuantity = async (item, change) => {
+    if (!isItemAvailable(item)) {
+      triggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning');
+      return;
+    }
     if (change > 0 && hasActiveOrder) {
       triggerToast('PLEASE WAIT UNTIL THE ACTIVE ORDER IS DELIVERED', 'warning');
       return;
@@ -340,6 +357,7 @@ export default function RestaurantMenuScreen() {
   };
 
   const renderItemCard = ({ item }) => {
+    const available = isItemAvailable(item);
     const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
     const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
     const fallbackImage = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
@@ -360,26 +378,57 @@ export default function RestaurantMenuScreen() {
     const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
 
     return (
-      <View style={styles.itemCard}>
+      <View style={[
+        styles.itemCard,
+        !available && {
+          opacity: 0.7,
+          backgroundColor: '#F2F2F7',
+          borderColor: '#D1D1D6',
+        }
+      ]}>
+        {/* Out of Stock Top Overlay Badge */}
+        {!available && (
+          <View style={{
+            position: 'absolute',
+            top: 8,
+            left: 8,
+            backgroundColor: 'rgba(50, 50, 50, 0.85)',
+            paddingHorizontal: 7,
+            paddingVertical: 3,
+            borderRadius: 4,
+            zIndex: 10,
+          }}>
+            <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 }}>
+              OUT OF STOCK
+            </Text>
+          </View>
+        )}
+
         <Image
           source={{ uri: item.photoUrl || fallbackImage }}
-          style={styles.itemImage}
+          style={[
+            styles.itemImage,
+            !available && {
+              opacity: 0.45,
+              ...(Platform.OS === 'web' ? { filter: 'grayscale(100%)' } : {})
+            }
+          ]}
           resizeMode="cover"
         />
 
-        <Text style={styles.itemNameText} numberOfLines={2}>
+        <Text style={[styles.itemNameText, !available && { color: '#8E8E93' }]} numberOfLines={2}>
           {displayItemName}
         </Text>
 
         <View style={styles.ratingAndOfferContainer}>
-          <View style={styles.itemRatingContainer}>
-            <FontAwesome name="star" size={10} color="#FFD200" />
-            <Text style={styles.itemRatingText}>
+          <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
+            <FontAwesome name="star" size={10} color={available ? "#FFD200" : "#8E8E93"} />
+            <Text style={[styles.itemRatingText, !available && { color: '#8E8E93' }]}>
               {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
             </Text>
           </View>
           {hasOffer && (
-            <View style={styles.offerBadge}>
+            <View style={[styles.offerBadge, !available && { backgroundColor: '#8E8E93' }]}>
               <Ionicons name="pricetag" size={9} color="#FFFFFF" />
               <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
             </View>
@@ -388,14 +437,22 @@ export default function RestaurantMenuScreen() {
 
         {hasOffer ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-            <Text style={[styles.priceText, { marginBottom: 0 }]}>RS:{Math.round(offerPrice)}</Text>
-            <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
+            <Text style={[styles.priceText, { marginBottom: 0 }, !available && { color: '#8E8E93' }]}>RS:{Math.round(offerPrice)}</Text>
+            <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: available ? '#FF5E00' : '#8E8E93', color: available ? '#FF5E00' : '#8E8E93', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
           </View>
         ) : (
-          <Text style={styles.priceText}>RS:{item.price || 0}</Text>
+          <Text style={[styles.priceText, !available && { color: '#8E8E93' }]}>RS:{item.price || 0}</Text>
         )}
 
-        {quantity > 0 ? (
+        {!available ? (
+          <TouchableOpacity
+            style={[styles.addButton, { backgroundColor: '#E5E5EA', borderColor: '#D1D1D6' }]}
+            activeOpacity={0.8}
+            onPress={() => triggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning')}
+          >
+            <Text style={[styles.addButtonText, { color: '#8E8E93', fontSize: 11 }]}>OUT OF STOCK</Text>
+          </TouchableOpacity>
+        ) : quantity > 0 ? (
           <View style={styles.quantityContainer}>
             <TouchableOpacity style={styles.quantityBtn} onPress={() => handleUpdateQuantity(item, -1)}>
               <Feather name="minus" size={12} color="#1E3545" />

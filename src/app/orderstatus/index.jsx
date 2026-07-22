@@ -3,21 +3,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Linking,
   RefreshControl,
   ScrollView,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useTabBar } from '../_layout';
+import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { styles } from '../../styles/orderstatus.styles';
-import LoadingView from '../../components/LoadingView';
+import { useTabBar } from '../_layout';
 
 
 // Map DB status value to one of 4 progress stages (text always comes from DB)
@@ -179,7 +178,7 @@ export default function OrderStatusScreen() {
 
   const items = orderStatus.items || orderStatus.orderItems || [];
   const subTotal = orderStatus.subTotal ?? orderStatus.subtotal ?? (orderStatus.totalPrice && orderStatus.totalPrice !== orderStatus.grandTotal ? orderStatus.totalPrice : '') ?? '';
-  
+
   let deliveryCharges = orderStatus.deliveryFee
     ?? orderStatus.delivery_fee
     ?? orderStatus.deliveryCharges
