@@ -35,7 +35,7 @@ if (Platform.OS !== 'web') {
     console.warn('[Profile] Firebase Auth native module not available:', e.message);
   }
 }
-import { API_URL } from '../../config';
+import { API_URL, CONTACT_INFO } from '../../config';
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -54,6 +54,7 @@ export default function ProfileScreen() {
   });
   const [loading, setLoading] = useState(true);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [showContactModal, setShowContactModal] = useState(false);
   const [isCoinsActive, setIsCoinsActive] = useState(true);
 
   const [shineValue] = useState(() => new Animated.Value(-180));
@@ -235,6 +236,39 @@ export default function ProfileScreen() {
     },
   ];
 
+  const socialLinksList = [
+    {
+      name: 'YouTube',
+      url: CONTACT_INFO.socials.youtube,
+      icon: <FontAwesome name="youtube-play" size={18} color="#FF0000" />,
+      bg: '#FFEBEE',
+    },
+    {
+      name: 'X (Twitter)',
+      url: CONTACT_INFO.socials.x,
+      icon: <FontAwesome name="twitter" size={18} color="#000000" />,
+      bg: '#F5F5F5',
+    },
+    {
+      name: 'LinkedIn',
+      url: CONTACT_INFO.socials.linkedin,
+      icon: <FontAwesome name="linkedin-square" size={18} color="#0A66C2" />,
+      bg: '#E8F4F9',
+    },
+    {
+      name: 'Instagram',
+      url: CONTACT_INFO.socials.instagram,
+      icon: <FontAwesome name="instagram" size={18} color="#E4405F" />,
+      bg: '#FCE4EC',
+    },
+    {
+      name: 'Facebook',
+      url: CONTACT_INFO.socials.facebook,
+      icon: <FontAwesome name="facebook-square" size={18} color="#1877F2" />,
+      bg: '#E8EAF6',
+    },
+  ];
+
   return (
     <View style={styles.container}>
       <ScrollView
@@ -312,6 +346,8 @@ export default function ProfileScreen() {
                   router.push('/profile/myorders');
                 } else if (btn.label === 'My Reviews') {
                   router.push('/profile/myreviews');
+                } else if (btn.label === 'Contact Us') {
+                  router.push('/profile/contactus');
                 } else if (btn.label === 'Privacy Policy') {
                   Linking.openURL('https://leevon-delivery.vercel.app/privacy').catch(err => console.error('Failed to open Privacy Policy URL:', err));
                 } else if (btn.label === 'Terms & Conditions') {
@@ -336,6 +372,30 @@ export default function ProfileScreen() {
           ))}
         </View>
 
+        {/* Social Media Card */}
+        <View style={[styles.socialCard, styles.shadow]}>
+          <Text style={styles.socialHeaderTitle}>Connect With Us</Text>
+          <View style={styles.socialIconsRow}>
+            <TouchableOpacity
+              style={[styles.socialIconCircle, { backgroundColor: '#E8F5E9' }]}
+              activeOpacity={0.8}
+              onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`).catch(err => console.error('Phone error:', err))}
+            >
+              <Feather name="phone" size={20} color="#2E7D32" />
+            </TouchableOpacity>
+            {socialLinksList.map((item, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.socialIconCircle, { backgroundColor: item.bg }]}
+                activeOpacity={0.8}
+                onPress={() => Linking.openURL(item.url).catch(err => console.error('URL error:', err))}
+              >
+                {item.icon}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         {/* Delete Account Section */}
         <View style={styles.deleteSection}>
           <Text style={styles.deleteLabelText}>Need to close your account?</Text>
@@ -350,6 +410,70 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Contact Us & Social Media Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showContactModal}
+        onRequestClose={() => setShowContactModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.contactModalCard}>
+            <View style={styles.contactModalHeader}>
+              <Text style={styles.contactModalTitle}>Contact Us</Text>
+              <TouchableOpacity
+                style={styles.contactModalCloseBtn}
+                onPress={() => setShowContactModal(false)}
+              >
+                <Feather name="x" size={20} color="#333333" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Direct Call Box */}
+            <View style={styles.contactPhoneBox}>
+              <View style={styles.contactPhoneLeft}>
+                <View style={styles.contactPhoneIconCircle}>
+                  <Feather name="phone-call" size={20} color="#2E7D32" />
+                </View>
+                <View>
+                  <Text style={styles.contactPhoneTitle}>Customer Support</Text>
+                  <Text style={styles.contactPhoneNumber}>{CONTACT_INFO.displayPhone}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.contactCallBtn}
+                activeOpacity={0.8}
+                onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`).catch(err => console.error('Phone error:', err))}
+              >
+                <Feather name="phone" size={14} color="#FFFFFF" />
+                <Text style={styles.contactCallBtnText}>Call</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.contactSectionSubtitle}>Follow Our Social Media</Text>
+            
+            <View style={styles.socialGrid}>
+              {socialLinksList.map((item, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={styles.socialGridItem}
+                  activeOpacity={0.85}
+                  onPress={() => Linking.openURL(item.url).catch(err => console.error('URL error:', err))}
+                >
+                  <View style={styles.socialItemLeft}>
+                    <View style={[styles.socialIconCircle, { backgroundColor: item.bg, width: 36, height: 36, borderRadius: 18 }]}>
+                      {item.icon}
+                    </View>
+                    <Text style={styles.socialItemLabel}>{item.name}</Text>
+                  </View>
+                  <Feather name="external-link" size={16} color="#888888" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Custom Logout Confirmation Modal */}
       <Modal
@@ -394,3 +518,4 @@ export default function ProfileScreen() {
     </View>
   );
 }
+
