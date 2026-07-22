@@ -78,6 +78,8 @@ export default function CartScreen() {
   const [isAddNewAddressExpanded, setIsAddNewAddressExpanded] = useState(false);
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
+  const [showLocationChoiceModal, setShowLocationChoiceModal] = useState(false);
+  const [isFetchingLocation, setIsFetchingLocation] = useState(false);
 
   const targetRestId = cartItems[0]?.restId || '';
   const distanceStr = roadDistances[targetRestId] || '';
@@ -411,8 +413,20 @@ export default function CartScreen() {
     }
   };
 
-  const handlePlaceOrder = () => {
-    if (!isDistanceCalculated) {
+  const handlePlaceOrder = async () => {
+    if (hasActiveOrder) {
+      showAlert('Active Order In Progress', 'You already have an active order. Please wait for it to complete.');
+      return;
+    }
+
+    // If user skipped location or location is not available and no saved address is selected
+    if (locationStatus === 'skipped' || (!userLocation && !selectedSavedAddressId)) {
+      console.log('[Cart] Location was skipped or unavailable. Opening Location Choice modal...');
+      setShowLocationChoiceModal(true);
+      return;
+    }
+
+    if (!isDistanceCalculated && !selectedSavedAddressId) {
       showAlert('Calculating Delivery Charge', 'Please wait until your delivery location and charge are calculated.');
       return;
     }
@@ -612,14 +626,23 @@ export default function CartScreen() {
     });
   };
 
-  const handleUseCurrentLocation = () => {
+  const handleUseCurrentLocation = async () => {
     setSelectedSavedAddressId(null);
     setFlatNo('');
     setStreet('');
     setLandmark('');
     setSelectedTag('Home');
     setIsSavedAddressesExpanded(false);
-    handleEnableLocation();
+    setShowLocationChoiceModal(false);
+    setIsFetchingLocation(true);
+    try {
+      const success = await handleEnableLocation();
+      if (success) {
+        setShowDeliveryForm(true);
+      }
+    } finally {
+      setIsFetchingLocation(false);
+    }
   };
 
   const saveVerifiedPhoneToBackend = async (cleanPhone, isVerified) => {
@@ -812,26 +835,33 @@ export default function CartScreen() {
         } else {
           showAlert('Location Error', errMsg);
         }
+        return false;
       } else {
         triggerToast('Location enabled and distance calculated!', 'success');
+        return true;
       }
     } catch (err) {
       console.error('[Cart] Error enabling location:', err);
       showAlert('Location Error', 'An unexpected error occurred while fetching location.');
+      return false;
     }
   };
 
   const handleConfirmOrder = async () => {
-    if (!isDistanceCalculated) {
-      showAlert('Calculating Delivery Charge', 'Please wait until your delivery charge has been fully calculated with 100% accuracy.');
-      return;
+    if (!selectedSavedAddressId) {
+      if (locationStatus === 'skipped' || locationStatus !== 'inside' || !userLocation) {
+        console.log('[Cart] Location is skipped or missing in handleConfirmOrder. Requesting location...');
+        const success = await handleEnableLocation();
+        if (!success || locationStatus !== 'inside' || !userLocation) {
+          showAlert('Location Required', 'Location verification is required to place your order. Please enable your location.');
+          return;
+        }
+      }
     }
 
-    if (!selectedSavedAddressId) {
-      if (locationStatus !== 'inside' || !userLocation) {
-        showAlert('Location Required', 'Please tap "Use Current Location" to fetch your GPS coordinates.');
-        return;
-      }
+    if (!isDistanceCalculated && !selectedSavedAddressId) {
+      showAlert('Calculating Delivery Charge', 'Please wait until your delivery charge has been fully calculated with 100% accuracy.');
+      return;
     }
 
     if (!flatNo.trim() || !street.trim()) {
@@ -1494,13 +1524,13 @@ export default function CartScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder || !isDistanceCalculated) && styles.checkoutButtonDisabled]}
+            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder || (!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId)) && styles.checkoutButtonDisabled]}
             onPress={handlePlaceOrder}
-            disabled={showDeliveryForm || hasActiveOrder || !isDistanceCalculated}
+            disabled={showDeliveryForm || hasActiveOrder || (!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId)}
             activeOpacity={0.85}
           >
             <Text style={styles.checkoutButtonText}>
-              {!isDistanceCalculated ? 'Calculating Charge...' : 'Place the order'}
+              {!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId ? 'Calculating Charge...' : 'Place the order'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -2045,6 +2075,126 @@ export default function CartScreen() {
                 </TouchableOpacity>
               </>
             )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Select Delivery Location Modal */}
+      <Modal
+        transparent
+        visible={showLocationChoiceModal}
+        animationType="slide"
+        onRequestClose={() => setShowLocationChoiceModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ width: '85%', maxWidth: 360, maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 22, alignItems: 'center' }}>
+            <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: '#F0F6F0', justifyContent: 'center', alignItems: 'center', marginBottom: 14 }}>
+              <Feather name="map-pin" size={28} color="#2B783E" />
+            </View>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1E3545', textAlign: 'center', marginBottom: 6 }}>
+              Select Delivery Location
+            </Text>
+            <Text style={{ fontSize: 13, color: '#666666', textAlign: 'center', marginBottom: 18 }}>
+              Please choose where you would like your food delivered:
+            </Text>
+
+            <ScrollView style={{ width: '100%', maxHeight: 280, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
+              {/* Option A: Use Current Location */}
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  padding: 16,
+                  backgroundColor: '#FFFFFF',
+                  borderColor: '#E4E1D8',
+                  borderWidth: 1,
+                  borderRadius: 18,
+                  marginBottom: 12,
+                  gap: 14
+                }}
+                activeOpacity={0.8}
+                onPress={handleUseCurrentLocation}
+              >
+                <Feather name="navigation" size={22} color="#2B783E" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: '#1E3545' }}>Use Current Location</Text>
+                  <Text style={{ fontSize: 12, color: '#808C94', marginTop: 2 }}>Locate me using my device's GPS</Text>
+                </View>
+                <Feather name="chevron-right" size={18} color="#2B783E" />
+              </TouchableOpacity>
+
+              {/* Option B: Saved Addresses list */}
+              {savedAddresses.length > 0 && (
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, color: '#000000', fontWeight: 'bold', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    Saved Addresses
+                  </Text>
+                  {savedAddresses.map((addr) => {
+                    const isSelected = selectedSavedAddressId === (addr.id || addr._id);
+                    return (
+                      <TouchableOpacity
+                        key={addr._id || addr.id}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          padding: 14,
+                          backgroundColor: isSelected ? '#F0F6F0' : '#FFFFFF',
+                          borderColor: isSelected ? '#2B783E' : '#E4E1D8',
+                          borderWidth: 1,
+                          borderRadius: 16,
+                          marginBottom: 8,
+                          gap: 12
+                        }}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          setShowLocationChoiceModal(false);
+                          handlePrefillAddress(addr);
+                          setShowDeliveryForm(true);
+                        }}
+                      >
+                        <Feather name={addr.tag === 'Home' ? 'home' : addr.tag === 'Office' ? 'briefcase' : 'map-pin'} size={20} color={isSelected ? '#2B783E' : '#1E3545'} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: isSelected ? '#2B783E' : '#1E3545' }}>
+                            {addr.tag || addr.label || 'Address'}
+                          </Text>
+                          <Text style={{ fontSize: 12, color: '#808C94', marginTop: 1 }} numberOfLines={1}>
+                            {addr.flatNo ? `${addr.flatNo}, ` : ''}{addr.street || ''}
+                          </Text>
+                        </View>
+                        {isSelected ? (
+                          <Feather name="check" size={18} color="#2B783E" />
+                        ) : (
+                          <Feather name="chevron-right" size={16} color="#808C94" />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </ScrollView>
+
+            {/* Cancel Button */}
+            <TouchableOpacity 
+              style={{ width: '100%', paddingVertical: 10, alignItems: 'center' }} 
+              onPress={() => setShowLocationChoiceModal(false)}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#666666', textDecorationLine: 'underline' }}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Fetching Location Loading Overlay Modal */}
+      <Modal transparent visible={isFetchingLocation} animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ width: '85%', maxWidth: 320, backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 24, alignItems: 'center' }}>
+            <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1E3545', textAlign: 'center', marginBottom: 6 }}>Fetching Location</Text>
+            <Text style={{ fontSize: 13, color: '#666666', textAlign: 'center', lineHeight: 18 }}>
+              Retrieving your coordinates and calculating delivery distances...
+            </Text>
           </View>
         </View>
       </Modal>
