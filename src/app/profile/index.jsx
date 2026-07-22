@@ -94,7 +94,7 @@ export default function ProfileScreen() {
         const cachedCoins = await AsyncStorage.getItem('coins');
         const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
         const userid = await AsyncStorage.getItem('userid');
-        
+
         const isTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
         setUser({
           name: cachedName && cachedName.toLowerCase() !== 'n/a' ? cachedName : 'Customer',
@@ -123,10 +123,10 @@ export default function ProfileScreen() {
             if (userRes.ok && userData.success && userData.user) {
               const liveCoins = String(userData.user.coins ?? 0);
               const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
-               const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
+              const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
               const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
               const livePhone = userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp ? userData.user.phone : (cachedPhone && !isCachedTemp ? cachedPhone : '');
-              
+
               await AsyncStorage.setItem('coins', liveCoins);
               if (userData.user.name && userData.user.name !== 'N/A') {
                 await AsyncStorage.setItem('name', userData.user.name);
@@ -372,29 +372,6 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        {/* Social Media Card */}
-        <View style={[styles.socialCard, styles.shadow]}>
-          <Text style={styles.socialHeaderTitle}>Connect With Us</Text>
-          <View style={styles.socialIconsRow}>
-            <TouchableOpacity
-              style={[styles.socialIconCircle, { backgroundColor: '#E8F5E9' }]}
-              activeOpacity={0.8}
-              onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`).catch(err => console.error('Phone error:', err))}
-            >
-              <Feather name="phone" size={20} color="#2E7D32" />
-            </TouchableOpacity>
-            {socialLinksList.map((item, idx) => (
-              <TouchableOpacity
-                key={idx}
-                style={[styles.socialIconCircle, { backgroundColor: item.bg }]}
-                activeOpacity={0.8}
-                onPress={() => Linking.openURL(item.url).catch(err => console.error('URL error:', err))}
-              >
-                {item.icon}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
 
         {/* Delete Account Section */}
         <View style={styles.deleteSection}>
@@ -452,7 +429,7 @@ export default function ProfileScreen() {
             </View>
 
             <Text style={styles.contactSectionSubtitle}>Follow Our Social Media</Text>
-            
+
             <View style={styles.socialGrid}>
               {socialLinksList.map((item, idx) => (
                 <TouchableOpacity
@@ -501,7 +478,7 @@ export default function ProfileScreen() {
               >
                 <Text style={styles.modalConfirmText}>Confirm</Text>
               </Pressable>
-              
+
               <Pressable
                 style={({ pressed }) => [
                   styles.modalCancelButton,

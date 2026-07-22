@@ -76,7 +76,7 @@ export default function CartScreen() {
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
   const [isSavedAddressesExpanded, setIsSavedAddressesExpanded] = useState(false);
   const [isAddNewAddressExpanded, setIsAddNewAddressExpanded] = useState(false);
-  const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
+  const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '', onOk: null });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
   const [showLocationChoiceModal, setShowLocationChoiceModal] = useState(false);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
@@ -175,11 +175,12 @@ export default function CartScreen() {
     };
   }, [resendTimer]);
 
-  const showAlert = (title, message) => {
+  const showAlert = (title, message, onOk = null) => {
     setCustomAlert({
       visible: true,
       title,
       message,
+      onOk,
     });
   };
 
@@ -848,6 +849,94 @@ export default function CartScreen() {
   };
 
   const handleConfirmOrder = async () => {
+    // 1. SHOW LOADING INDICATOR & FETCH LIVE DB RESTAURANT & MENU STATUS IN PARALLEL
+    setIsProcessingPayment(true);
+
+    const targetRestId = cartItems[0]?.restId || cartItems[0]?.restaurantId || cartItems[0]?.id || '';
+    const targetRestName = cartItems[0]?.restaurantName || '';
+
+    try {
+      console.log('[Cart] Parallel live DB fetch for restaurant & menu status...');
+      
+      // Execute both HTTP requests simultaneously in parallel for sub-second speed
+      const [restResResult, menuResResult] = await Promise.allSettled([
+        fetch(`${API_URL}/restaurants?t=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }),
+        targetRestId ? fetch(`${API_URL}/restaurants/${targetRestId}/menu?t=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }) : Promise.resolve(null)
+      ]);
+
+      // A. Verify Restaurant active status
+      let currentRest = null;
+      if (restResResult.status === 'fulfilled' && restResResult.value && restResResult.value.ok) {
+        const data = await restResResult.value.json();
+        const allRest = data.restaurants || [];
+        currentRest = allRest.find(r => 
+          (targetRestId && (String(r._id || '') === String(targetRestId) || String(r.restId || '') === String(targetRestId) || String(r.id || '') === String(targetRestId))) ||
+          (targetRestName && r.restaurantName && r.restaurantName.trim().toLowerCase() === targetRestName.trim().toLowerCase())
+        );
+      }
+
+      if (!currentRest && restaurants && restaurants.length > 0) {
+        currentRest = restaurants.find(r => 
+          (targetRestId && (String(r._id || '') === String(targetRestId) || String(r.restId || '') === String(targetRestId) || String(r.id || '') === String(targetRestId))) ||
+          (targetRestName && r.restaurantName && r.restaurantName.trim().toLowerCase() === targetRestName.trim().toLowerCase())
+        );
+      }
+
+      if (currentRest) {
+        const isRestClosed = 
+          currentRest.isActive === false || currentRest.isActive === 'false' || currentRest.isActive === 0 || currentRest.isActive === '0' ||
+          currentRest.isactive === false || currentRest.isactive === 'false' || currentRest.isactive === 0 || currentRest.isactive === '0' ||
+          currentRest.isOpen === false || currentRest.isOpen === 'false' || currentRest.isOpen === 0 || currentRest.isOpen === '0' ||
+          currentRest.isopen === false || currentRest.isopen === 'false' || currentRest.isopen === 0 || currentRest.isopen === '0' ||
+          String(currentRest.status || '').toLowerCase() === 'closed' ||
+          String(currentRest.status || '').toLowerCase() === 'inactive' ||
+          String(currentRest.status || '').toLowerCase() === 'off';
+
+        if (isRestClosed) {
+          setIsProcessingPayment(false);
+          showAlert('Restaurant Closed', 'Sorry, restaurant is closed.', clearCart);
+          return;
+        }
+      }
+
+      // B. Verify Menu Item Availability status
+      if (menuResResult.status === 'fulfilled' && menuResResult.value && menuResResult.value.ok) {
+        const menuData = await menuResResult.value.json();
+        const liveItems = menuData.items || menuData.menu || menuData || [];
+
+        for (const cartItem of cartItems) {
+          const matchedLiveItem = liveItems.find(live => 
+            (cartItem._id && (String(live._id || '') === String(cartItem._id) || String(live.itemId || '') === String(cartItem._id))) ||
+            (cartItem.itemId && (String(live._id || '') === String(cartItem.itemId) || String(live.itemId || '') === String(cartItem.itemId))) ||
+            (cartItem.itemName && live.itemName && live.itemName.trim().toLowerCase() === cartItem.itemName.trim().toLowerCase())
+          );
+
+          if (matchedLiveItem) {
+            const isItemUnavailable = 
+              matchedLiveItem.isAvailable === false || matchedLiveItem.isAvailable === 'false' || matchedLiveItem.isAvailable === 0 || matchedLiveItem.isAvailable === '0' ||
+              matchedLiveItem.itemStatus === false || matchedLiveItem.itemStatus === 'false' || matchedLiveItem.itemStatus === 0 || matchedLiveItem.itemStatus === '0' ||
+              matchedLiveItem.available === false || matchedLiveItem.available === 'false' || matchedLiveItem.available === 0 || matchedLiveItem.available === '0' ||
+              matchedLiveItem.itemtodisplayintherestuarentapp === false || matchedLiveItem.itemtodisplayintherestuarentapp === 'false' || matchedLiveItem.itemtodisplayintherestuarentapp === 0 || matchedLiveItem.itemtodisplayintherestuarentapp === '0' ||
+              String(matchedLiveItem.status || '').toLowerCase() === 'unavailable' ||
+              String(matchedLiveItem.status || '').toLowerCase() === 'inactive' ||
+              String(matchedLiveItem.status || '').toLowerCase() === 'off' ||
+              String(matchedLiveItem.status || '').toLowerCase() === 'out_of_stock';
+
+            if (isItemUnavailable) {
+              setIsProcessingPayment(false);
+              const itemName = cartItem.itemName || matchedLiveItem.itemName || 'Item';
+              showAlert('Item Unavailable', `Sorry, "${itemName}" is currently not available.`, clearCart);
+              return;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Cart] Live DB status check warning:', err);
+    }
+
+    setIsProcessingPayment(false);
+
     if (!selectedSavedAddressId) {
       if (locationStatus === 'skipped' || locationStatus !== 'inside' || !userLocation) {
         console.log('[Cart] Location is skipped or missing in handleConfirmOrder. Requesting location...');
@@ -1774,8 +1863,8 @@ export default function CartScreen() {
                     {selectedSavedAddressId && selectedSavedAddressObj
                       ? `${selectedSavedAddressObj.tag || 'Selected Location'}: ${selectedSavedAddressObj.flatNo || ''}, ${selectedSavedAddressObj.street || ''}${selectedSavedAddressObj.landmark ? ' (Near ' + selectedSavedAddressObj.landmark + ')' : ''}`
                       : (flatNo.trim() || street.trim())
-                      ? `Live GPS Location (${selectedTag}): ${flatNo ? flatNo + ', ' : ''}${street}${landmark ? ' (Near ' + landmark + ')' : ''}`
-                      : 'Current GPS Location'}
+                        ? `Live GPS Location (${selectedTag}): ${flatNo ? flatNo + ', ' : ''}${street}${landmark ? ' (Near ' + landmark + ')' : ''}`
+                        : 'Current GPS Location'}
                   </Text>
 
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
@@ -1870,7 +1959,7 @@ export default function CartScreen() {
         <View style={styles.alertBackdrop}>
           <View style={styles.alertCard}>
             <View style={[styles.alertIconContainer, { backgroundColor: '#FDF0ED' }]}>
-              <FontAwesome name="map-marker" size={30} color="#E05A47" />
+              <Feather name="x" size={32} color="#E05A47" />
             </View>
             <Text style={styles.alertTitle}>{customAlert.title}</Text>
             <Text style={styles.alertMessage}>{customAlert.message}</Text>
@@ -1879,7 +1968,13 @@ export default function CartScreen() {
                 styles.alertButton,
                 pressed && { opacity: 0.85 }
               ]}
-              onPress={() => setCustomAlert({ ...customAlert, visible: false })}
+              onPress={() => {
+                const onOkCallback = customAlert.onOk;
+                setCustomAlert({ visible: false, title: '', message: '', onOk: null });
+                if (typeof onOkCallback === 'function') {
+                  onOkCallback();
+                }
+              }}
             >
               <Text style={styles.alertButtonText}>OK</Text>
             </Pressable>
@@ -2174,8 +2269,8 @@ export default function CartScreen() {
             </ScrollView>
 
             {/* Cancel Button */}
-            <TouchableOpacity 
-              style={{ width: '100%', paddingVertical: 10, alignItems: 'center' }} 
+            <TouchableOpacity
+              style={{ width: '100%', paddingVertical: 10, alignItems: 'center' }}
               onPress={() => setShowLocationChoiceModal(false)}
             >
               <Text style={{ fontSize: 14, fontWeight: '700', color: '#666666', textDecorationLine: 'underline' }}>
@@ -2702,7 +2797,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   alertCard: {
-    backgroundColor: '#F9F9F6',
+    backgroundColor: 'rgb(224, 214, 188)',
     borderRadius: 30,
     width: '85%',
     maxWidth: 340,
@@ -2715,7 +2810,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
   },
   modalContent: {
-    backgroundColor: '#F9F9F6',
+    backgroundColor: 'rgb(224, 214, 188)',
     borderRadius: 30,
     width: '85%',
     maxWidth: 340,

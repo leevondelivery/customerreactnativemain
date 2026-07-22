@@ -3,9 +3,12 @@ import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Dimensions,
   FlatList,
+  Linking,
+  Modal,
   Platform,
   RefreshControl,
   ScrollView,
@@ -13,21 +16,18 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  Modal,
-  ActivityIndicator,
-  Linking,
 } from 'react-native';
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
+import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, skipLocation } from '../../store/locationSlice';
 import { fetchRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
-import { checkLocationAndCalculateDistances, skipLocation, setSelectedSavedAddressId } from '../../store/locationSlice';
-import { useTabBar } from '../_layout';
 import { styles } from '../../styles/restaurentlist.styles';
-import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTabBar } from '../_layout';
 
 
 const { width: screenWidth } = Dimensions.get('window');
@@ -88,7 +88,7 @@ const isPointInPolygon = (point, polygon) => {
     const xi = polygon[i].latitude, yi = polygon[i].longitude;
     const xj = polygon[j].latitude, yj = polygon[j].longitude;
     const intersect = ((yi > y) !== (yj > y))
-        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
     if (intersect) inside = !inside;
   }
   return inside;
@@ -108,31 +108,31 @@ const getHaversineDistance = (lat1, lon1, lat2, lon2) => {
 
 const getClosingSoonStatus = (closeTimeStr, now) => {
   if (!closeTimeStr) return null;
-  
+
   const match = closeTimeStr.match(/^(\d{1,2}):(\d{2})$/);
   if (!match) return null;
-  
+
   const closeHours = parseInt(match[1], 10);
   const closeMinutes = parseInt(match[2], 10);
-  
+
   const currentHours = now.getHours();
   const currentMinutes = now.getMinutes();
-  
+
   const closeTotalMinutes = closeHours * 60 + closeMinutes;
   const currentTotalMinutes = currentHours * 60 + currentMinutes;
-  
+
   let diff = closeTotalMinutes - currentTotalMinutes;
-  
+
   // Handle cross-midnight case (e.g. closes at 00:02, now is 23:59)
   if (diff < 0) {
     diff += 1440; // 24 hours in minutes
   }
-  
+
   // If it's between 1 and 5 minutes
   if (diff >= 1 && diff <= 5) {
     return `Closes in ${diff}m`;
   }
-  
+
   return null;
 };
 
@@ -199,10 +199,10 @@ export default function RestaurantListScreen() {
   useEffect(() => {
     const initLocationFlow = async () => {
       if (restaurants.length === 0) return;
-      
+
       const uid = await AsyncStorage.getItem('userid');
       setUserid(uid);
-      
+
       // If user has an active order, skip location prompts entirely
       if (uid) {
         try {
@@ -217,7 +217,7 @@ export default function RestaurantListScreen() {
           console.warn('[RestaurantList] Error checking active order status:', err);
         }
       }
-      
+
       if (locationStatus === 'idle') {
         if (uid) {
           try {
@@ -279,7 +279,7 @@ export default function RestaurantListScreen() {
         }
       }
     };
-    
+
     initLocationFlow();
   }, [restaurants, locationStatus, dispatch]);
 
@@ -444,19 +444,47 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Background Polling for Restaurant active status updates (every 3 seconds for instant updates)
+  // Instant Focus Effect: Re-fetch fresh restaurant statuses immediately when returning to Home screen
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+      const fetchFreshStatuses = async () => {
+        try {
+          console.log('[RestaurantList] Home screen focused. Re-fetching fresh restaurant statuses from DB...');
+          const restRes = await fetch(`${API_URL}/restaurants?t=${Date.now()}`, {
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+          });
+          if (restRes.ok) {
+            const restData = await restRes.json();
+            const freshList = restData.restaurants || [];
+            if (isMounted && freshList.length > 0) {
+              dispatch(updateRestaurantStatuses(freshList));
+            }
+          }
+        } catch (error) {
+          console.warn('[RestaurantList] Error updating status on focus:', error);
+        }
+      };
+      fetchFreshStatuses();
+      return () => { isMounted = false; };
+    }, [dispatch])
+  );
+
+  // Background Polling for Restaurant active status updates (every 2 seconds with no-cache)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const restRes = await fetch(`${API_URL}/restaurants`);
+        const restRes = await fetch(`${API_URL}/restaurants?t=${Date.now()}`, {
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        });
         const restData = await restRes.json();
-        if (restRes.ok && restData.success) {
+        if (restRes.ok && (restData.success || restData.restaurants)) {
           dispatch(updateRestaurantStatuses(restData.restaurants || []));
         }
       } catch (error) {
         console.error('[RestaurantList] Background polling error:', error);
       }
-    }, 3000);
+    }, 2000);
 
     return () => clearInterval(interval);
   }, [dispatch]);
@@ -521,7 +549,7 @@ export default function RestaurantListScreen() {
         }
       >
         {/* Top Location Selection Bar */}
-        <TouchableOpacity 
+        <TouchableOpacity
           style={{
             flexDirection: 'row',
             alignItems: 'center',
@@ -870,7 +898,7 @@ export default function RestaurantListScreen() {
                         <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
                       </View>
                     ) : null}
-                    
+
                     {roadDistances[item._id || item.restId] ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                         <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
@@ -931,7 +959,7 @@ export default function RestaurantListScreen() {
             <Text style={styles.modalSub}>
               {locationError || "Please turn on your device's location/GPS and allow permission to calculate delivery distance."}
             </Text>
-            
+
             <TouchableOpacity style={styles.primaryButton} onPress={handleEnableLocation}>
               <Text style={styles.primaryButtonText}>Enable Location</Text>
             </TouchableOpacity>
@@ -942,8 +970,8 @@ export default function RestaurantListScreen() {
 
 
 
-            <TouchableOpacity 
-              style={[styles.secondaryButton, { marginTop: 10, backgroundColor: 'transparent', borderWidth: 0 }]} 
+            <TouchableOpacity
+              style={[styles.secondaryButton, { marginTop: 10, backgroundColor: 'transparent', borderWidth: 0 }]}
               onPress={() => dispatch(skipLocation())}
             >
               <Text style={[styles.secondaryButtonText, { color: '#000000', textDecorationLine: 'underline' }]}>Skip & Browse</Text>
@@ -1050,8 +1078,8 @@ export default function RestaurantListScreen() {
             </ScrollView>
 
             {/* Option C: Skip & Browse */}
-            <TouchableOpacity 
-              style={[styles.secondaryButton, { width: '100%', backgroundColor: 'transparent', borderWidth: 0, marginTop: 0 }]} 
+            <TouchableOpacity
+              style={[styles.secondaryButton, { width: '100%', backgroundColor: 'transparent', borderWidth: 0, marginTop: 0 }]}
               onPress={() => {
                 setShowDeliverToModal(false);
                 dispatch(setSelectedSavedAddressId(null));
@@ -1077,7 +1105,7 @@ export default function RestaurantListScreen() {
             <Text style={styles.modalSub}>
               Sorry, we are currently only operational in Kurnool. You appear to be outside our service area.
             </Text>
-            
+
             <TouchableOpacity style={styles.primaryButton} onPress={() => dispatch(checkLocationAndCalculateDistances(restaurants))}>
               <Text style={styles.primaryButtonText}>Retry Check</Text>
             </TouchableOpacity>

@@ -1,6 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import * as Location from 'expo-location';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { API_URL } from '../config';
 
@@ -35,7 +35,7 @@ const isPointInPolygon = (point, polygon) => {
     const xi = polygon[i].latitude, yi = polygon[i].longitude;
     const xj = polygon[j].latitude, yj = polygon[j].longitude;
     const intersect = ((yi > y) !== (yj > y))
-        && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
     if (intersect) inside = !inside;
   }
   return inside;
@@ -302,7 +302,7 @@ const locationSlice = createSlice({
         const errorDetail = action.payload || { type: 'ERROR', message: 'Failed to get location.' };
         state.locationError = errorDetail.message;
         state.showFetchingModal = false;
-        
+
         if (errorDetail.type === 'OUT_OF_ZONE') {
           state.locationStatus = 'outside';
           state.showOutOfZoneModal = true;
