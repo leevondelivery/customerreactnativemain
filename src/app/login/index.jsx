@@ -147,7 +147,7 @@ export default function LoginScreen() {
     }
   };
 
-  // Check login status on mount
+ 
   useEffect(() => {
     const checkLoginStatus = async () => {
       try {
