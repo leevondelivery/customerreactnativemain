@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -18,9 +19,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
-import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
+import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 // Lazily require Firebase Auth to avoid crash when native module is not linked
 let auth = null;
 if (Platform.OS !== 'web') {
@@ -73,11 +74,17 @@ export default function CartScreen() {
   const [selectedTag, setSelectedTag] = useState('Home'); // Home, Office, Apartment, Other
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
+  const [isSavedAddressesExpanded, setIsSavedAddressesExpanded] = useState(false);
+  const [isAddNewAddressExpanded, setIsAddNewAddressExpanded] = useState(false);
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '' });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
 
-  // Location check is satisfied if device GPS is verified, userLocation exists, a saved address is selected, or flat & street are entered
-  const isLocationVerified = locationStatus === 'inside' || Boolean(userLocation) || Boolean(selectedSavedAddressId) || (Boolean(flatNo.trim()) && Boolean(street.trim()));
+  const targetRestId = cartItems[0]?.restId || '';
+  const distanceStr = roadDistances[targetRestId] || '';
+  const isDistanceCalculated = Boolean(distanceStr) && distanceStr.trim() !== '' && !isNaN(parseFloat(distanceStr));
+
+  // Location & Delivery Charge check: Delivery charge MUST be 100% calculated, flat/street filled, and location verified
+  const isLocationVerified = isDistanceCalculated && Boolean(flatNo.trim()) && Boolean(street.trim()) && (selectedSavedAddressId ? true : (locationStatus === 'inside' && Boolean(userLocation)));
   const [feesConfig, setFeesConfig] = useState({
     deliveryFeeBase: 20,
     deliveryFeePerKm: 10,
@@ -317,10 +324,10 @@ export default function CartScreen() {
       const loadUserAndAddresses = async () => {
         const uid = await AsyncStorage.getItem('userid');
         setUserid(uid);
-        
+
         if (uid) {
           fetchSavedAddresses(uid);
-          
+
           // Sync profile details (including phone) live from backend database
           try {
             const userRes = await fetch(`${API_URL}/user/${uid}`);
@@ -372,7 +379,6 @@ export default function CartScreen() {
           setLandmark(found.landmark || '');
           setSelectedTag(found.tag || found.label || 'Home');
           setSelectedSavedAddressId(selectedSavedAddressIdRedux);
-          setShowDeliveryForm(true);
         }, 0);
       }
     }
@@ -406,6 +412,10 @@ export default function CartScreen() {
   };
 
   const handlePlaceOrder = () => {
+    if (!isDistanceCalculated) {
+      showAlert('Calculating Delivery Charge', 'Please wait until your delivery location and charge are calculated.');
+      return;
+    }
     setShowDeliveryForm(true);
   };
 
@@ -446,11 +456,11 @@ export default function CartScreen() {
     };
 
     const updatedAddresses = [...savedAddresses, newAddressObj];
-    
+
     // 1. Instantly update state & cache
     setSavedAddresses(updatedAddresses);
     await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(updatedAddresses));
-    
+
     // 2. Instantly show toast
     triggerToast('ADDRESS SAVED SUCCESSFULLY!', 'success');
 
@@ -503,7 +513,7 @@ export default function CartScreen() {
 
     // --- OPTIMISTIC UPDATE FOR NO LATENCY ---
     const updatedAddresses = savedAddresses.filter(addr => (addr.id || addr._id) !== addressId);
-    
+
     // 1. Instantly update state & cache
     setSavedAddresses(updatedAddresses);
     await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(updatedAddresses));
@@ -559,6 +569,7 @@ export default function CartScreen() {
       setLandmark(addr.landmark || '');
       setSelectedTag(addr.tag || addr.label || 'Home');
       setSelectedSavedAddressId(addrId);
+      setIsSavedAddressesExpanded(false); // Collapse expanded list after selecting
       // Recalculate routing based on saved address coordinates
       const addrLat = addr.lat !== undefined ? addr.lat : addr.latitude;
       const addrLng = addr.lng !== undefined ? addr.lng : addr.longitude;
@@ -570,6 +581,27 @@ export default function CartScreen() {
         }));
       }
     }
+  };
+
+  const openGoogleMaps = () => {
+    const latitude = userLocation?.latitude || 15.8281;
+    const longitude = userLocation?.longitude || 78.0373;
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+    Linking.openURL(mapsUrl).catch((err) => {
+      console.error('Failed to open Google Maps URL:', err);
+      showAlert('Maps Error', 'Could not open Google Maps on your device.');
+    });
+  };
+
+  const handleUseCurrentLocation = () => {
+    setSelectedSavedAddressId(null);
+    setFlatNo('');
+    setStreet('');
+    setLandmark('');
+    setSelectedTag('Home');
+    setIsSavedAddressesExpanded(false);
+    handleEnableLocation();
+    openGoogleMaps();
   };
 
   const saveVerifiedPhoneToBackend = async (cleanPhone, isVerified) => {
@@ -772,8 +804,20 @@ export default function CartScreen() {
   };
 
   const handleConfirmOrder = async () => {
-    if (!flatNo || !street) {
-      showAlert('Delivery Address Required', 'Please select a saved address or enter a delivery address manually to proceed.');
+    if (!isDistanceCalculated) {
+      showAlert('Calculating Delivery Charge', 'Please wait until your delivery charge has been fully calculated with 100% accuracy.');
+      return;
+    }
+
+    if (!selectedSavedAddressId) {
+      if (locationStatus !== 'inside' || !userLocation) {
+        showAlert('Location Required', 'Please tap "Use Current Location" to fetch your GPS coordinates.');
+        return;
+      }
+    }
+
+    if (!flatNo.trim() || !street.trim()) {
+      showAlert('Delivery Address Required', 'Please enter Flat/House No and Street to proceed.');
       return;
     }
 
@@ -1164,8 +1208,7 @@ export default function CartScreen() {
 
   const gst = total * 0.05; // 5% GST
   const platformFee = 2.00; // Constant platform fee
-  const restId = cartItems[0]?.restId || '';
-  const distanceStr = roadDistances[restId] || '';
+  const restId = targetRestId;
   const distanceVal = parseFloat(distanceStr) || 0;
   const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
   const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
@@ -1424,53 +1467,7 @@ export default function CartScreen() {
           </View>
         )}
 
-        {/* Location warning banner inside Cart if skipped */}
-        {!isLocationVerified && !hasActiveOrder && (
-          <View style={{
-            backgroundColor: '#FFF9E6',
-            borderColor: '#FFE0B2',
-            borderWidth: 1,
-            borderRadius: 16,
-            padding: 16,
-            marginHorizontal: 16,
-            marginBottom: 16,
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 12
-          }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, width: '100%' }}>
-              <Ionicons name="location-outline" size={24} color="#FF9800" />
-              <Text style={{
-                flex: 1,
-                fontSize: 14,
-                color: '#B78103',
-                lineHeight: 18,
-                fontWeight: '600'
-              }}>
-                To place order, you need to turn on location
-              </Text>
-            </View>
 
-            <TouchableOpacity
-              style={{
-                backgroundColor: '#FF9800',
-                borderRadius: 20,
-                paddingVertical: 10,
-                paddingHorizontal: 20,
-                width: '100%',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginTop: 4
-              }}
-              onPress={handleEnableLocation}
-              activeOpacity={0.8}
-            >
-              <Text style={{ color: '#FFFFFF', fontWeight: 'bold', fontSize: 14 }}>
-                Enable Location
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
 
         {/* Action Buttons Row */}
         <View style={styles.actionsRow}>
@@ -1479,130 +1476,309 @@ export default function CartScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder) && styles.checkoutButtonDisabled]}
+            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder || !isDistanceCalculated) && styles.checkoutButtonDisabled]}
             onPress={handlePlaceOrder}
-            disabled={showDeliveryForm || hasActiveOrder}
+            disabled={showDeliveryForm || hasActiveOrder || !isDistanceCalculated}
             activeOpacity={0.85}
           >
-            <Text style={styles.checkoutButtonText}>Place the order</Text>
+            <Text style={styles.checkoutButtonText}>
+              {!isDistanceCalculated ? 'Calculating Charge...' : 'Place the order'}
+            </Text>
           </TouchableOpacity>
         </View>
 
         {/* Delivery Address Section */}
-        {showDeliveryForm && (
-          <View style={styles.addressSectionContainer}>
-            <Text style={styles.addressSectionTitle}>Delivery address</Text>
+        {showDeliveryForm && (() => {
+          const selectedSavedAddressObj = savedAddresses.find(
+            (addr) => (addr.id || addr._id) === selectedSavedAddressId
+          );
 
-            <TextInput
-              style={styles.addressInput}
-              placeholder="Flat no / house no"
-              placeholderTextColor="#8A8A8A"
-              value={flatNo}
-              onChangeText={setFlatNo}
-            />
+          return (
+            <View style={styles.addressSectionContainer}>
+              <Text style={styles.addressSectionTitle}>Delivery address</Text>
 
-            <TextInput
-              style={styles.addressInput}
-              placeholder="Street / Area / Colony"
-              placeholderTextColor="#8A8A8A"
-              value={street}
-              onChangeText={setStreet}
-            />
+              {/* Option 1: Use Current Location Button */}
+              <View style={{ marginBottom: 16 }}>
+                <TouchableOpacity
+                  style={[
+                    styles.savedAddressCard,
+                    !selectedSavedAddressId && styles.savedAddressCardSelected,
+                    {
+                      backgroundColor: !selectedSavedAddressId ? '#E8F5E9' : 'rgb(224, 214, 188)',
+                      borderColor: !selectedSavedAddressId ? '#2E7D32' : '#C8BEA7',
+                      marginBottom: !selectedSavedAddressId ? 6 : 0
+                    }
+                  ]}
+                  onPress={handleUseCurrentLocation}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.savedCardLeft}>
+                    <Ionicons
+                      name="navigate-circle"
+                      size={26}
+                      color={!selectedSavedAddressId ? '#2E7D32' : '#FF9800'}
+                      style={{ marginRight: 12 }}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.savedCardTag, !selectedSavedAddressId && { color: '#1B5E20' }]}>
+                        Use Current Location
+                      </Text>
+                      <Text style={styles.savedCardDetails} numberOfLines={2}>
+                        {userLocation ? 'Live GPS location active • Fill door details below' : 'Tap to fetch live device GPS location & open Google Maps'}
+                      </Text>
+                    </View>
+                  </View>
+                  {!selectedSavedAddressId && (
+                    <View style={{ backgroundColor: '#27AE60', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4 }}>
+                      <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: 'bold' }}>SELECTED</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
 
-            <TextInput
-              style={styles.addressInput}
-              placeholder="Land Mark"
-              placeholderTextColor="#8A8A8A"
-              value={landmark}
-              onChangeText={setLandmark}
-            />
-
-            {/* Tags Selectors */}
-            <View style={styles.tagSelectorContainer}>
-              {['Home', 'Office', 'Apartment', 'Other'].map((tag) => {
-                const isActive = selectedTag === tag;
-                return (
+                {!selectedSavedAddressId && (
                   <TouchableOpacity
-                    key={tag}
-                    style={[styles.tagButton, isActive && styles.tagButtonActive]}
-                    onPress={() => setSelectedTag(tag)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6,
+                      backgroundColor: '#FFFFFF',
+                      borderColor: '#2E7D32',
+                      borderWidth: 1,
+                      borderRadius: 14,
+                      paddingVertical: 8,
+                      paddingHorizontal: 14,
+                      alignSelf: 'flex-start',
+                      marginTop: 4,
+                      marginLeft: 4
+                    }}
+                    onPress={openGoogleMaps}
                     activeOpacity={0.8}
                   >
-                    <Text style={[styles.tagText, isActive && styles.tagTextActive]}>
-                      {tag}
+                    <Ionicons name="map-outline" size={16} color="#2E7D32" />
+                    <Text style={{ color: '#2E7D32', fontSize: 12, fontWeight: 'bold' }}>
+                      Open in Google Maps ↗
                     </Text>
                   </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Save Address Button */}
-            <TouchableOpacity
-              style={[styles.saveAddressButton, hasActiveOrder && { backgroundColor: '#CCC' }]}
-              onPress={handleSaveAddress}
-              disabled={hasActiveOrder}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.saveAddressButtonText}>Save Address</Text>
-            </TouchableOpacity>
-
-            {/* Saved Address Selection */}
-            {savedAddresses.length > 0 && (
-              <View style={styles.savedSection}>
-                <Text style={styles.savedAddressesLabel}>Use a saved address:</Text>
-
-                {savedAddresses.map((addr) => {
-                  const isSelected = selectedSavedAddressId === (addr.id || addr._id);
-                  return (
-                    <TouchableOpacity
-                      key={addr.id || addr._id}
-                      style={[styles.savedAddressCard, isSelected && styles.savedAddressCardSelected]}
-                      onPress={() => handlePrefillAddress(addr)}
-                      activeOpacity={0.9}
-                    >
-                      <View style={styles.savedCardLeft}>
-                        <Ionicons
-                          name={(addr.tag || addr.label) === 'Home' ? 'home' : (addr.tag || addr.label) === 'Office' ? 'briefcase' : 'business'}
-                          size={20}
-                          color="#1A1A1A"
-                          style={{ marginRight: 10 }}
-                        />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.savedCardTag}>{addr.tag || addr.label}</Text>
-                          <Text style={styles.savedCardDetails} numberOfLines={2}>
-                            {`${addr.flatNo || ''}, ${addr.street || ''}${addr.landmark ? ', ' + addr.landmark : ''}`}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.savedCardRight}>
-                        <TouchableOpacity
-                          style={styles.deleteAddressDustbin}
-                          onPress={() => handleDeleteAddress(addr.id || addr._id)}
-                          activeOpacity={0.7}
-                        >
-                          <Feather name="trash-2" size={18} color="#FF5E5E" />
-                        </TouchableOpacity>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+                )}
               </View>
-            )}
 
-            {/* Confirm Order Button */}
-            <TouchableOpacity
-              style={[styles.confirmOrderButton, (!isLocationVerified || hasActiveOrder) && { backgroundColor: '#CCC' }]}
-              onPress={handleConfirmOrder}
-              disabled={!isLocationVerified || hasActiveOrder}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.confirmOrderButtonText}>
-                {!isLocationVerified ? 'Please select/verify delivery address' : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
+              {/* Option 2: Address Button Dropdown (if user has saved addresses) */}
+              {savedAddresses.length > 0 && (
+                <View style={{ marginBottom: 16 }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.savedAddressCard,
+                      Boolean(selectedSavedAddressId) && styles.savedAddressCardSelected,
+                      { borderColor: selectedSavedAddressId ? '#1A1A1A' : '#C8BEA7', marginBottom: isSavedAddressesExpanded ? 8 : 16 }
+                    ]}
+                    onPress={() => setIsSavedAddressesExpanded(!isSavedAddressesExpanded)}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.savedCardLeft}>
+                      <Ionicons
+                        name={selectedSavedAddressObj ? ((selectedSavedAddressObj.tag || selectedSavedAddressObj.label) === 'Home' ? 'home' : (selectedSavedAddressObj.tag || selectedSavedAddressObj.label) === 'Office' ? 'briefcase' : 'business') : 'bookmarks'}
+                        size={22}
+                        color="#1A1A1A"
+                        style={{ marginRight: 10 }}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.savedCardTag}>
+                          {selectedSavedAddressObj
+                            ? `${selectedSavedAddressObj.tag || 'Selected Address'}`
+                            : 'Select Delivery Address'}
+                        </Text>
+                        <Text style={styles.savedCardDetails} numberOfLines={1}>
+                          {selectedSavedAddressObj
+                            ? `${selectedSavedAddressObj.flatNo || ''}, ${selectedSavedAddressObj.street || ''}`
+                            : `Tap to choose from your ${savedAddresses.length} address${savedAddresses.length > 1 ? 'es' : ''}`}
+                        </Text>
+                      </View>
+                    </View>
+                    <Ionicons
+                      name={isSavedAddressesExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={22}
+                      color="#1A1A1A"
+                    />
+                  </TouchableOpacity>
+
+                  {/* Expanded Address List */}
+                  {isSavedAddressesExpanded && (
+                    <View style={{ marginTop: 4 }}>
+                      <Text style={styles.savedAddressesLabel}>Your addresses:</Text>
+                      {savedAddresses.map((addr) => {
+                        const isSelected = selectedSavedAddressId === (addr.id || addr._id);
+                        return (
+                          <TouchableOpacity
+                            key={addr.id || addr._id}
+                            style={[
+                              styles.savedAddressCard,
+                              isSelected && styles.savedAddressCardSelected,
+                              { backgroundColor: isSelected ? '#E8F5E9' : '#F2EBDA', borderColor: isSelected ? '#2E7D32' : '#C8BEA7' }
+                            ]}
+                            onPress={() => handlePrefillAddress(addr)}
+                            activeOpacity={0.9}
+                          >
+                            <View style={styles.savedCardLeft}>
+                              <Ionicons
+                                name={(addr.tag || addr.label) === 'Home' ? 'home' : (addr.tag || addr.label) === 'Office' ? 'briefcase' : 'business'}
+                                size={20}
+                                color={isSelected ? '#2E7D32' : '#1A1A1A'}
+                                style={{ marginRight: 10 }}
+                              />
+                              <View style={{ flex: 1 }}>
+                                <Text style={[styles.savedCardTag, isSelected && { color: '#1B5E20' }]}>{addr.tag || addr.label}</Text>
+                                <Text style={styles.savedCardDetails} numberOfLines={2}>
+                                  {`${addr.flatNo || ''}, ${addr.street || ''}${addr.landmark ? ', ' + addr.landmark : ''}`}
+                                </Text>
+                              </View>
+                            </View>
+
+                            <View style={styles.savedCardRight}>
+                              {isSelected && (
+                                <View style={{ backgroundColor: '#27AE60', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4, marginRight: 8 }}>
+                                  <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: 'bold' }}>SELECTED</Text>
+                                </View>
+                              )}
+                              <TouchableOpacity
+                                style={styles.deleteAddressDustbin}
+                                onPress={() => handleDeleteAddress(addr.id || addr._id)}
+                                activeOpacity={0.7}
+                              >
+                                <Feather name="trash-2" size={18} color="#FF5E5E" />
+                              </TouchableOpacity>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Address Input Fields (Shown when 'Use Current Location' is selected) */}
+              {!selectedSavedAddressId && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={[styles.savedAddressesLabel, { color: '#1A1A1A', fontWeight: 'bold' }]}>
+                    Enter details for current location:
+                  </Text>
+
+                  <TextInput
+                    style={styles.addressInput}
+                    placeholder="Flat no / house no"
+                    placeholderTextColor="#8A8A8A"
+                    value={flatNo}
+                    onChangeText={setFlatNo}
+                  />
+
+                  <TextInput
+                    style={styles.addressInput}
+                    placeholder="Street / Area / Colony"
+                    placeholderTextColor="#8A8A8A"
+                    value={street}
+                    onChangeText={setStreet}
+                  />
+
+                  <TextInput
+                    style={styles.addressInput}
+                    placeholder="Land Mark"
+                    placeholderTextColor="#8A8A8A"
+                    value={landmark}
+                    onChangeText={setLandmark}
+                  />
+
+                  {/* Tags Selectors */}
+                  <View style={styles.tagSelectorContainer}>
+                    {['Home', 'Office', 'Apartment', 'Other'].map((tag) => {
+                      const isActive = selectedTag === tag;
+                      return (
+                        <TouchableOpacity
+                          key={tag}
+                          style={[styles.tagButton, isActive && styles.tagButtonActive]}
+                          onPress={() => setSelectedTag(tag)}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.tagText, isActive && styles.tagTextActive]}>
+                            {tag}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  {/* Save Address Button */}
+                  <TouchableOpacity
+                    style={[styles.saveAddressButton, hasActiveOrder && { backgroundColor: '#CCC' }]}
+                    onPress={handleSaveAddress}
+                    disabled={hasActiveOrder}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.saveAddressButtonText}>Save Address</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {/* Delivery Intimation Banner */}
+              <View style={{
+                backgroundColor: '#E8F5E9',
+                borderColor: '#2E7D32',
+                borderWidth: 1.5,
+                borderRadius: 20,
+                padding: 14,
+                marginBottom: 16,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 12
+              }}>
+                <View style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 20,
+                  backgroundColor: '#27AE60',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <Ionicons name="location" size={22} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#1B5E20', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Order will be delivered to:
+                    </Text>
+                    <View style={{ backgroundColor: '#27AE60', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }}>
+                      <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: 'bold' }}>SELECTED</Text>
+                    </View>
+                  </View>
+                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1A1A1A' }} numberOfLines={2}>
+                    {selectedSavedAddressId && selectedSavedAddressObj
+                      ? `${selectedSavedAddressObj.tag || 'Selected Location'}: ${selectedSavedAddressObj.flatNo || ''}, ${selectedSavedAddressObj.street || ''}${selectedSavedAddressObj.landmark ? ' (Near ' + selectedSavedAddressObj.landmark + ')' : ''}`
+                      : (flatNo.trim() || street.trim())
+                      ? `Live GPS Location (${selectedTag}): ${flatNo ? flatNo + ', ' : ''}${street}${landmark ? ' (Near ' + landmark + ')' : ''}`
+                      : 'Live GPS Location (Please enter door/flat details above)'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Confirm Order Button */}
+              <TouchableOpacity
+                style={[styles.confirmOrderButton, (!isLocationVerified || hasActiveOrder || !isDistanceCalculated) && { backgroundColor: '#CCC' }]}
+                onPress={handleConfirmOrder}
+                disabled={!isLocationVerified || hasActiveOrder || !isDistanceCalculated}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.confirmOrderButtonText}>
+                  {hasActiveOrder
+                    ? 'Active order in progress'
+                    : !isDistanceCalculated
+                      ? 'Calculating Delivery Charge...'
+                      : (!flatNo.trim() || !street.trim())
+                        ? 'Please enter flat & street details'
+                        : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          );
+        })()}
       </ScrollView>
 
       {/* Loading Overlay */}
@@ -1725,7 +1901,7 @@ export default function CartScreen() {
                 <Text style={styles.alertMessage}>
                   Please enter your 10-digit mobile number to complete your order.
                 </Text>
-                
+
                 <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20 }]}>
                   <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
                   <TextInput
@@ -1822,7 +1998,7 @@ export default function CartScreen() {
                 <Text style={styles.alertMessage}>
                   We sent a 6-digit verification code to +91 {verificationPhone.trim().slice(-10)}.
                 </Text>
-                
+
                 <TextInput
                   style={[styles.addressInput, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', textAlign: 'center', fontSize: 20, letterSpacing: 5, fontWeight: 'bold', marginBottom: 20 }]}
                   placeholder="------"
@@ -2167,24 +2343,19 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   savedAddressCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    backgroundColor: 'rgb(224, 214, 188)',
+    borderRadius: 20,
     padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#E8E8E8',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    borderColor: '#C8BEA7',
     marginBottom: 12,
   },
   savedAddressCardSelected: {
     borderColor: '#1A1A1A',
-    borderWidth: 1.5,
+    borderWidth: 2,
   },
   savedCardLeft: {
     flexDirection: 'row',
