@@ -63,6 +63,10 @@ export default function MyDetailsScreen() {
   const [resendTimer, setResendTimer] = useState(0);
   const [firstInputPhone, setFirstInputPhone] = useState('');
   const [isBypassMode, setIsBypassMode] = useState(false);
+  const [showPhoneLinkedModal, setShowPhoneLinkedModal] = useState(false);
+  const [showOTPSentModal, setShowOTPSentModal] = useState(false);
+  const [isOTPResend, setIsOTPResend] = useState(false);
+  const [showOTPVerifiedModal, setShowOTPVerifiedModal] = useState(false);
   const resendCountRef = useRef(0);
   const timerRef = useRef(null);
 
@@ -174,7 +178,7 @@ export default function MyDetailsScreen() {
       const checkRes = await fetch(`${API_URL}/check-phone/${cleanFirstPhone}?excludeUserId=${activeUserId || ''}`);
       const checkData = await checkRes.json();
       if (checkRes.ok && checkData.success && checkData.exists) {
-        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setShowPhoneLinkedModal(true);
         setOtpLoading(false);
         return;
       }
@@ -193,7 +197,8 @@ export default function MyDetailsScreen() {
 
       const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
       setConfirmResult(confirmation);
-      showAlert('OTP Sent', isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!');
+      setIsOTPResend(isResend);
+      setShowOTPSentModal(true);
       setResendTimer(30);
 
       if (isResend) {
@@ -263,7 +268,7 @@ export default function MyDetailsScreen() {
     }));
 
     setShowPhoneOTPModal(false);
-    showAlert('Success', 'Phone number linked and verified successfully!');
+    setShowOTPVerifiedModal(true);
   };
 
   const handleVerifyOTP = async () => {
@@ -293,7 +298,7 @@ export default function MyDetailsScreen() {
         await saveVerifiedPhoneToBackend(cleanPhone, true);
       } catch (dbError) {
         console.error('[Phone Auth Profile] Backend database update error:', dbError);
-        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setShowPhoneLinkedModal(true);
         setOtpLoading(false);
       }
     }
@@ -315,7 +320,7 @@ export default function MyDetailsScreen() {
       const checkRes = await fetch(`${API_URL}/check-phone/${cleanPhone}?excludeUserId=${activeUserId || ''}`);
       const checkData = await checkRes.json();
       if (checkRes.ok && checkData.success && checkData.exists) {
-        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
+        setShowPhoneLinkedModal(true);
         setOtpLoading(false);
         return;
       }
@@ -961,6 +966,127 @@ export default function MyDetailsScreen() {
           </View>
         </View>
       </Modal>
+      {/* Phone Number Already Linked Modal */}
+      <Modal
+        visible={showPhoneLinkedModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowPhoneLinkedModal(false)}
+      >
+        <View style={localStyles.alertBackdrop}>
+          <View style={localStyles.linkedModalCard}>
+            {/* Top accent bar */}
+            <View style={localStyles.linkedModalAccentBar} />
+
+            {/* Icon */}
+            <View style={localStyles.linkedModalIconWrap}>
+              <FontAwesome5 name="link" size={26} color="#FFFFFF" />
+            </View>
+
+            {/* Title */}
+            <Text style={localStyles.linkedModalTitle}>Number Already Linked</Text>
+
+            {/* Divider */}
+            <View style={localStyles.linkedModalDivider} />
+
+            {/* Message */}
+            <Text style={localStyles.linkedModalMessage}>
+              This phone number is already associated with another account. Please use a different number to continue.
+            </Text>
+
+            {/* OK Button */}
+            <TouchableOpacity
+              style={localStyles.linkedModalButton}
+              onPress={() => setShowPhoneLinkedModal(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={localStyles.linkedModalButtonText}>Got it</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {/* OTP Sent Successfully Modal */}
+      <Modal
+        visible={showOTPSentModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowOTPSentModal(false)}
+      >
+        <View style={localStyles.alertBackdrop}>
+          <View style={localStyles.otpSentCard}>
+            {/* Top accent bar */}
+            <View style={localStyles.otpSentAccentBar} />
+
+            {/* Icon */}
+            <View style={localStyles.otpSentIconWrap}>
+              <Feather name="check" size={30} color="#FFFFFF" />
+            </View>
+
+            {/* Title */}
+            <Text style={localStyles.otpSentTitle}>
+              {isOTPResend ? 'OTP Resent!' : 'OTP Sent!'}
+            </Text>
+
+            {/* Divider */}
+            <View style={localStyles.otpSentDivider} />
+
+            {/* Message */}
+            <Text style={localStyles.otpSentMessage}>
+              {isOTPResend
+                ? 'A new OTP has been resent to your mobile number.'
+                : 'A 6-digit OTP has been sent to your mobile number. Please check your messages.'}
+            </Text>
+
+            {/* OK Button */}
+            <TouchableOpacity
+              style={localStyles.otpSentButton}
+              onPress={() => setShowOTPSentModal(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={localStyles.otpSentButtonText}>OK, Got it!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {/* OTP Verified Successfully Modal */}
+      <Modal
+        visible={showOTPVerifiedModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowOTPVerifiedModal(false)}
+      >
+        <View style={localStyles.alertBackdrop}>
+          <View style={localStyles.verifiedModalCard}>
+            {/* Top accent bar */}
+            <View style={localStyles.verifiedModalAccentBar} />
+
+            {/* Icon */}
+            <View style={localStyles.verifiedModalIconWrap}>
+              <Feather name="shield" size={28} color="#FFFFFF" />
+            </View>
+
+            {/* Title */}
+            <Text style={localStyles.verifiedModalTitle}>Verified Successfully!</Text>
+
+            {/* Divider */}
+            <View style={localStyles.verifiedModalDivider} />
+
+            {/* Message */}
+            <Text style={localStyles.verifiedModalMessage}>
+              Your phone number has been verified and linked to your account.
+            </Text>
+
+            {/* OK Button */}
+            <TouchableOpacity
+              style={localStyles.verifiedModalButton}
+              onPress={() => setShowOTPVerifiedModal(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={localStyles.verifiedModalButtonText}>Awesome!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1031,5 +1157,239 @@ const localStyles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     justifyContent: 'center',
-  }
+  },
+
+  /* ── Phone Already Linked Modal ── */
+  linkedModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    width: '82%',
+    maxWidth: 320,
+    alignItems: 'center',
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+  },
+  linkedModalAccentBar: {
+    width: '100%',
+    height: 5,
+    backgroundColor: '#E05A47',
+  },
+  linkedModalIconWrap: {
+    marginTop: 24,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#E05A47',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    shadowColor: '#E05A47',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  linkedModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1E3545',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+    marginBottom: 10,
+    paddingHorizontal: 20,
+  },
+  linkedModalDivider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: '#EBEBEB',
+    marginBottom: 14,
+  },
+  linkedModalMessage: {
+    fontSize: 14,
+    color: '#6B6B6B',
+    textAlign: 'center',
+    lineHeight: 21,
+    paddingHorizontal: 24,
+    marginBottom: 24,
+  },
+  linkedModalButton: {
+    marginBottom: 20,
+    backgroundColor: '#E05A47',
+    borderRadius: 50,
+    paddingVertical: 13,
+    paddingHorizontal: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#E05A47',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  linkedModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+
+  /* ── OTP Sent Successfully Modal ── */
+  otpSentCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    width: '82%',
+    maxWidth: 320,
+    alignItems: 'center',
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+  },
+  otpSentAccentBar: {
+    width: '100%',
+    height: 5,
+    backgroundColor: '#2ECC71',
+  },
+  otpSentIconWrap: {
+    marginTop: 24,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#2ECC71',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    shadowColor: '#2ECC71',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  otpSentTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#1E3545',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+    marginBottom: 10,
+    paddingHorizontal: 20,
+  },
+  otpSentDivider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: '#EBEBEB',
+    marginBottom: 14,
+  },
+  otpSentMessage: {
+    fontSize: 14,
+    color: '#6B6B6B',
+    textAlign: 'center',
+    lineHeight: 21,
+    paddingHorizontal: 24,
+    marginBottom: 24,
+  },
+  otpSentButton: {
+    marginBottom: 20,
+    backgroundColor: '#2ECC71',
+    borderRadius: 50,
+    paddingVertical: 13,
+    paddingHorizontal: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2ECC71',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  otpSentButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+
+  /* ── OTP Verified Successfully Modal ── */
+  verifiedModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    width: '82%',
+    maxWidth: 320,
+    alignItems: 'center',
+    overflow: 'hidden',
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+  },
+  verifiedModalAccentBar: {
+    width: '100%',
+    height: 5,
+    backgroundColor: '#1E3545',
+  },
+  verifiedModalIconWrap: {
+    marginTop: 24,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#1E3545',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    shadowColor: '#1E3545',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  verifiedModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#1E3545',
+    textAlign: 'center',
+    letterSpacing: 0.3,
+    marginBottom: 10,
+    paddingHorizontal: 20,
+  },
+  verifiedModalDivider: {
+    width: '80%',
+    height: 1,
+    backgroundColor: '#EBEBEB',
+    marginBottom: 14,
+  },
+  verifiedModalMessage: {
+    fontSize: 14,
+    color: '#6B6B6B',
+    textAlign: 'center',
+    lineHeight: 21,
+    paddingHorizontal: 24,
+    marginBottom: 24,
+  },
+  verifiedModalButton: {
+    marginBottom: 20,
+    backgroundColor: '#1E3545',
+    borderRadius: 50,
+    paddingVertical: 13,
+    paddingHorizontal: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#1E3545',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  verifiedModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
 });

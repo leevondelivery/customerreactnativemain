@@ -195,6 +195,8 @@ export default function OrderStatusScreen() {
   const platformFee = orderStatus.platformFee ?? orderStatus.platform_fee ?? orderStatus.platformFeeAmount ?? '';
   const surgeFee = orderStatus.surgeFee ?? orderStatus.surge_fee ?? '';
   const grandTotal = orderStatus.grandTotal ?? orderStatus.totalPrice ?? orderStatus.total ?? orderStatus.finalTotal ?? '';
+  const discountAmount = orderStatus.discountAmount ?? orderStatus.discount_amount ?? orderStatus.discount ?? '';
+  const couponCode = orderStatus.couponCode ?? orderStatus.coupon_code ?? orderStatus.promo_code ?? '';
 
   if ((deliveryCharges === undefined || deliveryCharges === null || deliveryCharges === '') && grandTotal !== '' && subTotal !== '') {
     const calcSub = Number(subTotal) || 0;
@@ -325,6 +327,16 @@ export default function OrderStatusScreen() {
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Platform Fee</Text>
                 <Text style={styles.summaryValue}>{formatCurrency(platformFee)}</Text>
+              </View>
+            )}
+            {discountAmount !== '' && Number(discountAmount) > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryLabel, { color: '#2B783E', fontWeight: '700' }]}>
+                  🏷️ Coupon Discount{couponCode ? ` (${couponCode})` : ''}
+                </Text>
+                <Text style={[styles.summaryValue, { color: '#2B783E', fontWeight: '700' }]}>
+                  - {formatCurrency(discountAmount)}
+                </Text>
               </View>
             )}
             {grandTotal !== '' && (

@@ -949,7 +949,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* GPS Off / Permission Denied Modal */}
-      <Modal transparent visible={showLocationModal} animationType="slide">
+      <Modal transparent visible={showLocationModal} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
@@ -981,7 +981,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* Deliver To Selector Modal */}
-      <Modal transparent visible={showDeliverToModal} animationType="slide">
+      <Modal transparent visible={showDeliverToModal} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#F0F6F0' }]}>
