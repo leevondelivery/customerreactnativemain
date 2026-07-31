@@ -94,7 +94,13 @@ export default function ContactUsScreen() {
         <View style={styles.header}>
           <TouchableOpacity
             style={[styles.backButton, styles.shadow]}
-            onPress={() => router.back()}
+            onPress={() => {
+              if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/profile');
+              }
+            }}
             activeOpacity={0.8}
           >
             <Feather name="chevron-left" size={24} color="#000000" />

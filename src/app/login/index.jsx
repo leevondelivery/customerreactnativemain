@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -610,9 +611,14 @@ export default function LoginScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Brand Logo Pill */}
+          {/* Brand Logo Pill Card with Company Logo */}
           <View style={[styles.brandCard, styles.shadow]}>
-            <Text style={styles.brandText}>LEEVON</Text>
+            <Image
+              source={require('../../../assets/images/company-logo.png')}
+              style={styles.brandLogoImage}
+              resizeMode="contain"
+            />
+            <Text style={styles.brandText}>Leevon Delivery</Text>
           </View>
 
           {/* Inputs Section */}

@@ -58,6 +58,7 @@ export default function CartScreen() {
   const userLocation = useSelector((state) => state.location.userLocation);
   const roadDistances = useSelector((state) => state.location.roadDistances);
   const locationStatus = useSelector((state) => state.location.locationStatus);
+  const showFetchingModal = useSelector((state) => state.location.showFetchingModal);
   const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
   const restaurants = useSelector((state) => state.restaurants.list);
   const [cartItems, setCartItems] = useState([]);
@@ -2282,7 +2283,7 @@ export default function CartScreen() {
       </Modal>
 
       {/* Fetching Location Loading Overlay Modal */}
-      <Modal transparent visible={isFetchingLocation} animationType="fade">
+      <Modal transparent visible={Boolean(isFetchingLocation || showFetchingModal)} animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
           <View style={{ width: '85%', maxWidth: 320, backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 24, alignItems: 'center' }}>
             <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />

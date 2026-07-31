@@ -280,7 +280,17 @@ export default function ProfileScreen() {
       >
         {/* Custom Header */}
         <View style={styles.header}>
-          <TouchableOpacity style={[styles.backButton, styles.shadow]} onPress={() => router.back()} activeOpacity={0.8}>
+          <TouchableOpacity
+            style={[styles.backButton, styles.shadow]}
+            onPress={() => {
+              if (router.canGoBack()) {
+                router.back();
+              } else {
+                router.replace('/restaurentlist');
+              }
+            }}
+            activeOpacity={0.8}
+          >
             <Feather name="chevron-left" size={24} color="#000000" />
           </TouchableOpacity>
 

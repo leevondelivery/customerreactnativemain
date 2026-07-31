@@ -46,18 +46,35 @@ export const styles = StyleSheet.create({
   },
   brandCard: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 50,
+    paddingHorizontal: 28,
     paddingVertical: 18,
-    borderRadius: 35,
-    minWidth: 200,
+    borderRadius: 36,
+    minWidth: 180,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  brandLogoImage: {
+    width: 90,
+    height: 90,
+    marginBottom: 4,
+  },
   brandText: {
-    fontSize: 26,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
     color: '#000000',
     letterSpacing: 2,
+    marginTop: 6,
+    ...Platform.select({
+      ios: {
+        fontFamily: 'Georgia',
+      },
+      android: {
+        fontFamily: 'serif',
+      },
+      web: {
+        fontFamily: "'Lucida Bright', 'Lucida Fax', 'Merriweather', 'Lora', Georgia, serif",
+      },
+    }),
   },
   formContainer: {
     width: '85%',

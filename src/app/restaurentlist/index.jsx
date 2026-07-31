@@ -195,10 +195,12 @@ export default function RestaurantListScreen() {
   const [userid, setUserid] = useState(null);
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [showDeliverToModal, setShowDeliverToModal] = useState(false);
+  const hasInitialLocationChecked = useRef(false);
 
   useEffect(() => {
     const initLocationFlow = async () => {
-      if (restaurants.length === 0) return;
+      if (restaurants.length === 0 || hasInitialLocationChecked.current) return;
+      hasInitialLocationChecked.current = true;
 
       const uid = await AsyncStorage.getItem('userid');
       setUserid(uid);
@@ -225,39 +227,24 @@ export default function RestaurantListScreen() {
             const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
             if (cached) {
               const addresses = JSON.parse(cached);
-              if (addresses.length > 0) {
-                setSavedAddresses(addresses);
-                setShowDeliverToModal(true);
-                // Refresh background cache
-                fetch(`${API_URL}/user/${uid}/addresses`)
-                  .then(res => res.json())
-                  .then(async (data) => {
-                    if (data.success && data.addresses) {
-                      setSavedAddresses(data.addresses);
-                      await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
-                    }
-                  })
-                  .catch(e => console.warn(e));
-                return;
-              }
+              setSavedAddresses(addresses || []);
             }
-
-            const response = await fetch(`${API_URL}/user/${uid}/addresses`);
-            const data = await response.json();
-            if (data.success && data.addresses) {
-              setSavedAddresses(data.addresses);
-              await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
-              if (data.addresses.length > 0) {
-                setShowDeliverToModal(true);
-                return;
-              }
-            }
+            // Refresh background cache
+            fetch(`${API_URL}/user/${uid}/addresses`)
+              .then(res => res.json())
+              .then(async (data) => {
+                if (data.success && data.addresses) {
+                  setSavedAddresses(data.addresses);
+                  await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+                }
+              })
+              .catch(e => console.warn(e));
           } catch (err) {
             console.warn('[RestaurantList] Error loading addresses on startup:', err);
           }
         }
-        // Guest user or user with no saved addresses: default to live GPS check
-        dispatch(checkLocationAndCalculateDistances(restaurants));
+        // Force the customer to make a location decision (Current Location, Saved Address, or Skip & Browse)
+        setShowDeliverToModal(true);
       } else if (uid) {
         // Try cached first, then background update
         try {
@@ -949,7 +936,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* GPS Off / Permission Denied Modal */}
-      <Modal transparent visible={showLocationModal} animationType="slide" onRequestClose={() => {}}>
+      <Modal transparent visible={showLocationModal && !showDeliverToModal} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
@@ -994,31 +981,37 @@ export default function RestaurantListScreen() {
 
             <ScrollView style={{ width: '100%', maxHeight: 310, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
               {/* Option A: Current Location */}
-              <TouchableOpacity
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  padding: 14,
-                  backgroundColor: '#FFF',
-                  borderColor: '#E4E1D8',
-                  borderWidth: 1,
-                  borderRadius: 12,
-                  marginBottom: 12,
-                  gap: 12
-                }}
-                activeOpacity={0.8}
-                onPress={() => {
-                  setShowDeliverToModal(false);
-                  dispatch(setSelectedSavedAddressId(null));
-                  dispatch(checkLocationAndCalculateDistances(restaurants));
-                }}
-              >
-                <Feather name="navigation" size={20} color="#2B783E" />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1E3545' }}>Use Current Location</Text>
-                  <Text style={{ fontSize: 11, color: '#808C94' }}>{"Locate me using my device's GPS"}</Text>
-                </View>
-              </TouchableOpacity>
+              {(() => {
+                const isCurrentSelected = !selectedSavedAddressId;
+                return (
+                  <TouchableOpacity
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 14,
+                      backgroundColor: isCurrentSelected ? '#F0F6F0' : '#FFF',
+                      borderColor: isCurrentSelected ? '#2B783E' : '#E4E1D8',
+                      borderWidth: 1,
+                      borderRadius: 12,
+                      marginBottom: 12,
+                      gap: 12
+                    }}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setShowDeliverToModal(false);
+                      dispatch(setSelectedSavedAddressId(null));
+                      dispatch(checkLocationAndCalculateDistances(restaurants));
+                    }}
+                  >
+                    <Feather name="navigation" size={20} color={isCurrentSelected ? "#2B783E" : "#1E3545"} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, fontWeight: 'bold', color: isCurrentSelected ? "#2B783E" : "#1E3545" }}>Use Current Location</Text>
+                      <Text style={{ fontSize: 11, color: '#808C94' }}>{"Locate me using my device's GPS"}</Text>
+                    </View>
+                    {isCurrentSelected && <Feather name="check" size={18} color="#2B783E" />}
+                  </TouchableOpacity>
+                );
+              })()}
 
               {/* Option B: Saved Addresses list */}
               {savedAddresses.length > 0 && (

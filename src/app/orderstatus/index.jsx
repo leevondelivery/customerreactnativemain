@@ -86,14 +86,68 @@ export default function OrderStatusScreen() {
     }
   };
 
+
+
+  const hadActiveOrderRef = useRef(false);
+  const lastActiveOrderRef = useRef(null);
+  const orderStatusRef = useRef(null);
+
+  const handleNavigateToReview = useCallback(() => {
+    const targetOrder = orderStatusRef.current || lastActiveOrderRef.current;
+    if (!targetOrder) {
+      router.replace('/profile/myreviews');
+      return;
+    }
+    const oId = targetOrder.orderId || targetOrder.orderID || targetOrder.order_id || targetOrder._id || targetOrder.id || '';
+    const rName = targetOrder.restaurantName || targetOrder.restaurant_name || targetOrder.restName || 'Restaurant';
+    const rId = targetOrder.restaurantId || targetOrder.restaurant_id || '';
+    const dId = targetOrder.deliveryBoyId || targetOrder.delivery_boy_id || targetOrder.driverId || '';
+    const dName = targetOrder.deliveryBoyName || targetOrder.deliveryName || targetOrder.driverName || 'Delivery Partner';
+    const oItems = JSON.stringify(targetOrder.items || targetOrder.orderItems || []);
+    const gTotal = targetOrder.grandTotal ?? targetOrder.totalPrice ?? targetOrder.total ?? '';
+    const sTotal = targetOrder.subTotal ?? targetOrder.subtotal ?? '';
+    const dCharges = targetOrder.deliveryFee ?? targetOrder.deliveryCharges ?? '';
+    const taxGst = targetOrder.gst ?? targetOrder.GST ?? targetOrder.tax ?? '';
+    const pFee = targetOrder.platformFee ?? targetOrder.platform_fee ?? '';
+    const sFee = targetOrder.surgeFee ?? targetOrder.surge_fee ?? '';
+    const disc = targetOrder.discountAmount ?? targetOrder.discount ?? '';
+
+    router.replace({
+      pathname: '/profile/myreviews',
+      params: {
+        orderId: oId,
+        restaurantName: rName,
+        restaurantId: rId,
+        deliveryBoyId: dId,
+        deliveryBoyName: dName,
+        items: oItems,
+        grandTotal: gTotal,
+        subTotal: sTotal,
+        deliveryCharges: dCharges,
+        gst: taxGst,
+        platformFee: pFee,
+        surgeFee: sFee,
+        discountAmount: disc,
+      },
+    });
+  }, [router]);
+
   const fetchStatus = useCallback(async (isRefresh = false) => {
     try {
-      if (isRefresh) setRefreshing(true);
-      else setLoading(true);
+      if (isRefresh) {
+        setRefreshing(true);
+      } else if (!orderStatusRef.current) {
+        setLoading(true);
+      }
       setError(null);
 
       const userid = await AsyncStorage.getItem('userid');
-      if (!userid) { setError('Not logged in'); return; }
+      if (!userid) {
+        setError('Not logged in');
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
 
       const url = `${API_URL}/orderstatus/user/${userid}`;
       console.log('[OrderStatus] Fetching:', url);
@@ -101,9 +155,19 @@ export default function OrderStatusScreen() {
       const data = await res.json();
       console.log('[OrderStatus] Response fields:', Object.keys(data.orderStatus || {}));
 
-      if (res.ok && data.success) {
+      if (res.ok && data.success && data.orderStatus) {
+        hadActiveOrderRef.current = true;
+        lastActiveOrderRef.current = data.orderStatus;
+        orderStatusRef.current = data.orderStatus;
         setOrderStatus(data.orderStatus);
       } else {
+        if (hadActiveOrderRef.current) {
+          hadActiveOrderRef.current = false;
+          console.log('[OrderStatus] Active order disappeared from tracker. Redirecting to reviews with order details.');
+          handleNavigateToReview();
+          return;
+        }
+        orderStatusRef.current = null;
         setOrderStatus(null);
         setError(data.message || 'No active order found');
       }
@@ -114,16 +178,18 @@ export default function OrderStatusScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [handleNavigateToReview]);
 
   // Auto-refresh every 15 seconds while focused
   useFocusEffect(
     useCallback(() => {
-      fetchStatus();
+      fetchStatus(orderStatusRef.current ? true : false);
       const interval = setInterval(() => fetchStatus(true), 15000);
       return () => clearInterval(interval);
     }, [fetchStatus])
   );
+
+
 
   const handleCallSavior = () => {
     const phone = orderStatus?.deliveryBoyPhone || orderStatus?.deliveryPhone || orderStatus?.deliveryBoyMobile;
@@ -131,6 +197,7 @@ export default function OrderStatusScreen() {
       Linking.openURL(`tel:${phone}`).catch(err => console.error('Phone dialer error:', err));
     }
   };
+
 
   const formatCurrency = (value) => {
     if (value === undefined || value === null || value === '') return '';
@@ -369,17 +436,7 @@ export default function OrderStatusScreen() {
             </View>
           ) : null}
 
-          {/* Rate & Review Button (if delivered or completed) */}
-          {(statusText.toLowerCase().includes('delivered') || statusText.toLowerCase().includes('completed')) ? (
-            <TouchableOpacity
-              style={styles.reviewButton}
-              onPress={() => router.push('/profile/myreviews')}
-              activeOpacity={0.85}
-            >
-              <FontAwesome5 name="star" size={14} color="#FFC107" />
-              <Text style={styles.reviewButtonText}>Rate & Review Order</Text>
-            </TouchableOpacity>
-          ) : null}
+
 
         </View>
       </ScrollView>

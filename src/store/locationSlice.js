@@ -57,16 +57,16 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
   'location/checkLocationAndCalculateDistances',
   async (arg, { rejectWithValue, dispatch }) => {
     // support both signature formats: list directly or { restaurantsList, customCoords }
-    const restaurantsList = Array.isArray(arg) ? arg : arg.restaurantsList;
-    const customCoords = Array.isArray(arg) ? null : arg.customCoords;
+    const restaurantsList = Array.isArray(arg) ? arg : (arg && arg.restaurantsList ? arg.restaurantsList : []);
+    const customCoords = (arg && !Array.isArray(arg)) ? arg.customCoords : null;
 
     console.log('[Location Redux] Thunk action triggered. Verifying status and permission...');
     try {
       let latitude, longitude;
 
       if (customCoords && customCoords.latitude !== undefined && customCoords.longitude !== undefined) {
-        latitude = customCoords.latitude;
-        longitude = customCoords.longitude;
+        latitude = Number(customCoords.latitude);
+        longitude = Number(customCoords.longitude);
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
         // 1. Check if location services are enabled globally (GPS is ON)
@@ -113,7 +113,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           });
         }
 
-        // 3. Request coordinates
+        // 3. Request coordinates with a strict 4-second timeout to prevent UI hanging
         console.log('[Location Redux] Querying current coordinates...');
         if (typeof window !== 'undefined' && window.navigator && window.navigator.geolocation) {
           const getWebPosition = () => new Promise((resolve, reject) => {
@@ -133,16 +133,21 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           longitude = location.coords.longitude;
         } else {
           try {
-            const location = await Location.getCurrentPositionAsync({
+            // Race getCurrentPositionAsync with a 4s timeout
+            const positionPromise = Location.getCurrentPositionAsync({
               accuracy: Location.Accuracy.Balanced,
-              timeout: 5000,
+              timeout: 4000,
             });
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Location timeout')), 4000)
+            );
+            const location = await Promise.race([positionPromise, timeoutPromise]);
             latitude = location.coords.latitude;
             longitude = location.coords.longitude;
           } catch (posErr) {
-            console.warn('[Location Redux] getCurrentPositionAsync failed, attempting getLastKnownPositionAsync:', posErr);
+            console.warn('[Location Redux] getCurrentPositionAsync failed/timed out, attempting getLastKnownPositionAsync:', posErr);
             const fallbackLoc = await Location.getLastKnownPositionAsync();
-            if (fallbackLoc) {
+            if (fallbackLoc && fallbackLoc.coords) {
               latitude = fallbackLoc.coords.latitude;
               longitude = fallbackLoc.coords.longitude;
               console.log('[Location Redux] Successfully retrieved coordinates from last known position:', latitude, longitude);
@@ -190,7 +195,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         console.warn('[Location Redux] Cache load error:', err);
       }
 
-      // 7. Request exact road route distance from backend API for all restaurants in parallel
+      // 7. Request exact road route distance from backend API for all restaurants in parallel with AbortController timeout
       console.log('[Location Redux] Querying backend /distance endpoint for exact road distances...');
       const updatedDistances = {};
       await Promise.all(restaurantsList.map(async (rest) => {
@@ -204,9 +209,13 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           }
 
           try {
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
             const url = `${API_URL}/distance?originLat=${latitude}&originLng=${longitude}&restaurantId=${restId}`;
             console.log(`[Location Redux] Fetching distance for ${rest.name} from: ${url}`);
-            const response = await fetch(url);
+            const response = await fetch(url, controller ? { signal: controller.signal } : undefined);
+            if (timeoutId) clearTimeout(timeoutId);
+
             if (response.ok) {
               const resData = await response.json();
               console.log(`[Location Redux] Backend response for ${rest.name}:`, resData);

@@ -3,7 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Dimensions, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Provider } from 'react-redux';
+import { Provider, useSelector } from 'react-redux';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
 import { store } from '../store/store';
 // Native-only modules: lazily required to avoid crashes when native binary
@@ -77,6 +78,8 @@ export default function Layout() {
   const isTabBarVisible = useRef(true);
   const [cartCount, setCartCount] = useState(0);
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
+  const prevHasActiveOrder = useRef(false);
+  const lastActiveOrderRef = useRef(null);
 
   // Check active order status from backend (on mount, path change, and every 10 seconds)
   useEffect(() => {
@@ -91,7 +94,53 @@ export default function Layout() {
         const data = await response.json();
         if (response.ok && data.success && data.orderStatus) {
           setHasActiveOrder(true);
+          prevHasActiveOrder.current = true;
+          lastActiveOrderRef.current = data.orderStatus;
         } else {
+          // If active order was being tracked previously and is now gone/completed
+          if (prevHasActiveOrder.current) {
+            prevHasActiveOrder.current = false;
+            setHasActiveOrder(false);
+            const lastOrd = lastActiveOrderRef.current;
+            console.log('[Layout] Order completed & removed from active tracker. Navigating to /profile/myreviews with order details.');
+            if (lastOrd) {
+              const oId = lastOrd.orderId || lastOrd.orderID || lastOrd.order_id || lastOrd._id || lastOrd.id || '';
+              const rName = lastOrd.restaurantName || lastOrd.restaurant_name || lastOrd.restName || 'Restaurant';
+              const rId = lastOrd.restaurantId || lastOrd.restaurant_id || lastOrd.restId || '';
+              const dId = lastOrd.deliveryBoyId || lastOrd.delivery_boy_id || lastOrd.driverId || '';
+              const dName = lastOrd.deliveryBoyName || lastOrd.deliveryName || 'Delivery Partner';
+              const oItems = JSON.stringify(lastOrd.items || lastOrd.orderItems || []);
+              const gTotal = lastOrd.grandTotal ?? lastOrd.totalPrice ?? '';
+              const sTotal = lastOrd.subTotal ?? lastOrd.subtotal ?? '';
+              const dCharges = lastOrd.deliveryFee ?? lastOrd.deliveryCharges ?? '';
+              const taxGst = lastOrd.gst ?? lastOrd.tax ?? '';
+              const pFee = lastOrd.platformFee ?? '';
+              const sFee = lastOrd.surgeFee ?? '';
+              const disc = lastOrd.discountAmount ?? lastOrd.discount ?? '';
+
+              router.push({
+                pathname: '/profile/myreviews',
+                params: {
+                  orderId: oId,
+                  restaurantName: rName,
+                  restaurantId: rId,
+                  deliveryBoyId: dId,
+                  deliveryBoyName: dName,
+                  items: oItems,
+                  grandTotal: gTotal,
+                  subTotal: sTotal,
+                  deliveryCharges: dCharges,
+                  gst: taxGst,
+                  platformFee: pFee,
+                  surgeFee: sFee,
+                  discountAmount: disc,
+                },
+              });
+            } else {
+              router.push('/profile/myreviews');
+            }
+            return;
+          }
           setHasActiveOrder(false);
         }
       } catch (e) {
@@ -254,8 +303,8 @@ export default function Layout() {
     return () => clearInterval(interval);
   }, []);
 
-  const showTabBar = useCallback(() => {
-    if (isTabBarVisible.current) return;
+  const showTabBar = useCallback((force = false) => {
+    if (isTabBarVisible.current && !force) return;
     isTabBarVisible.current = true;
     Animated.timing(translateY, {
       toValue: 0,
@@ -276,7 +325,7 @@ export default function Layout() {
 
   // Bring navbar back into view automatically on page routing changes
   useEffect(() => {
-    showTabBar();
+    showTabBar(true);
   }, [pathname, showTabBar]);
 
   useEffect(() => {
@@ -300,84 +349,154 @@ export default function Layout() {
 
   return (
     <Provider store={store}>
-      <TabBarContext.Provider value={{ showTabBar, hideTabBar }}>
-        <View style={styles.rootContainer}>
-          <View style={styles.contentArea}>
-            <Slot />
-          </View>
-          {!isLoginPage && (
-            <Animated.View
-              style={[
-                styles.tabBarContainer,
-                styles.shadow,
-                {
-                  transform: [{ translateY }],
-                }
-              ]}
-              onLayout={(e) => setTabBarWidth(e.nativeEvent.layout.width)}
-            >
-              {/* Soft Background circles for all tabs to maintain consistent design look */}
-              {tabs.map((tab, idx) => {
-                const isActive = pathname.startsWith(tab.route);
-                return (
-                  <View
-                    key={`bg-circle-${tab.route}`}
-                    style={[
-                      styles.inactiveCircleBackground,
-                      { left: idx * (tabBarWidth / 4) + (tabBarWidth / 4 - 44) / 2 },
-                      isActive && { opacity: 0 }
-                    ]}
-                  />
-                );
-              })}
-
-              {/* Animated Sliding White Background Circle (floating on top of inactive circles) */}
-              {tabBarWidth > 0 && (
-                <Animated.View
-                  style={[
-                    styles.activeTabCircle,
-                    styles.activeShadow,
-                    {
-                      position: 'absolute',
-                      left: 0,
-                      transform: [{ translateX }, { translateY: -15 }],
-                    }
-                  ]}
-                />
-              )}
-
-              {/* Transparent Interactive Tab Items */}
-              {tabs.map((tab) => {
-                const isActive = pathname.startsWith(tab.route);
-                const isCartTab = tab.route === '/cart';
-                const isOrderStatusTab = tab.route === '/orderstatus';
-
-                return (
-                  <TouchableOpacity
-                    key={tab.route}
-                    onPress={() => router.push(tab.route)}
-                    activeOpacity={0.9}
-                    style={styles.tabTouchArea}
-                  >
-                    <View style={[isActive ? { transform: [{ translateY: -15 }] } : null, { position: 'relative' }]}>
-                      {tab.icon(isActive)}
-                      {isCartTab && cartCount > 0 && (
-                        <View style={styles.badgeContainer}>
-                          <Text style={styles.badgeText}>{cartCount}</Text>
-                        </View>
-                      )}
-                      {isOrderStatusTab && hasActiveOrder && (
-                        <View style={styles.dotBadge} />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </Animated.View>
-          )}
-        </View>
-      </TabBarContext.Provider>
+      <SafeAreaProvider>
+        <TabBarContext.Provider value={{ showTabBar, hideTabBar }}>
+          <MainLayoutContent
+            isLoginPage={isLoginPage}
+            tabs={tabs}
+            pathname={pathname}
+            router={router}
+            tabBarWidth={tabBarWidth}
+            setTabBarWidth={setTabBarWidth}
+            translateX={translateX}
+            translateY={translateY}
+            cartCount={cartCount}
+            hasActiveOrder={hasActiveOrder}
+          />
+        </TabBarContext.Provider>
+      </SafeAreaProvider>
     </Provider>
+  );
+}
+
+function MainLayoutContent({
+  isLoginPage,
+  tabs,
+  pathname,
+  router,
+  tabBarWidth,
+  setTabBarWidth,
+  translateX,
+  translateY,
+  cartCount,
+  hasActiveOrder,
+}) {
+  const locationStatus = useSelector((state) => state.location?.locationStatus);
+  // Hide bottom tab bar until customer makes their initial location decision
+  const shouldShowTabBar = !isLoginPage && locationStatus !== 'idle';
+
+  return (
+    <View style={styles.rootContainer}>
+      <View style={styles.contentArea}>
+        <Slot />
+      </View>
+      {shouldShowTabBar && (
+        <FloatingTabBar
+          tabs={tabs}
+          pathname={pathname}
+          router={router}
+          tabBarWidth={tabBarWidth}
+          setTabBarWidth={setTabBarWidth}
+          translateX={translateX}
+          translateY={translateY}
+          cartCount={cartCount}
+          hasActiveOrder={hasActiveOrder}
+        />
+      )}
+    </View>
+  );
+}
+
+function FloatingTabBar({
+  tabs,
+  pathname,
+  router,
+  tabBarWidth,
+  setTabBarWidth,
+  translateX,
+  translateY,
+  cartCount,
+  hasActiveOrder,
+}) {
+  const insets = useSafeAreaInsets();
+  
+  // Calculate dynamic bottom position:
+  // On Android with 3-button navigation, insets.bottom is ~48px+.
+  // On gesture navigation, insets.bottom is ~16-20px.
+  // On iOS, insets.bottom is ~34px.
+  // We add insets.bottom + 12 (min 24) to guarantee clearance above system navigation buttons.
+  const dynamicBottom = Math.max(insets.bottom + 12, Platform.OS === 'ios' ? 34 : 24);
+
+  return (
+    <Animated.View
+      style={[
+        styles.tabBarContainer,
+        styles.shadow,
+        {
+          bottom: dynamicBottom,
+          transform: [{ translateY }],
+        }
+      ]}
+      onLayout={(e) => setTabBarWidth(e.nativeEvent.layout.width)}
+    >
+      {/* Soft Background circles for all tabs */}
+      {tabs.map((tab, idx) => {
+        const isActive = pathname.startsWith(tab.route);
+        return (
+          <View
+            key={`bg-circle-${tab.route}`}
+            style={[
+              styles.inactiveCircleBackground,
+              { left: idx * (tabBarWidth / 4) + (tabBarWidth / 4 - 44) / 2 },
+              isActive && { opacity: 0 }
+            ]}
+          />
+        );
+      })}
+
+      {/* Animated Sliding White Background Circle */}
+      {tabBarWidth > 0 && (
+        <Animated.View
+          style={[
+            styles.activeTabCircle,
+            styles.activeShadow,
+            {
+              position: 'absolute',
+              left: 0,
+              transform: [{ translateX }, { translateY: -15 }],
+            }
+          ]}
+        />
+      )}
+
+      {/* Transparent Interactive Tab Items */}
+      {tabs.map((tab) => {
+        const isActive = pathname.startsWith(tab.route);
+        const isCartTab = tab.route === '/cart';
+        const isOrderStatusTab = tab.route === '/orderstatus';
+
+        return (
+          <TouchableOpacity
+            key={tab.route}
+            onPress={() => router.push(tab.route)}
+            activeOpacity={0.9}
+            style={styles.tabTouchArea}
+          >
+            <View style={[isActive ? { transform: [{ translateY: -15 }] } : null, { position: 'relative' }]}>
+              {tab.icon(isActive)}
+              {isCartTab && cartCount > 0 && (
+                <View style={styles.badgeContainer}>
+                  <Text style={styles.badgeText}>{cartCount}</Text>
+                </View>
+              )}
+              {isOrderStatusTab && hasActiveOrder && (
+                <View style={styles.dotBadge} />
+              )}
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+    </Animated.View>
   );
 }
 
@@ -390,7 +509,6 @@ const styles = StyleSheet.create({
   },
   tabBarContainer: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 34 : 24,
     left: 24,
     right: 24,
     height: 70,

@@ -2,10 +2,11 @@ const getApiUrl = () => {
   // For local web browser testing:
   // return 'http://localhost:5000';
   
+  // Production URL:
+  // return 'https://api.leevondelivery.in';
 
-  
-  // Current production URL:
-  return 'https://api.leevondelivery.in';
+  // Temporary Render URL:
+  return 'https://customerbackendfile.onrender.com';
 };
 
 export const API_URL = getApiUrl();
