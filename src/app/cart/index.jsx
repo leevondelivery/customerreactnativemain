@@ -22,15 +22,50 @@ import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
-// Lazily require Firebase Auth to avoid crash when native module is not linked
+// Lazily require Firebase Auth & Firestore to avoid crash when native module is not linked
 let auth = null;
+let firestore = null;
 if (Platform.OS !== 'web') {
   try {
     auth = require('@react-native-firebase/auth').default;
+    firestore = require('@react-native-firebase/firestore').default;
   } catch (e) {
-    console.warn('[Cart] Firebase Auth native module not available:', e.message);
+    console.warn('[Cart] Firebase Auth/Firestore native module not available:', e.message);
   }
 }
+
+// Helper to parse confirmPayButton status from various DB/API response structures
+const parseConfirmPayStatus = (data) => {
+  if (!data) return null;
+  let controlsArr = null;
+  if (Array.isArray(data)) controlsArr = data;
+  else if (Array.isArray(data.controls)) controlsArr = data.controls;
+  else if (Array.isArray(data.data)) controlsArr = data.data;
+
+  if (controlsArr) {
+    const item = controlsArr.find(
+      (c) =>
+        String(c.key || '').toLowerCase() === 'confirmpaybutton' ||
+        String(c.name || '').toLowerCase() === 'confirm pay button'
+    );
+    if (item) {
+      if (typeof item.status === 'boolean') return item.status;
+      if (typeof item.status === 'string') return item.status !== 'false' && item.status !== '0';
+      if (typeof item.status === 'number') return item.status === 1;
+      if (typeof item.value === 'boolean') return item.value;
+    }
+  }
+
+  if (typeof data.confirmPayButton === 'boolean') return data.confirmPayButton;
+  if (typeof data.controls === 'object' && typeof data.controls.confirmPayButton === 'boolean') {
+    return data.controls.confirmPayButton;
+  }
+  if (typeof data.status === 'boolean' && (data.key === 'confirmPayButton' || data.name === 'Confirm Pay Button')) {
+    return data.status;
+  }
+
+  return null;
+};
 
 // Razorpay standard script dynamic loader for Web
 const loadRazorpayScript = () => {
@@ -61,6 +96,7 @@ export default function CartScreen() {
   const showFetchingModal = useSelector((state) => state.location.showFetchingModal);
   const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
   const restaurants = useSelector((state) => state.restaurants.list);
+  const confirmPayEnabled = useSelector((state) => state.controls.confirmPayEnabled);
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -81,6 +117,7 @@ export default function CartScreen() {
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
   const [showLocationChoiceModal, setShowLocationChoiceModal] = useState(false);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
+  // confirmPayEnabled comes from Redux (polled every 5s in _layout.jsx)
 
   const targetRestId = cartItems[0]?.restId || '';
   const distanceStr = roadDistances[targetRestId] || '';
@@ -321,6 +358,8 @@ export default function CartScreen() {
     }
   }, []);
 
+
+
   useFocusEffect(
     useCallback(() => {
       loadCart();
@@ -416,6 +455,12 @@ export default function CartScreen() {
   };
 
   const handlePlaceOrder = async () => {
+    // Instant 0ms check from Redux (polled every 5s in background)
+    if (!confirmPayEnabled) {
+      showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
+      return;
+    }
+
     if (hasActiveOrder) {
       showAlert('Active Order In Progress', 'You already have an active order. Please wait for it to complete.');
       return;
@@ -850,6 +895,13 @@ export default function CartScreen() {
   };
 
   const handleConfirmOrder = async () => {
+    // Instant 0ms check from Redux (polled every 5s in background)
+    if (!confirmPayEnabled) {
+      setIsProcessingPayment(false);
+      showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
+      return;
+    }
+
     // 1. SHOW LOADING INDICATOR & FETCH LIVE DB RESTAURANT & MENU STATUS IN PARALLEL
     setIsProcessingPayment(true);
 
@@ -2214,7 +2266,7 @@ export default function CartScreen() {
                 <Feather name="navigation" size={22} color="#2B783E" />
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 15, fontWeight: '700', color: '#1E3545' }}>Use Current Location</Text>
-                  <Text style={{ fontSize: 12, color: '#808C94', marginTop: 2 }}>Locate me using my device's GPS</Text>
+                  <Text style={{ fontSize: 12, color: '#808C94', marginTop: 2 }}>Locate me using my device&apos;s GPS</Text>
                 </View>
                 <Feather name="chevron-right" size={18} color="#2B783E" />
               </TouchableOpacity>

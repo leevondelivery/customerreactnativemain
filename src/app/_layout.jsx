@@ -3,10 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Dimensions, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { Provider, useSelector } from 'react-redux';
+import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
 import { store } from '../store/store';
+import { fetchControlsStatus } from '../store/controlsSlice';
 // Native-only modules: lazily required to avoid crashes when native binary
 // does not include these modules (e.g. Expo Go, or missing native linking).
 let GoogleSignin = null;
@@ -153,6 +154,7 @@ export default function Layout() {
     const interval = setInterval(checkActiveOrder, 10000);
     return () => clearInterval(interval);
   }, [pathname]);
+
 
   // Global Authentication, Session Verification & Data Pre-Caching
   useEffect(() => {
@@ -384,6 +386,16 @@ function MainLayoutContent({
   const locationStatus = useSelector((state) => state.location?.locationStatus);
   // Hide bottom tab bar until customer makes their initial location decision
   const shouldShowTabBar = !isLoginPage && locationStatus !== 'idle';
+
+  // Poll confirmPayButton status from MongoDB every 5 seconds (inside Provider)
+  const dispatch = useDispatch();
+  useEffect(() => {
+    dispatch(fetchControlsStatus());
+    const controlsInterval = setInterval(() => {
+      dispatch(fetchControlsStatus());
+    }, 5000);
+    return () => clearInterval(controlsInterval);
+  }, [dispatch]);
 
   return (
     <View style={styles.rootContainer}>
