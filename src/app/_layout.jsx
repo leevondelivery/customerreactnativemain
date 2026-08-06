@@ -102,44 +102,8 @@ export default function Layout() {
           if (prevHasActiveOrder.current) {
             prevHasActiveOrder.current = false;
             setHasActiveOrder(false);
-            const lastOrd = lastActiveOrderRef.current;
-            console.log('[Layout] Order completed & removed from active tracker. Navigating to /profile/myreviews with order details.');
-            if (lastOrd) {
-              const oId = lastOrd.orderId || lastOrd.orderID || lastOrd.order_id || lastOrd._id || lastOrd.id || '';
-              const rName = lastOrd.restaurantName || lastOrd.restaurant_name || lastOrd.restName || 'Restaurant';
-              const rId = lastOrd.restaurantId || lastOrd.restaurant_id || lastOrd.restId || '';
-              const dId = lastOrd.deliveryBoyId || lastOrd.delivery_boy_id || lastOrd.driverId || '';
-              const dName = lastOrd.deliveryBoyName || lastOrd.deliveryName || 'Delivery Partner';
-              const oItems = JSON.stringify(lastOrd.items || lastOrd.orderItems || []);
-              const gTotal = lastOrd.grandTotal ?? lastOrd.totalPrice ?? '';
-              const sTotal = lastOrd.subTotal ?? lastOrd.subtotal ?? '';
-              const dCharges = lastOrd.deliveryFee ?? lastOrd.deliveryCharges ?? '';
-              const taxGst = lastOrd.gst ?? lastOrd.tax ?? '';
-              const pFee = lastOrd.platformFee ?? '';
-              const sFee = lastOrd.surgeFee ?? '';
-              const disc = lastOrd.discountAmount ?? lastOrd.discount ?? '';
-
-              router.push({
-                pathname: '/profile/myreviews',
-                params: {
-                  orderId: oId,
-                  restaurantName: rName,
-                  restaurantId: rId,
-                  deliveryBoyId: dId,
-                  deliveryBoyName: dName,
-                  items: oItems,
-                  grandTotal: gTotal,
-                  subTotal: sTotal,
-                  deliveryCharges: dCharges,
-                  gst: taxGst,
-                  platformFee: pFee,
-                  surgeFee: sFee,
-                  discountAmount: disc,
-                },
-              });
-            } else {
-              router.push('/profile/myreviews');
-            }
+            // The orderstatus page handles the review modal inline — no redirect needed
+            console.log('[Layout] Order completed. Orderstatus page will show the review modal.');
             return;
           }
           setHasActiveOrder(false);
@@ -288,20 +252,16 @@ export default function Layout() {
     const updateCartCount = async () => {
       try {
         const cartData = await AsyncStorage.getItem('cart');
-        if (cartData) {
-          const items = JSON.parse(cartData);
-          const totalQty = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
-          setCartCount(totalQty);
-        } else {
-          setCartCount(0);
-        }
+        const items = cartData ? JSON.parse(cartData) : [];
+        const totalQty = Array.isArray(items) ? items.reduce((sum, item) => sum + (item.quantity || 0), 0) : 0;
+        setCartCount((prev) => (prev !== totalQty ? totalQty : prev));
       } catch (e) {
         console.error('Error fetching cart count:', e);
       }
     };
 
     updateCartCount();
-    const interval = setInterval(updateCartCount, 500);
+    const interval = setInterval(updateCartCount, 1000);
     return () => clearInterval(interval);
   }, []);
 
@@ -478,7 +438,12 @@ function FloatingTabBar({
           transform: [{ translateY }],
         }
       ]}
-      onLayout={(e) => setTabBarWidth(e.nativeEvent.layout.width)}
+      onLayout={(e) => {
+        const newWidth = e.nativeEvent.layout.width;
+        if (newWidth > 0 && Math.abs(newWidth - tabBarWidth) > 2) {
+          setTabBarWidth(newWidth);
+        }
+      }}
     >
       {/* Soft Background circles for all tabs */}
       {tabs.map((tab, idx) => {
@@ -519,7 +484,10 @@ function FloatingTabBar({
         return (
           <TouchableOpacity
             key={tab.route}
-            onPress={() => router.push(tab.route)}
+            onPress={() => {
+              if (isActive) return;
+              router.navigate(tab.route);
+            }}
             activeOpacity={0.9}
             style={styles.tabTouchArea}
           >

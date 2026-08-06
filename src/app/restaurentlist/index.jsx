@@ -457,7 +457,7 @@ export default function RestaurantListScreen() {
     }, [dispatch])
   );
 
-  // Background Polling for Restaurant active status updates (every 2 seconds with no-cache)
+  // Background Polling for Restaurant active status updates (every 15 seconds with no-cache)
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -471,7 +471,7 @@ export default function RestaurantListScreen() {
       } catch (error) {
         console.error('[RestaurantList] Background polling error:', error);
       }
-    }, 2000);
+    }, 15000);
 
     return () => clearInterval(interval);
   }, [dispatch]);

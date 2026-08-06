@@ -1,15 +1,19 @@
-import { FontAwesome5, MaterialIcons } from '@expo/vector-icons';
+import { Feather, FontAwesome, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Linking,
+  Modal,
   RefreshControl,
   ScrollView,
+  StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -76,6 +80,15 @@ export default function OrderStatusScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
+  // ── Review Modal State ────────────────────────────────────────────────────
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewOrder, setReviewOrder] = useState(null);
+  const [restaurantRating, setRestaurantRating] = useState(0);
+  const [restaurantReview, setRestaurantReview] = useState('');
+  const [deliveryBoyRating, setDeliveryBoyRating] = useState(0);
+  const [deliveryBoyReview, setDeliveryBoyReview] = useState('');
+  const [submittingReview, setSubmittingReview] = useState(false);
+
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
     const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
@@ -86,52 +99,183 @@ export default function OrderStatusScreen() {
     }
   };
 
-
-
   const hadActiveOrderRef = useRef(false);
   const lastActiveOrderRef = useRef(null);
   const orderStatusRef = useRef(null);
 
-  const handleNavigateToReview = useCallback(() => {
-    const targetOrder = orderStatusRef.current || lastActiveOrderRef.current;
-    if (!targetOrder) {
-      router.replace('/profile/myreviews');
+  // ── Review helpers ────────────────────────────────────────────────────────
+  const renderInteractiveStars = (currentRating, setRatingFn) => {
+    const stars = [];
+    for (let i = 1; i <= 5; i++) {
+      stars.push(
+        <TouchableOpacity
+          key={i}
+          style={reviewStyles.starBtn}
+          onPress={() => setRatingFn(i)}
+          activeOpacity={0.7}
+        >
+          <FontAwesome
+            name={i <= currentRating ? 'star' : 'star-o'}
+            size={28}
+            color={i <= currentRating ? '#FFC107' : '#CCCCCC'}
+          />
+        </TouchableOpacity>
+      );
+    }
+    return <View style={reviewStyles.starsRow}>{stars}</View>;
+  };
+
+  const formatCurrency = (value) => {
+    if (value === undefined || value === null || value === '') return '';
+    return `₹ ${Number(value).toFixed(0)}`;
+  };
+
+  // Check if this order was already reviewed
+  const isOrderAlreadyReviewed = useCallback(async (orderId) => {
+    try {
+      const storedIds = await AsyncStorage.getItem('submitted_reviewed_orders');
+      if (storedIds) {
+        const parsed = JSON.parse(storedIds);
+        if (Array.isArray(parsed) && parsed.map(String).includes(String(orderId))) {
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn('[OrderStatus] Error checking reviewed orders:', e);
+    }
+    return false;
+  }, []);
+
+  const handleOpenReviewModal = useCallback(async (order) => {
+    const orderId = order?.orderId || order?.orderID || order?.order_id || order?._id || '';
+    if (!orderId) return;
+
+    // Don't show if already reviewed
+    const alreadyReviewed = await isOrderAlreadyReviewed(orderId);
+    if (alreadyReviewed) {
+      console.log('[OrderStatus] Order already reviewed, skipping modal.');
       return;
     }
-    const oId = targetOrder.orderId || targetOrder.orderID || targetOrder.order_id || targetOrder._id || targetOrder.id || '';
-    const rName = targetOrder.restaurantName || targetOrder.restaurant_name || targetOrder.restName || 'Restaurant';
-    const rId = targetOrder.restaurantId || targetOrder.restaurant_id || '';
-    const dId = targetOrder.deliveryBoyId || targetOrder.delivery_boy_id || targetOrder.driverId || '';
-    const dName = targetOrder.deliveryBoyName || targetOrder.deliveryName || targetOrder.driverName || 'Delivery Partner';
-    const oItems = JSON.stringify(targetOrder.items || targetOrder.orderItems || []);
-    const gTotal = targetOrder.grandTotal ?? targetOrder.totalPrice ?? targetOrder.total ?? '';
-    const sTotal = targetOrder.subTotal ?? targetOrder.subtotal ?? '';
-    const dCharges = targetOrder.deliveryFee ?? targetOrder.deliveryCharges ?? '';
-    const taxGst = targetOrder.gst ?? targetOrder.GST ?? targetOrder.tax ?? '';
-    const pFee = targetOrder.platformFee ?? targetOrder.platform_fee ?? '';
-    const sFee = targetOrder.surgeFee ?? targetOrder.surge_fee ?? '';
-    const disc = targetOrder.discountAmount ?? targetOrder.discount ?? '';
 
-    router.replace({
-      pathname: '/profile/myreviews',
-      params: {
-        orderId: oId,
-        restaurantName: rName,
-        restaurantId: rId,
-        deliveryBoyId: dId,
-        deliveryBoyName: dName,
-        items: oItems,
-        grandTotal: gTotal,
-        subTotal: sTotal,
-        deliveryCharges: dCharges,
-        gst: taxGst,
-        platformFee: pFee,
-        surgeFee: sFee,
-        discountAmount: disc,
-      },
+    setReviewOrder({
+      orderId,
+      restaurantName: order.restaurantName || order.restaurant_name || order.restName || 'Restaurant',
+      restaurantId: order.restaurantId || order.restaurant_id || '',
+      deliveryBoyId: order.deliveryBoyId || order.delivery_boy_id || order.driverId || '',
+      deliveryBoyName: order.deliveryBoyName || order.deliveryName || order.driverName || 'Delivery Partner',
+      items: order.items || order.orderItems || [],
+      subTotal: order.subTotal ?? order.subtotal ?? '',
+      deliveryCharges: order.deliveryFee ?? order.deliveryCharges ?? '',
+      gst: order.gst ?? order.GST ?? order.tax ?? '',
+      platformFee: order.platformFee ?? order.platform_fee ?? '',
+      surgeFee: order.surgeFee ?? order.surge_fee ?? '',
+      discountAmount: order.discountAmount ?? order.discount ?? '',
+      grandTotal: order.grandTotal ?? order.totalPrice ?? order.total ?? '',
     });
-  }, [router]);
 
+    // Reset form fields
+    setRestaurantRating(0);
+    setRestaurantReview('');
+    setDeliveryBoyRating(0);
+    setDeliveryBoyReview('');
+    setShowReviewModal(true);
+  }, [isOrderAlreadyReviewed]);
+
+  const handleDismissReview = () => {
+    setShowReviewModal(false);
+    setReviewOrder(null);
+  };
+
+  const handleSubmitReview = async () => {
+    if (!reviewOrder) return;
+    const currentOrderId = String(reviewOrder.orderId);
+
+    try {
+      setSubmittingReview(true);
+      const userid = await AsyncStorage.getItem('userid');
+
+      const reviewPayload = {
+        userId: userid || '',
+        user_id: userid || '',
+        orderId: reviewOrder.orderId,
+        order_id: reviewOrder.orderId,
+        restaurantId: reviewOrder.restaurantId || '',
+        restaurant_id: reviewOrder.restaurantId || '',
+        restaurantName: reviewOrder.restaurantName || 'Restaurant',
+        deliveryBoyId: reviewOrder.deliveryBoyId || '',
+        delivery_boy_id: reviewOrder.deliveryBoyId || '',
+        deliveryBoyName: reviewOrder.deliveryBoyName || 'Delivery Partner',
+        restaurantRating: Number(restaurantRating) || 0,
+        restaurantReview: restaurantReview.trim(),
+        rating: Number(restaurantRating) || 0,
+        review: restaurantReview.trim(),
+        deliveryBoyRating: Number(deliveryBoyRating) || 0,
+        deliveryBoyReview: deliveryBoyReview.trim(),
+        orderDetails: [{
+          items: reviewOrder.items || [],
+          grandTotal: reviewOrder.grandTotal,
+          subTotal: reviewOrder.subTotal,
+          deliveryCharges: reviewOrder.deliveryCharges,
+          gst: reviewOrder.gst,
+          platformFee: reviewOrder.platformFee,
+          surgeFee: reviewOrder.surgeFee,
+          discountAmount: reviewOrder.discountAmount,
+          restaurantName: reviewOrder.restaurantName,
+        }],
+      };
+
+      // Mark as reviewed locally immediately
+      const storedIds = await AsyncStorage.getItem('submitted_reviewed_orders');
+      const existingIds = storedIds ? JSON.parse(storedIds) : [];
+      const updatedIds = Array.from(new Set([...existingIds, currentOrderId]));
+      await AsyncStorage.setItem('submitted_reviewed_orders', JSON.stringify(updatedIds));
+
+      // Attempt POST to backend
+      const candidateEndpoints = [
+        `${API_URL}/reviews`,
+        `${API_URL}/reviews/user/${userid}`,
+        `${API_URL}/reviews/create`,
+        `${API_URL}/reviews/add`,
+        `${API_URL}/reviews/submit`,
+        `${API_URL}/review`,
+        `${API_URL}/review/create`,
+        `${API_URL}/api/reviews`,
+      ];
+
+      let successRes = false;
+      for (const endpoint of candidateEndpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(reviewPayload),
+          });
+          if (res.ok) {
+            console.log('[OrderStatus] Review saved to MongoDB at:', endpoint);
+            successRes = true;
+            break;
+          }
+        } catch (postErr) {
+          console.log('[OrderStatus] POST to', endpoint, 'failed:', postErr.message);
+        }
+      }
+
+      if (!successRes) {
+        console.warn('[OrderStatus] Review saved locally only.');
+      }
+
+      setShowReviewModal(false);
+      setReviewOrder(null);
+    } catch (err) {
+      console.error('[OrderStatus] Review submission error:', err);
+      setShowReviewModal(false);
+      setReviewOrder(null);
+    } finally {
+      setSubmittingReview(false);
+    }
+  };
+
+  // ── Order Fetch ───────────────────────────────────────────────────────────
   const fetchStatus = useCallback(async (isRefresh = false) => {
     try {
       if (isRefresh) {
@@ -160,12 +304,37 @@ export default function OrderStatusScreen() {
         lastActiveOrderRef.current = data.orderStatus;
         orderStatusRef.current = data.orderStatus;
         setOrderStatus(data.orderStatus);
+
+        const statusStr = (data.orderStatus.status || '').toLowerCase();
+        if (statusStr.includes('delivered') || statusStr.includes('completed')) {
+          handleOpenReviewModal(data.orderStatus);
+        }
       } else {
-        if (hadActiveOrderRef.current) {
+        if (hadActiveOrderRef.current && lastActiveOrderRef.current) {
           hadActiveOrderRef.current = false;
-          console.log('[OrderStatus] Active order disappeared from tracker. Redirecting to reviews with order details.');
-          handleNavigateToReview();
-          return;
+          console.log('[OrderStatus] Active order disappeared. Showing review modal.');
+          handleOpenReviewModal(lastActiveOrderRef.current);
+        } else {
+          // Check user's completed orders for any unreviewed order
+          try {
+            const compRes = await fetch(`${API_URL}/orders/completed/${userid}`);
+            const compData = await compRes.json();
+            if (compRes.ok && compData.orders && compData.orders.length > 0) {
+              const sorted = [...compData.orders].reverse();
+              for (const compOrd of sorted) {
+                const compId = compOrd.orderId || compOrd.orderID || compOrd.order_id || compOrd._id || '';
+                if (compId) {
+                  const reviewed = await isOrderAlreadyReviewed(compId);
+                  if (!reviewed) {
+                    handleOpenReviewModal(compOrd);
+                    break;
+                  }
+                }
+              }
+            }
+          } catch (compErr) {
+            console.warn('[OrderStatus] Error checking completed orders for review:', compErr);
+          }
         }
         orderStatusRef.current = null;
         setOrderStatus(null);
@@ -178,7 +347,7 @@ export default function OrderStatusScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [handleNavigateToReview]);
+  }, [handleOpenReviewModal]);
 
   // Auto-refresh every 15 seconds while focused
   useFocusEffect(
@@ -189,8 +358,6 @@ export default function OrderStatusScreen() {
     }, [fetchStatus])
   );
 
-
-
   const handleCallSavior = () => {
     const phone = orderStatus?.deliveryBoyPhone || orderStatus?.deliveryPhone || orderStatus?.deliveryBoyMobile;
     if (phone) {
@@ -198,19 +365,111 @@ export default function OrderStatusScreen() {
     }
   };
 
-
-  const formatCurrency = (value) => {
-    if (value === undefined || value === null || value === '') return '';
-    return `₹ ${Number(value).toFixed(0)}`;
-  };
-
   if (loading) {
     return <LoadingView />;
   }
 
+  // Render Modal inline directly to prevent component unmounting & input focus flickering on state changes
+  const renderReviewModal = () => (
+    <Modal
+      visible={showReviewModal}
+      transparent
+      animationType="slide"
+      onRequestClose={handleDismissReview}
+    >
+      <View style={reviewStyles.backdrop}>
+        <View style={reviewStyles.sheet}>
+          {/* Header */}
+          <View style={reviewStyles.sheetHeader}>
+            <View style={reviewStyles.sheetTitleRow}>
+              <FontAwesome name="star" size={18} color="#FFC107" />
+              <Text style={reviewStyles.sheetTitle}>Rate Your Order</Text>
+            </View>
+            <TouchableOpacity
+              style={reviewStyles.closeBtn}
+              onPress={handleDismissReview}
+              activeOpacity={0.75}
+            >
+              <Feather name="x" size={20} color="#1A1A1A" />
+            </TouchableOpacity>
+          </View>
+
+          {reviewOrder && (
+            <>
+              <Text style={reviewStyles.orderTag}>
+                #{reviewOrder.orderId} · {reviewOrder.restaurantName}
+              </Text>
+
+              <ScrollView
+                style={reviewStyles.formScroll}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {/* Restaurant Rating */}
+                <View style={reviewStyles.ratingBox}>
+                  <Text style={reviewStyles.ratingLabel}>
+                    🍽️ Rate Restaurant
+                  </Text>
+                  <Text style={reviewStyles.ratingSubLabel}>{reviewOrder.restaurantName}</Text>
+                  {renderInteractiveStars(restaurantRating, setRestaurantRating)}
+                  <TextInput
+                    style={reviewStyles.textInput}
+                    placeholder="Write your review for the restaurant..."
+                    placeholderTextColor="#AEAEB2"
+                    multiline
+                    numberOfLines={3}
+                    value={restaurantReview}
+                    onChangeText={setRestaurantReview}
+                  />
+                </View>
+
+                {/* Delivery Boy Rating */}
+                <View style={reviewStyles.ratingBox}>
+                  <Text style={reviewStyles.ratingLabel}>
+                    🛵 Rate Delivery Partner
+                  </Text>
+                  <Text style={reviewStyles.ratingSubLabel}>{reviewOrder.deliveryBoyName}</Text>
+                  {renderInteractiveStars(deliveryBoyRating, setDeliveryBoyRating)}
+                  <TextInput
+                    style={reviewStyles.textInput}
+                    placeholder="Write your review for the delivery partner..."
+                    placeholderTextColor="#AEAEB2"
+                    multiline
+                    numberOfLines={3}
+                    value={deliveryBoyReview}
+                    onChangeText={setDeliveryBoyReview}
+                  />
+                </View>
+
+                {/* Submit Button */}
+                <TouchableOpacity
+                  style={[reviewStyles.submitBtn, submittingReview && reviewStyles.submitBtnDisabled]}
+                  onPress={handleSubmitReview}
+                  disabled={submittingReview}
+                  activeOpacity={0.85}
+                >
+                  {submittingReview ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={reviewStyles.submitBtnText}>Submit Review</Text>
+                  )}
+                </TouchableOpacity>
+
+                <View style={{ height: 24 }} />
+              </ScrollView>
+            </>
+          )}
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // ── Empty State ───────────────────────────────────────────────────────────
   if (!orderStatus || error) {
     return (
       <View style={[styles.emptyContainer, { paddingTop: insets.top + 20 }]}>
+        {renderReviewModal()}
+
         {/* Floating beige circle with fork & knife icon */}
         <Animated.View style={[styles.emptyIconCircle, { transform: [{ translateY: floatAnim }] }]}>
           <MaterialIcons name="restaurant" size={52} color="#1A1A1A" />
@@ -284,6 +543,8 @@ export default function OrderStatusScreen() {
 
   return (
     <View style={styles.container}>
+      {renderReviewModal()}
+
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[styles.scrollContent, { paddingTop: Math.max(insets.top + 12, 24) }]}
@@ -437,9 +698,116 @@ export default function OrderStatusScreen() {
           ) : null}
 
 
-
         </View>
       </ScrollView>
     </View>
   );
 }
+
+// ── Review Modal Styles ───────────────────────────────────────────────────────
+const reviewStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: '#F9F9F6',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    maxHeight: '88%',
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  sheetTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1A1A1A',
+    letterSpacing: -0.3,
+  },
+  closeBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EDECE8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orderTag: {
+    fontSize: 13,
+    color: '#7E7C77',
+    fontWeight: '600',
+    marginBottom: 16,
+  },
+  formScroll: {
+    flexGrow: 0,
+  },
+  ratingBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  ratingLabel: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 2,
+  },
+  ratingSubLabel: {
+    fontSize: 12,
+    color: '#7E7C77',
+    fontWeight: '500',
+    marginBottom: 10,
+  },
+  starsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 12,
+  },
+  starBtn: {
+    padding: 4,
+  },
+  textInput: {
+    backgroundColor: '#F4F3EF',
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    color: '#1A1A1A',
+    textAlignVertical: 'top',
+    minHeight: 70,
+  },
+  submitBtn: {
+    backgroundColor: '#1A1A1A',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  submitBtnDisabled: {
+    opacity: 0.55,
+  },
+  submitBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+});
