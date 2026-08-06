@@ -2,7 +2,7 @@ import { FontAwesome, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Dimensions, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
@@ -387,13 +387,18 @@ function MainLayoutContent({
   // Hide bottom tab bar until customer makes their initial location decision
   const shouldShowTabBar = !isLoginPage && locationStatus !== 'idle';
 
-  // Poll confirmPayButton status from MongoDB every 5 seconds (inside Provider)
+  // Poll confirmPayButton + maintenanceMode from MongoDB every 5 seconds (inside Provider)
   const dispatch = useDispatch();
+  const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
+  // Show maintenance screen after location has been resolved (not on idle/login)
+  // We block on all pages except login
+  const showMaintenance = !isLoginPage && maintenanceMode === false;
+
   useEffect(() => {
     dispatch(fetchControlsStatus());
     const controlsInterval = setInterval(() => {
       dispatch(fetchControlsStatus());
-    }, 5000);
+    }, 30 * 60 * 1000); // poll every 30 minutes
     return () => clearInterval(controlsInterval);
   }, [dispatch]);
 
@@ -415,6 +420,30 @@ function MainLayoutContent({
           hasActiveOrder={hasActiveOrder}
         />
       )}
+
+      {/* Maintenance Mode — full-screen blocking overlay, no dismiss buttons */}
+      <Modal
+        visible={showMaintenance}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => { /* intentionally left empty — cannot be dismissed */ }}
+      >
+        <View style={styles.maintenanceContainer}>
+          <View style={styles.maintenanceIconWrap}>
+            <Text style={styles.maintenanceExclaim}>!</Text>
+          </View>
+          <Text style={styles.maintenanceTitle}>Application is under{`\n`}maintanace</Text>
+          <Text style={styles.maintenanceSubtitle}>
+            {"We'll be back shortly.\nThank you for your patience!"}
+          </Text>
+          <View style={styles.maintenanceDots}>
+            <View style={[styles.maintenanceDot, { opacity: 1 }]} />
+            <View style={[styles.maintenanceDot, { opacity: 0.5 }]} />
+            <View style={[styles.maintenanceDot, { opacity: 0.2 }]} />
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -513,6 +542,61 @@ function FloatingTabBar({
 }
 
 const styles = StyleSheet.create({
+  maintenanceContainer: {
+    flex: 1,
+    backgroundColor: '#F9F9F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 36,
+  },
+  maintenanceIconWrap: {
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: '#E05A47',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 32,
+    ...Platform.select({
+      ios: { shadowColor: '#E05A47', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.35, shadowRadius: 20 },
+      android: { elevation: 12 },
+    }),
+  },
+  maintenanceExclaim: {
+    fontSize: 62,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    lineHeight: 70,
+    includeFontPadding: false,
+  },
+  maintenanceTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#1A1A1A',
+    textAlign: 'center',
+    letterSpacing: -0.5,
+    marginBottom: 16,
+    lineHeight: 34,
+  },
+  maintenanceSubtitle: {
+    fontSize: 15,
+    color: '#7E7C77',
+    textAlign: 'center',
+    lineHeight: 24,
+    fontWeight: '500',
+    marginBottom: 40,
+  },
+  maintenanceDots: {
+    flexDirection: 'row',
+    gap: 10,
+    alignItems: 'center',
+  },
+  maintenanceDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#E05A47',
+  },
   rootContainer: {
     flex: 1,
   },
