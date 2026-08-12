@@ -335,7 +335,8 @@ export default function RestaurantListScreen() {
         logoUrl: item.logoUrl || '',
         address: item.address || '',
         openTime: item.openTime || '',
-        closeTime: item.closeTime || ''
+        closeTime: item.closeTime || '',
+        offerTitle: item.offerTitle || ''
       }
     });
   };

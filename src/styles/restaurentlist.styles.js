@@ -208,7 +208,7 @@ export const styles = StyleSheet.create({
   },
   searchPlaceholderText: {
     fontSize: 15,
-    color: '#808C94',
+    color: '#000000',
     flex: 1,
     marginLeft: 4,
     outlineStyle: 'none',

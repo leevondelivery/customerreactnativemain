@@ -71,7 +71,7 @@ export default function RestaurantMenuScreen() {
   const dispatch = useDispatch();
 
   // Route parameters
-  const { restId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime } = useLocalSearchParams();
+  const { restId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime, offerTitle: passedOfferTitle } = useLocalSearchParams();
 
   // State
   const [searchQuery, setSearchQuery] = useState('');
@@ -217,6 +217,7 @@ export default function RestaurantMenuScreen() {
   const distanceText = roadDistances[restaurantDetail?._id || restaurantDetail?.restId || restId];
   const openTime = restaurantDetail?.openTime || passedOpenTime;
   const closeTime = restaurantDetail?.closeTime || passedCloseTime;
+  const offerTitle = restaurantDetail?.offerTitle || passedOfferTitle;
   const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
   // Fetch restaurant menu on mount
@@ -507,6 +508,20 @@ const isItemAvailable = (item) => {
                     <View style={[styles.heroSpecDistance, { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#2B783E' }]}>
                       <FontAwesome5 name="motorcycle" size={11} color="#FFFFFF" />
                       <Text style={styles.heroSpecTextWhite}>{distanceText}</Text>
+                    </View>
+                  ) : null}
+                  {offerTitle && offerTitle !== '0' && offerTitle !== 0 && String(offerTitle).trim() !== '' ? (
+                    <View style={{
+                      backgroundColor: '#FF6F00',
+                      borderRadius: 12,
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4
+                    }}>
+                      <Feather name="tag" size={11} color="#FFFFFF" />
+                      <Text style={styles.heroSpecTextWhite}>{offerTitle}</Text>
                     </View>
                   ) : null}
                   {/* Closing soon / Opening time highlight badge */}
@@ -876,6 +891,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexWrap: 'wrap',
   },
   heroSpecRating: {
     flexDirection: 'row',
@@ -920,7 +936,7 @@ const styles = StyleSheet.create({
   },
   searchPlaceholderText: {
     fontSize: 15,
-    color: '#1E3545',
+    color: '#000000',
     flex: 1,
     marginLeft: 4,
     outlineStyle: 'none',

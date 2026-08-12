@@ -14,6 +14,7 @@ export const API_URL = getApiUrl();
 export const CONTACT_INFO = {
   phone: '7207610235',
   displayPhone: '+91 7207610235',
+  email: 'support@leevondelivery.in',
   socials: {
     youtube: 'https://www.youtube.com/@LeevonDelivery',
     x: 'https://x.com/Leevondelivery',

@@ -131,8 +131,10 @@ export default function ProfileScreen() {
               if (userData.user.name && userData.user.name !== 'N/A') {
                 await AsyncStorage.setItem('name', userData.user.name);
               }
-              if (userData.user.phone && userData.user.phone !== 'N/A') {
+              if (userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp) {
                 await AsyncStorage.setItem('phone', userData.user.phone);
+              } else if (isLiveTemp) {
+                await AsyncStorage.setItem('phone', '');
               }
               if (userData.user.isPhoneVerified !== undefined) {
                 await AsyncStorage.setItem('isPhoneVerified', String(userData.user.isPhoneVerified));
@@ -269,6 +271,14 @@ export default function ProfileScreen() {
     },
   ];
 
+  const isPhoneAvailable = Boolean(
+    user.phone &&
+    user.phone.trim() !== '' &&
+    user.phone.toLowerCase() !== 'n/a' &&
+    !user.phone.startsWith('google_temp_') &&
+    !user.phone.startsWith('temp_google_')
+  );
+
   return (
     <View style={styles.container}>
       <ScrollView
@@ -308,11 +318,13 @@ export default function ProfileScreen() {
             <Text style={styles.avatarText}>{avatarLetter}</Text>
           </View>
           <View style={styles.userTextContainer}>
-            <Text style={styles.userName}>{user.name}</Text>
-            <View style={styles.phoneRow}>
-              <FontAwesome name="phone" size={14} color="#C2932E" />
-              <Text style={styles.phoneText}>{user.phone}</Text>
-            </View>
+            <Text style={[styles.userName, !isPhoneAvailable && { marginBottom: 0 }]}>{user.name}</Text>
+            {isPhoneAvailable && (
+              <View style={styles.phoneRow}>
+                <FontAwesome name="phone" size={14} color="#C2932E" />
+                <Text style={styles.phoneText}>{user.phone}</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -380,21 +392,6 @@ export default function ProfileScreen() {
               <FontAwesome name="caret-right" size={16} color={btn.isLogout ? '#FFFFFF' : '#000000'} />
             </TouchableOpacity>
           ))}
-        </View>
-
-
-        {/* Delete Account Section */}
-        <View style={styles.deleteSection}>
-          <Text style={styles.deleteLabelText}>Need to close your account?</Text>
-          <TouchableOpacity
-            style={[styles.deleteButton, styles.shadow]}
-            activeOpacity={0.85}
-            onPress={() => {
-              // No action for now as requested
-            }}
-          >
-            <Text style={styles.deleteButtonText}>Permanently Delete Account</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
 

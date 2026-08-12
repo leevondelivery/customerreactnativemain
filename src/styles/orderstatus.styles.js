@@ -249,6 +249,42 @@ export const styles = StyleSheet.create({
     color: '#AEAEB2',
     fontStyle: 'italic',
   },
+  // Delivery Address Card
+  deliveryAddressCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 14,
+    gap: 8,
+  },
+  addressIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#F0EDE6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  addressTagBadge: {
+    backgroundColor: '#2E7D32',
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  addressTagText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  addressText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    lineHeight: 19,
+  },
   callButton: {
     flexDirection: 'row',
     alignItems: 'center',

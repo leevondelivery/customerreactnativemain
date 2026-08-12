@@ -344,8 +344,8 @@ function MainLayoutContent({
   hasActiveOrder,
 }) {
   const locationStatus = useSelector((state) => state.location?.locationStatus);
-  // Hide bottom tab bar until customer makes their initial location decision
-  const shouldShowTabBar = !isLoginPage && locationStatus !== 'idle';
+  // Hide bottom tab bar only on login page or on restaurant list screen when initial location decision is pending
+  const shouldShowTabBar = !isLoginPage && (pathname !== '/restaurentlist' || locationStatus !== 'idle' || hasActiveOrder);
 
   // Poll confirmPayButton + maintenanceMode from MongoDB every 5 seconds (inside Provider)
   const dispatch = useDispatch();

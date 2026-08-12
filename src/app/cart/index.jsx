@@ -109,6 +109,7 @@ export default function CartScreen() {
   const [street, setStreet] = useState('');
   const [landmark, setLandmark] = useState('');
   const [selectedTag, setSelectedTag] = useState('Home'); // Home, Office, Apartment, Other
+  const [customTag, setCustomTag] = useState(''); // Custom place name when 'Other' is selected
   const [savedAddresses, setSavedAddresses] = useState([]);
   const [selectedSavedAddressId, setSelectedSavedAddressId] = useState(null);
   const [isSavedAddressesExpanded, setIsSavedAddressesExpanded] = useState(false);
@@ -127,6 +128,7 @@ export default function CartScreen() {
   const isLocationVerified = isDistanceCalculated && Boolean(flatNo.trim()) && Boolean(street.trim()) && (selectedSavedAddressId ? true : (locationStatus === 'inside' && Boolean(userLocation)));
   const [feesConfig, setFeesConfig] = useState({
     deliveryFeeBase: 20,
+    baseKmThreshold: 3,
     deliveryFeePerKm: 10,
     surgeFee: 0,
     isSurgeActive: false
@@ -301,14 +303,73 @@ export default function CartScreen() {
   const loadCart = useCallback(async () => {
     try {
       const cartData = await AsyncStorage.getItem('cart');
+      let currentItems = [];
       if (cartData) {
-        setCartItems(JSON.parse(cartData));
+        currentItems = JSON.parse(cartData);
+        setCartItems(currentItems);
       } else {
         setCartItems([]);
       }
       const storedCoupon = await AsyncStorage.getItem('applied_coupon');
       if (storedCoupon) {
         setAppliedCoupon(JSON.parse(storedCoupon));
+      }
+
+      // Background live check: auto-remove turned-off items when viewing the cart
+      if (Array.isArray(currentItems) && currentItems.length > 0) {
+        const restId = currentItems[0]?.restId || currentItems[0]?.restaurantId || '';
+        if (restId) {
+          const fetchTime = Date.now();
+          fetch(`${API_URL}/restaurants/${restId}/menu?t=${fetchTime}`)
+            .then(res => res.ok ? res.json() : null)
+            .then(async (menuData) => {
+              if (!menuData) return;
+              const liveItems = menuData.items || menuData.menu || menuData || [];
+              if (!Array.isArray(liveItems) || liveItems.length === 0) return;
+
+              const unavailableItems = [];
+              for (const cartItem of currentItems) {
+                const matched = liveItems.find(live => 
+                  (cartItem._id && (String(live._id || '') === String(cartItem._id) || String(live.itemId || '') === String(cartItem._id))) ||
+                  (cartItem.itemId && (String(live._id || '') === String(cartItem.itemId) || String(live.itemId || '') === String(cartItem.itemId))) ||
+                  (cartItem.itemName && live.itemName && live.itemName.trim().toLowerCase() === cartItem.itemName.trim().toLowerCase())
+                );
+                if (matched) {
+                  const isOff = 
+                    matched.isAvailable === false || matched.isAvailable === 'false' || matched.isAvailable === 0 || matched.isAvailable === '0' ||
+                    matched.itemStatus === false || matched.itemStatus === 'false' || matched.itemStatus === 0 || matched.itemStatus === '0' ||
+                    matched.available === false || matched.available === 'false' || matched.available === 0 || matched.available === '0' ||
+                    matched.itemtodisplayintherestuarentapp === false || matched.itemtodisplayintherestuarentapp === 'false' || matched.itemtodisplayintherestuarentapp === 0 || matched.itemtodisplayintherestuarentapp === '0' ||
+                    String(matched.status || '').toLowerCase() === 'unavailable' ||
+                    String(matched.status || '').toLowerCase() === 'inactive' ||
+                    String(matched.status || '').toLowerCase() === 'off' ||
+                    String(matched.status || '').toLowerCase() === 'out_of_stock';
+                  if (isOff) unavailableItems.push(cartItem);
+                }
+              }
+
+              if (unavailableItems.length > 0) {
+                const unavailIds = unavailableItems.map(i => String(i._id || i.itemId || ''));
+                const unavailNames = unavailableItems.map(i => (i.itemName || '').trim().toLowerCase());
+                const cleanItems = currentItems.filter(item => {
+                  const id = String(item._id || item.itemId || '');
+                  const name = (item.itemName || '').trim().toLowerCase();
+                  return !unavailIds.includes(id) && !unavailNames.includes(name);
+                });
+
+                if (cleanItems.length > 0) {
+                  await AsyncStorage.setItem('cart', JSON.stringify(cleanItems));
+                  setCartItems(cleanItems);
+                } else {
+                  await AsyncStorage.removeItem('cart');
+                  setCartItems([]);
+                }
+                const removedNames = unavailableItems.map(i => `"${i.itemName || 'Item'}"`).join(', ');
+                triggerToast(`${removedNames} out of stock & removed from cart`, 'warning');
+              }
+            })
+            .catch(e => console.warn('[Cart] Background menu availability check error:', e));
+        }
       }
     } catch (error) {
       console.error('Error loading cart:', error);
@@ -504,6 +565,7 @@ export default function CartScreen() {
     }
 
     // --- OPTIMISTIC UPDATE FOR NO LATENCY ---
+    const effectiveTag = selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag;
     const tempId = `temp_${Date.now()}`;
     const newAddressObj = {
       _id: tempId,
@@ -511,7 +573,7 @@ export default function CartScreen() {
       flatNo,
       street,
       landmark,
-      tag: selectedTag,
+      tag: effectiveTag,
       lat: userLocation ? userLocation.latitude : null,
       lng: userLocation ? userLocation.longitude : null,
     };
@@ -529,11 +591,12 @@ export default function CartScreen() {
     const savedFlatNo = flatNo;
     const savedStreet = street;
     const savedLandmark = landmark;
-    const savedTag = selectedTag;
+    const savedTag = effectiveTag;
 
     setFlatNo('');
     setStreet('');
     setLandmark('');
+    setCustomTag('');
     setSelectedTag('Home');
     setSelectedSavedAddressId(null);
 
@@ -912,9 +975,10 @@ export default function CartScreen() {
       console.log('[Cart] Parallel live DB fetch for restaurant & menu status...');
       
       // Execute both HTTP requests simultaneously in parallel for sub-second speed
+      const cacheBustTime = Date.now();
       const [restResResult, menuResResult] = await Promise.allSettled([
-        fetch(`${API_URL}/restaurants?t=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }),
-        targetRestId ? fetch(`${API_URL}/restaurants/${targetRestId}/menu?t=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }) : Promise.resolve(null)
+        fetch(`${API_URL}/restaurants?t=${cacheBustTime}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }),
+        targetRestId ? fetch(`${API_URL}/restaurants/${targetRestId}/menu?t=${cacheBustTime}`, { headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } }) : Promise.resolve(null)
       ]);
 
       // A. Verify Restaurant active status
@@ -957,6 +1021,7 @@ export default function CartScreen() {
         const menuData = await menuResResult.value.json();
         const liveItems = menuData.items || menuData.menu || menuData || [];
 
+        const unavailableItems = [];
         for (const cartItem of cartItems) {
           const matchedLiveItem = liveItems.find(live => 
             (cartItem._id && (String(live._id || '') === String(cartItem._id) || String(live.itemId || '') === String(cartItem._id))) ||
@@ -976,12 +1041,39 @@ export default function CartScreen() {
               String(matchedLiveItem.status || '').toLowerCase() === 'out_of_stock';
 
             if (isItemUnavailable) {
-              setIsProcessingPayment(false);
-              const itemName = cartItem.itemName || matchedLiveItem.itemName || 'Item';
-              showAlert('Item Unavailable', `Sorry, "${itemName}" is currently not available.`, clearCart);
-              return;
+              unavailableItems.push(cartItem);
             }
           }
+        }
+
+        if (unavailableItems.length > 0) {
+          setIsProcessingPayment(false);
+          const unavailableNames = unavailableItems.map(i => `"${i.itemName || 'Item'}"`).join(', ');
+          const unavailableIds = unavailableItems.map(i => String(i._id || i.itemId || ''));
+          const unavailableNameList = unavailableItems.map(i => (i.itemName || '').trim().toLowerCase());
+
+          const remainingCartItems = cartItems.filter(item => {
+            const itemId = String(item._id || item.itemId || '');
+            const itemName = (item.itemName || '').trim().toLowerCase();
+            return !unavailableIds.includes(itemId) && !unavailableNameList.includes(itemName);
+          });
+
+          const onDismissAlert = async () => {
+            if (remainingCartItems.length > 0) {
+              await AsyncStorage.setItem('cart', JSON.stringify(remainingCartItems));
+              setCartItems(remainingCartItems);
+            } else {
+              await AsyncStorage.removeItem('cart');
+              setCartItems([]);
+            }
+          };
+
+          const alertMsg = unavailableItems.length === 1
+            ? `Sorry, ${unavailableNames} is currently out of stock and has been removed from your cart.`
+            : `Sorry, ${unavailableNames} are currently out of stock and have been removed from your cart.`;
+
+          showAlert('Item Unavailable', alertMsg, onDismissAlert);
+          return;
         }
       }
     } catch (err) {
@@ -1045,7 +1137,9 @@ export default function CartScreen() {
     const restId = cartItems[0]?.restId || '';
     const distanceStr = roadDistances[restId] || '';
     const distanceVal = parseFloat(distanceStr) || 0;
-    const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
+    const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
+    const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+    const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
     const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
     const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
     const deliveryFee = baseDeliveryFee + surgeFee;
@@ -1143,7 +1237,7 @@ export default function CartScreen() {
                     flatNo,
                     street,
                     landmark,
-                    tag: selectedTag,
+                    tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
                   },
                   userCoordinates: userLocation ? {
                     lat: userLocation.latitude,
@@ -1255,7 +1349,7 @@ export default function CartScreen() {
                           flatNo,
                           street,
                           landmark,
-                          tag: selectedTag,
+                          tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
                         },
                         userCoordinates: userLocation ? {
                           lat: userLocation.latitude,
@@ -1319,7 +1413,7 @@ export default function CartScreen() {
                     flatNo,
                     street,
                     landmark,
-                    tag: selectedTag,
+                    tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
                   },
                   userCoordinates: userLocation ? {
                     lat: userLocation.latitude,
@@ -1400,7 +1494,9 @@ export default function CartScreen() {
   const platformFee = 2.00; // Constant platform fee
   const restId = targetRestId;
   const distanceVal = parseFloat(distanceStr) || 0;
-  const baseDeliveryFee = feesConfig.deliveryFeeBase + (distanceVal * feesConfig.deliveryFeePerKm);
+  const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
+  const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+  const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
   const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
   const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
   const isLocationFetched = locationStatus === 'inside';
@@ -1863,6 +1959,18 @@ export default function CartScreen() {
                       );
                     })}
                   </View>
+
+                  {/* Custom Name Input when 'Other' tag is selected */}
+                  {selectedTag === 'Other' && (
+                    <TextInput
+                      style={[styles.addressInput, { marginTop: 10 }]}
+                      placeholder="Name of this place (e.g. Friend's House, Gym, Hostel)"
+                      placeholderTextColor="#8A8A8A"
+                      value={customTag}
+                      onChangeText={setCustomTag}
+                      autoCapitalize="words"
+                    />
+                  )}
 
                   {/* Save Address Button */}
                   <TouchableOpacity

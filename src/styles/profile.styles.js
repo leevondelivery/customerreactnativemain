@@ -3,11 +3,11 @@ import { Platform, StyleSheet } from 'react-native';
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)', // off-white cream background
+    backgroundColor: 'rgb(224, 214, 188)', // matching navbar background color
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)',
+    backgroundColor: 'rgb(224, 214, 188)',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -148,7 +148,7 @@ export const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.08)', // highly transparent/faint white reflection
   },
   buttonsContainer: {
-    backgroundColor: '#E6DFCE', // soft tan container enclosing buttons
+    backgroundColor: 'rgb(224, 214, 188)', // matching navbar background color
     borderRadius: 30,
     padding: 16,
     gap: 12,
@@ -160,7 +160,7 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#F9F9F6', // matching page background color
+    backgroundColor: '#FFFFFF', // clean white button background
     borderRadius: 25,
     paddingVertical: 16,
     paddingHorizontal: 20,

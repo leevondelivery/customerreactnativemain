@@ -127,7 +127,9 @@ export default function OrderStatusScreen() {
 
   const formatCurrency = (value) => {
     if (value === undefined || value === null || value === '') return '';
-    return `₹ ${Number(value).toFixed(0)}`;
+    const num = Number(value);
+    if (isNaN(num)) return '';
+    return num % 1 === 0 ? `₹ ${num.toFixed(0)}` : `₹ ${num.toFixed(2)}`;
   };
 
   // Check if this order was already reviewed
@@ -349,13 +351,14 @@ export default function OrderStatusScreen() {
     }
   }, [handleOpenReviewModal]);
 
-  // Auto-refresh every 15 seconds while focused
+  // Auto-refresh every 15 seconds while focused & ensure navbar is visible
   useFocusEffect(
     useCallback(() => {
+      showTabBar(true);
       fetchStatus(orderStatusRef.current ? true : false);
       const interval = setInterval(() => fetchStatus(true), 15000);
       return () => clearInterval(interval);
-    }, [fetchStatus])
+    }, [fetchStatus, showTabBar])
   );
 
   const handleCallSavior = () => {
@@ -499,6 +502,20 @@ export default function OrderStatusScreen() {
   const restaurantName = orderStatus.restaurantName || orderStatus.restaurant_name || orderStatus.restName || 'Restaurant';
   const orderId = orderStatus.orderId || orderStatus.orderID || orderStatus.order_id || '';
 
+  const deliveryAddressText = orderStatus.deliveryAddress 
+    || orderStatus.address 
+    || orderStatus.customerAddress 
+    || orderStatus.userAddress
+    || (orderStatus.deliveryAddressInfo 
+        ? `${orderStatus.deliveryAddressInfo.flatNo ? orderStatus.deliveryAddressInfo.flatNo + ', ' : ''}${orderStatus.deliveryAddressInfo.street || ''}${orderStatus.deliveryAddressInfo.landmark ? ' (Near ' + orderStatus.deliveryAddressInfo.landmark + ')' : ''}`
+        : null);
+
+  const deliveryAddressTag = orderStatus.deliveryAddressInfo?.tag 
+    || orderStatus.tag 
+    || orderStatus.addressTag 
+    || orderStatus.label 
+    || null;
+
   const deliveryBoyName = orderStatus.deliveryBoyName || orderStatus.deliveryName || orderStatus.driverName || null;
   const hasDeliveryBoy = !!(deliveryBoyName && deliveryBoyName.toString().trim().length > 0);
 
@@ -517,7 +534,14 @@ export default function OrderStatusScreen() {
     ?? orderStatus.delivery_amount
     ?? '';
 
-  const gst = orderStatus.gst ?? orderStatus.GST ?? orderStatus.tax ?? '';
+  const gst = orderStatus.gst 
+    ?? orderStatus.GST 
+    ?? orderStatus.gstAmount 
+    ?? orderStatus.gst_amount 
+    ?? orderStatus.tax 
+    ?? orderStatus.taxAmount 
+    ?? orderStatus.tax_amount 
+    ?? '';
   const platformFee = orderStatus.platformFee ?? orderStatus.platform_fee ?? orderStatus.platformFeeAmount ?? '';
   const surgeFee = orderStatus.surgeFee ?? orderStatus.surge_fee ?? '';
   const grandTotal = orderStatus.grandTotal ?? orderStatus.totalPrice ?? orderStatus.total ?? orderStatus.finalTotal ?? '';
@@ -602,6 +626,28 @@ export default function OrderStatusScreen() {
             )}
           </View>
 
+          {/* Delivery Address Section */}
+          {deliveryAddressText ? (
+            <>
+              <Text style={styles.sectionLabel}>Order will be delivered to</Text>
+              <View style={styles.deliveryAddressCard}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <View style={styles.addressIconCircle}>
+                    <Feather name="map-pin" size={18} color="#2E7D32" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    {deliveryAddressTag ? (
+                      <View style={styles.addressTagBadge}>
+                        <Text style={styles.addressTagText}>{deliveryAddressTag.toUpperCase()}</Text>
+                      </View>
+                    ) : null}
+                    <Text style={styles.addressText}>{deliveryAddressText}</Text>
+                  </View>
+                </View>
+              </View>
+            </>
+          ) : null}
+
           {/* Items Table */}
           <View style={styles.itemsTableCard}>
             <View style={styles.tableHeader}>
@@ -645,9 +691,9 @@ export default function OrderStatusScreen() {
                 <Text style={[styles.summaryValue, { color: '#FF5E5E' }]}>{formatCurrency(surgeFee)}</Text>
               </View>
             )}
-            {gst !== '' && (
+            {(gst !== '' && gst !== null && gst !== undefined && Number(gst) > 0) && (
               <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>GST</Text>
+                <Text style={styles.summaryLabel}>GST (5%)</Text>
                 <Text style={styles.summaryValue}>{formatCurrency(gst)}</Text>
               </View>
             )}
