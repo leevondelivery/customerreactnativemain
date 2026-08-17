@@ -152,6 +152,32 @@ export default function OrderStatusScreen() {
     const orderId = order?.orderId || order?.orderID || order?.order_id || order?._id || '';
     if (!orderId) return;
 
+    // Don't show review modal if order was rejected or cancelled
+    const statusStr = (order?.status || order?.orderStatus || order?.order_status || '').toLowerCase();
+    const isRejectedOrCancelled =
+      statusStr.includes('reject') ||
+      statusStr.includes('cancel') ||
+      statusStr.includes('declin') ||
+      statusStr.includes('failed');
+
+    if (isRejectedOrCancelled) {
+      console.log('[OrderStatus] Order was rejected/cancelled, skipping review modal.');
+      return;
+    }
+
+    // Only allow review for orders that are actually delivered or completed
+    const isDeliveredOrCompleted =
+      statusStr.includes('delivered') ||
+      statusStr.includes('completed') ||
+      Boolean(order.completedAt) ||
+      Boolean(order.deliveredAt) ||
+      order.isCompleted === true;
+
+    if (!isDeliveredOrCompleted) {
+      console.log('[OrderStatus] Order is not completed/delivered, skipping review modal.');
+      return;
+    }
+
     // Don't show if already reviewed
     const alreadyReviewed = await isOrderAlreadyReviewed(orderId);
     if (alreadyReviewed) {
@@ -312,32 +338,44 @@ export default function OrderStatusScreen() {
           handleOpenReviewModal(data.orderStatus);
         }
       } else {
-        if (hadActiveOrderRef.current && lastActiveOrderRef.current) {
-          hadActiveOrderRef.current = false;
-          console.log('[OrderStatus] Active order disappeared. Showing review modal.');
-          handleOpenReviewModal(lastActiveOrderRef.current);
-        } else {
-          // Check user's completed orders for any unreviewed order
-          try {
-            const compRes = await fetch(`${API_URL}/orders/completed/${userid}`);
-            const compData = await compRes.json();
-            if (compRes.ok && compData.orders && compData.orders.length > 0) {
-              const sorted = [...compData.orders].reverse();
-              for (const compOrd of sorted) {
-                const compId = compOrd.orderId || compOrd.orderID || compOrd.order_id || compOrd._id || '';
-                if (compId) {
-                  const reviewed = await isOrderAlreadyReviewed(compId);
-                  if (!reviewed) {
-                    handleOpenReviewModal(compOrd);
-                    break;
-                  }
+        hadActiveOrderRef.current = false;
+        lastActiveOrderRef.current = null;
+
+        // Check user's completed orders collection ONLY for any unreviewed completed order
+        try {
+          const compRes = await fetch(`${API_URL}/orders/completed/${userid}`);
+          const compData = await compRes.json();
+          if (compRes.ok && compData.orders && compData.orders.length > 0) {
+            const sorted = [...compData.orders].reverse();
+            for (const compOrd of sorted) {
+              const compId = compOrd.orderId || compOrd.orderID || compOrd.order_id || compOrd._id || '';
+              const compStatus = (compOrd.status || compOrd.orderStatus || '').toLowerCase();
+              const isRejected =
+                compStatus.includes('reject') ||
+                compStatus.includes('cancel') ||
+                compStatus.includes('declin') ||
+                compStatus.includes('failed');
+
+              const isDeliveredOrCompleted =
+                compStatus.includes('delivered') ||
+                compStatus.includes('completed') ||
+                Boolean(compOrd.completedAt) ||
+                Boolean(compOrd.deliveredAt) ||
+                compOrd.isCompleted === true;
+
+              if (compId && !isRejected && isDeliveredOrCompleted) {
+                const reviewed = await isOrderAlreadyReviewed(compId);
+                if (!reviewed) {
+                  handleOpenReviewModal(compOrd);
+                  break;
                 }
               }
             }
-          } catch (compErr) {
-            console.warn('[OrderStatus] Error checking completed orders for review:', compErr);
           }
+        } catch (compErr) {
+          console.warn('[OrderStatus] Error checking completed orders for review:', compErr);
         }
+
         orderStatusRef.current = null;
         setOrderStatus(null);
         setError(data.message || 'No active order found');
