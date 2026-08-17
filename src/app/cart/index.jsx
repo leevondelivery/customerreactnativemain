@@ -1,4 +1,4 @@
-import { Feather, FontAwesome, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -329,13 +329,13 @@ export default function CartScreen() {
 
               const unavailableItems = [];
               for (const cartItem of currentItems) {
-                const matched = liveItems.find(live => 
+                const matched = liveItems.find(live =>
                   (cartItem._id && (String(live._id || '') === String(cartItem._id) || String(live.itemId || '') === String(cartItem._id))) ||
                   (cartItem.itemId && (String(live._id || '') === String(cartItem.itemId) || String(live.itemId || '') === String(cartItem.itemId))) ||
                   (cartItem.itemName && live.itemName && live.itemName.trim().toLowerCase() === cartItem.itemName.trim().toLowerCase())
                 );
                 if (matched) {
-                  const isOff = 
+                  const isOff =
                     matched.isAvailable === false || matched.isAvailable === 'false' || matched.isAvailable === 0 || matched.isAvailable === '0' ||
                     matched.itemStatus === false || matched.itemStatus === 'false' || matched.itemStatus === 0 || matched.itemStatus === '0' ||
                     matched.available === false || matched.available === 'false' || matched.available === 0 || matched.available === '0' ||
@@ -973,7 +973,7 @@ export default function CartScreen() {
 
     try {
       console.log('[Cart] Parallel live DB fetch for restaurant & menu status...');
-      
+
       // Execute both HTTP requests simultaneously in parallel for sub-second speed
       const cacheBustTime = Date.now();
       const [restResResult, menuResResult] = await Promise.allSettled([
@@ -986,21 +986,21 @@ export default function CartScreen() {
       if (restResResult.status === 'fulfilled' && restResResult.value && restResResult.value.ok) {
         const data = await restResResult.value.json();
         const allRest = data.restaurants || [];
-        currentRest = allRest.find(r => 
+        currentRest = allRest.find(r =>
           (targetRestId && (String(r._id || '') === String(targetRestId) || String(r.restId || '') === String(targetRestId) || String(r.id || '') === String(targetRestId))) ||
           (targetRestName && r.restaurantName && r.restaurantName.trim().toLowerCase() === targetRestName.trim().toLowerCase())
         );
       }
 
       if (!currentRest && restaurants && restaurants.length > 0) {
-        currentRest = restaurants.find(r => 
+        currentRest = restaurants.find(r =>
           (targetRestId && (String(r._id || '') === String(targetRestId) || String(r.restId || '') === String(targetRestId) || String(r.id || '') === String(targetRestId))) ||
           (targetRestName && r.restaurantName && r.restaurantName.trim().toLowerCase() === targetRestName.trim().toLowerCase())
         );
       }
 
       if (currentRest) {
-        const isRestClosed = 
+        const isRestClosed =
           currentRest.isActive === false || currentRest.isActive === 'false' || currentRest.isActive === 0 || currentRest.isActive === '0' ||
           currentRest.isactive === false || currentRest.isactive === 'false' || currentRest.isactive === 0 || currentRest.isactive === '0' ||
           currentRest.isOpen === false || currentRest.isOpen === 'false' || currentRest.isOpen === 0 || currentRest.isOpen === '0' ||
@@ -1023,14 +1023,14 @@ export default function CartScreen() {
 
         const unavailableItems = [];
         for (const cartItem of cartItems) {
-          const matchedLiveItem = liveItems.find(live => 
+          const matchedLiveItem = liveItems.find(live =>
             (cartItem._id && (String(live._id || '') === String(cartItem._id) || String(live.itemId || '') === String(cartItem._id))) ||
             (cartItem.itemId && (String(live._id || '') === String(cartItem.itemId) || String(live.itemId || '') === String(cartItem.itemId))) ||
             (cartItem.itemName && live.itemName && live.itemName.trim().toLowerCase() === cartItem.itemName.trim().toLowerCase())
           );
 
           if (matchedLiveItem) {
-            const isItemUnavailable = 
+            const isItemUnavailable =
               matchedLiveItem.isAvailable === false || matchedLiveItem.isAvailable === 'false' || matchedLiveItem.isAvailable === 0 || matchedLiveItem.isAvailable === '0' ||
               matchedLiveItem.itemStatus === false || matchedLiveItem.itemStatus === 'false' || matchedLiveItem.itemStatus === 0 || matchedLiveItem.itemStatus === '0' ||
               matchedLiveItem.available === false || matchedLiveItem.available === 'false' || matchedLiveItem.available === 0 || matchedLiveItem.available === '0' ||

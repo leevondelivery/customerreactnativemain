@@ -7,11 +7,11 @@ const CAROUSEL_HEIGHT = CAROUSEL_WIDTH * 0.545 + 5;
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F9F9F6',
+    backgroundColor: '#F7F7EB',
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#F9F9F6',
+    backgroundColor: '#F7F7EB',
     justifyContent: 'center',
     alignItems: 'center',
   },

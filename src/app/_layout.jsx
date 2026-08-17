@@ -485,8 +485,8 @@ function FloatingTabBar({
           <TouchableOpacity
             key={tab.route}
             onPress={() => {
-              if (isActive) return;
-              router.navigate(tab.route);
+              if (pathname === tab.route) return;
+              router.replace(tab.route);
             }}
             activeOpacity={0.9}
             style={styles.tabTouchArea}

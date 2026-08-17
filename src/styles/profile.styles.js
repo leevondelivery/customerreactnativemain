@@ -3,11 +3,11 @@ import { Platform, StyleSheet } from 'react-native';
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgb(224, 214, 188)', // matching navbar background color
+    backgroundColor: '#F7F7EB',
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: 'rgb(224, 214, 188)',
+    backgroundColor: '#F7F7EB',
     justifyContent: 'center',
     alignItems: 'center',
   },
