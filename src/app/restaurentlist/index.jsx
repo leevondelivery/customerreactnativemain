@@ -603,7 +603,7 @@ export default function RestaurantListScreen() {
                     style={styles.carouselImage}
                   />
                   {/* Render text overlay ONLY if title or tag exists in MongoDB item */}
-                  {(item.tag || item.title) && (
+                  {!!(item.tag || item.title) && (
                     <View style={styles.carouselOverlay}>
                       {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
                       {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
@@ -768,6 +768,18 @@ export default function RestaurantListScreen() {
               const bActive = isRestActive(b);
               if (aActive && !bActive) return -1;
               if (!aActive && bActive) return 1;
+
+              const parsePos = (val) => {
+                if (val === undefined || val === null || val === '') return 999999;
+                const num = Number(val);
+                return isNaN(num) ? 999999 : num;
+              };
+
+              const posA = parsePos(a.position ?? a.pos);
+              const posB = parsePos(b.position ?? b.pos);
+
+              if (posA !== posB) return posA - posB;
+
               return 0;
             });
 
