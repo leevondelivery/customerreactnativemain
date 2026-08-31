@@ -41,6 +41,7 @@ export default function MyDetailsScreen() {
     email: 'gs@gmail.com',
     dateOfBirth: '2003-01-04',
   });
+  const [loginType, setLoginType] = useState('phone');
   const [loading, setLoading] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editEmail, setEditEmail] = useState('');
@@ -104,6 +105,10 @@ export default function MyDetailsScreen() {
         const phone = await AsyncStorage.getItem('phone');
         const email = await AsyncStorage.getItem('email');
         const dateOfBirth = await AsyncStorage.getItem('dateOfBirth');
+        const cachedLoginType = await AsyncStorage.getItem('loginType');
+
+        const detectedLoginType = cachedLoginType === 'google' ? 'google' : 'phone';
+        setLoginType(detectedLoginType);
 
         // Extract date component (YYYY-MM-DD) from ISO format if present
         let formattedDob = '2003-01-04';
@@ -345,15 +350,14 @@ export default function MyDetailsScreen() {
     setErrorMsg('');
 
     // Validations
-    if (!editEmail.trim()) {
-      setErrorMsg('Email is required');
-      return;
+    if (loginType === 'google' && editEmail.trim()) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(editEmail.trim())) {
+        setErrorMsg('Please enter a valid email address');
+        return;
+      }
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(editEmail.trim())) {
-      setErrorMsg('Please enter a valid email address');
-      return;
-    }
+
     if (!editDob.trim()) {
       setErrorMsg('Date of birth is required');
       return;
@@ -373,28 +377,34 @@ export default function MyDetailsScreen() {
         return;
       }
 
+      const updatePayload = {
+        userid,
+        dateOfBirth: editDob.trim(),
+      };
+      if (loginType === 'google' && editEmail.trim()) {
+        updatePayload.email = editEmail.trim();
+      }
+
       const response = await fetch(`${API_URL}/user/update`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          userid,
-          email: editEmail.trim(),
-          dateOfBirth: editDob.trim(),
-        }),
+        body: JSON.stringify(updatePayload),
       });
 
       const data = await response.json();
       if (response.ok && data.success) {
         // Save to cache
-        await AsyncStorage.setItem('email', editEmail.trim());
+        if (loginType === 'google' && editEmail.trim()) {
+          await AsyncStorage.setItem('email', editEmail.trim());
+        }
         await AsyncStorage.setItem('dateOfBirth', editDob.trim());
 
         // Update state
         setUser(prev => ({
           ...prev,
-          email: editEmail.trim(),
+          ...(loginType === 'google' && editEmail.trim() ? { email: editEmail.trim() } : {}),
           dateOfBirth: editDob.trim(),
         }));
 
@@ -550,11 +560,13 @@ export default function MyDetailsScreen() {
             )}
           </View>
 
-          {/* Row 3: Email */}
-          <View style={styles.detailRow}>
-            <Feather name="mail" size={20} color="#000000" />
-            <Text style={styles.detailText}>{user.email}</Text>
-          </View>
+          {/* Row 3: Email (Shown only for Google login) */}
+          {loginType === 'google' && (
+            <View style={styles.detailRow}>
+              <Feather name="mail" size={20} color="#000000" />
+              <Text style={styles.detailText}>{user.email}</Text>
+            </View>
+          )}
 
           {/* Row 4: Date of Birth */}
           <View style={styles.detailRow}>
@@ -583,19 +595,22 @@ export default function MyDetailsScreen() {
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Edit Profile</Text>
 
-            {/* Email Field */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Email</Text>
-              <TextInput
-                style={styles.textInput}
-                value={editEmail}
-                onChangeText={setEditEmail}
-                placeholder="gs@gmail.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                editable={!updating}
-              />
-            </View>
+            {/* Email Field (Shown only for Google login) */}
+            {loginType === 'google' && (
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>Email</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  placeholder="Email address"
+                  placeholderTextColor="#000000"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  editable={!updating}
+                />
+              </View>
+            )}
 
             {/* DOB Field */}
             <View style={styles.inputContainer}>

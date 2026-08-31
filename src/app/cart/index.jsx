@@ -1,6 +1,7 @@
 import { Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -99,6 +100,7 @@ export default function CartScreen() {
   const confirmPayEnabled = useSelector((state) => state.controls.confirmPayEnabled);
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isGstExpanded, setIsGstExpanded] = useState(false);
 
   // Address flow states
   const [userid, setUserid] = useState(null);
@@ -117,6 +119,7 @@ export default function CartScreen() {
   const [customAlert, setCustomAlert] = useState({ visible: false, title: '', message: '', onOk: null });
   const [hasActiveOrder, setHasActiveOrder] = useState(false);
   const [showLocationChoiceModal, setShowLocationChoiceModal] = useState(false);
+  const [showPaymentChoiceModal, setShowPaymentChoiceModal] = useState(false);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   // confirmPayEnabled comes from Redux (polled every 5s in _layout.jsx)
 
@@ -1119,6 +1122,106 @@ export default function CartScreen() {
       return;
     }
 
+    setShowPaymentChoiceModal(true);
+  };
+
+  const processCodPayment = async () => {
+    setShowPaymentChoiceModal(false);
+    setIsProcessingPayment(true);
+
+    try {
+      const subTotal = calculateTotal();
+      let discountValAmount = 0;
+      if (appliedCoupon) {
+        if (appliedCoupon.discountType === 'flat') {
+          discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
+        } else if (appliedCoupon.discountType === 'percentage') {
+          discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+        }
+        discountValAmount = Math.round(discountValAmount * 100) / 100;
+      }
+
+      const restId = cartItems[0]?.restId || '';
+      const distanceStr = roadDistances[restId] || '';
+      const distanceVal = parseFloat(distanceStr) || 0;
+      const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
+      const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+      const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
+      const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
+      const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
+      const deliveryFee = baseDeliveryFee + surgeFee;
+      const foodGstAmount = subTotal * 0.05;
+      const deliveryGstAmount = deliveryFee * 0.18;
+      const gstAmount = foodGstAmount + deliveryGstAmount;
+      const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee);
+
+      const activeUserId = await AsyncStorage.getItem('userid');
+      const activeName = await AsyncStorage.getItem('name');
+      const activeEmail = await AsyncStorage.getItem('email');
+      const activePhone = await AsyncStorage.getItem('phone');
+      const activePhoneVerified = (await AsyncStorage.getItem('isPhoneVerified')) === 'true';
+      const restName = cartItems[0]?.restaurantName || 'Restaurant';
+
+      const codPayload = {
+        userId: activeUserId,
+        cartItems: cartItems,
+        restaurantId: restId,
+        restaurantName: restName,
+        totalPrice: subTotal,
+        gst: gstAmount,
+        foodGst: foodGstAmount,
+        deliveryGst: deliveryGstAmount,
+        platformFee: 0.00,
+        grandTotal: gTotal,
+        coinsEarned: 0,
+        userName: activeName,
+        userEmail: activeEmail,
+        userPhone: activePhone,
+        isPhoneVerified: activePhoneVerified,
+        deliveryAddressInfo: {
+          flatNo,
+          street,
+          landmark,
+          tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
+        },
+        userCoordinates: userLocation ? {
+          lat: userLocation.latitude,
+          lng: userLocation.longitude
+        } : null,
+        deliveryDistance: roadDistances[restId] || null,
+        deliveryFee: deliveryFee,
+        surgeFee: surgeFee,
+        couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
+        influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+        discountAmount: discountValAmount,
+        paymentMethod: 'UPI On Delivery',
+        paymentStatus: 'Pending',
+      };
+
+      const response = await fetch(`${API_URL}/orders/cod`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(codPayload),
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        await AsyncStorage.removeItem('cart');
+        await AsyncStorage.removeItem('applied_coupon');
+        setIsProcessingPayment(false);
+        setShowSuccessModal(true);
+      } else {
+        setIsProcessingPayment(false);
+        showAlert('Order Error', data.message || 'Failed to place order.');
+      }
+    } catch (err) {
+      setIsProcessingPayment(false);
+      console.error('UPI On Delivery Order Error:', err);
+      showAlert('Order Error', 'Failed to connect to backend server.');
+    }
+  };
+
+  const processOnlinePayment = async () => {
     const subTotal = calculateTotal();
 
     // Coupon Discount Calculation
@@ -1132,8 +1235,7 @@ export default function CartScreen() {
       discountValAmount = Math.round(discountValAmount * 100) / 100;
     }
 
-    const gstAmount = subTotal * 0.05;
-    const pFee = 2.00;
+    const pFee = 0.00;
     const restId = cartItems[0]?.restId || '';
     const distanceStr = roadDistances[restId] || '';
     const distanceVal = parseFloat(distanceStr) || 0;
@@ -1143,7 +1245,10 @@ export default function CartScreen() {
     const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
     const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
     const deliveryFee = baseDeliveryFee + surgeFee;
-    const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + pFee + deliveryFee);
+    const foodGstAmount = subTotal * 0.05;
+    const deliveryGstAmount = deliveryFee * 0.18;
+    const gstAmount = foodGstAmount + deliveryGstAmount;
+    const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee);
     // Dynamic Coins Calculation
     const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
     const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1166,7 +1271,13 @@ export default function CartScreen() {
     const activeUserId = await AsyncStorage.getItem('userid');
     const activeName = await AsyncStorage.getItem('name');
     const activeEmail = await AsyncStorage.getItem('email');
+    const activePhone = await AsyncStorage.getItem('phone');
     const activePhoneVerified = (await AsyncStorage.getItem('isPhoneVerified')) === 'true';
+
+    const rawPhone = (activePhone || '').replace(/\D/g, '');
+    const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : '';
+    const cleanEmail = (activeEmail && activeEmail.includes('@')) ? activeEmail.trim() : 'customer@leevondelivery.in';
+    const cleanName = (activeName && activeName.trim() !== '' && activeName !== 'N/A') ? activeName.trim() : 'Customer';
 
     setIsProcessingPayment(true);
 
@@ -1199,16 +1310,16 @@ export default function CartScreen() {
 
         const options = {
           description: `Order from ${restName}`,
-          image: 'https://i.imgur.com/3g7nmJC.png',
+          image: 'https://leevondelivery.in/logo.png',
           currency: 'INR',
           key: orderData.keyId,
           amount: orderData.amount,
-          name: 'Food Delivery App',
+          name: 'Leevon Delivery',
           order_id: orderData.orderId,
           prefill: {
-            email: activeEmail && activeEmail !== 'N/A' ? activeEmail : 'customer@example.com',
-            contact: activePhone && activePhone !== 'N/A' ? activePhone : '9999999999',
-            name: activeName && activeName !== 'N/A' ? activeName : 'Customer',
+            email: cleanEmail,
+            contact: cleanPhone,
+            name: cleanName,
           },
           theme: { color: '#27AE60' },
           handler: async function (paymentResult) {
@@ -1226,6 +1337,8 @@ export default function CartScreen() {
                   restaurantName: restName,
                   totalPrice: subTotal,
                   gst: gstAmount,
+                  foodGst: foodGstAmount,
+                  deliveryGst: deliveryGstAmount,
                   platformFee: pFee,
                   grandTotal: gTotal,
                   coinsEarned: coins,
@@ -1272,7 +1385,6 @@ export default function CartScreen() {
           modal: {
             ondismiss: function () {
               setIsProcessingPayment(false);
-              showAlert('Payment Cancelled', 'The payment process was closed. Please try again.');
             }
           }
         };
@@ -1294,16 +1406,16 @@ export default function CartScreen() {
 
         const options = {
           description: `Order from ${restName}`,
-          image: 'https://i.imgur.com/3g7nmJC.png',
+          image: 'https://leevondelivery.in/logo.png',
           currency: 'INR',
           key: orderData.keyId,
           amount: orderData.amount,
-          name: 'Food Delivery App',
+          name: 'Leevon Delivery',
           order_id: orderData.orderId,
           prefill: {
-            email: activeEmail && activeEmail !== 'N/A' ? activeEmail : 'customer@example.com',
-            contact: activePhone && activePhone !== 'N/A' ? activePhone : '9999999999',
-            name: activeName && activeName !== 'N/A' ? activeName : 'Customer',
+            email: cleanEmail,
+            contact: cleanPhone,
+            name: cleanName,
           },
           theme: { color: '#27AE60' },
         };
@@ -1316,8 +1428,8 @@ export default function CartScreen() {
             [
               {
                 text: 'Cancel',
-                onPress: () => setIsProcessingPayment(false),
                 style: 'cancel',
+                onPress: () => setIsProcessingPayment(false),
               },
               {
                 text: 'Simulate Success',
@@ -1402,6 +1514,8 @@ export default function CartScreen() {
                   restaurantName: restName,
                   totalPrice: subTotal,
                   gst: gstAmount,
+                  foodGst: foodGstAmount,
+                  deliveryGst: deliveryGstAmount,
                   platformFee: pFee,
                   grandTotal: gTotal,
                   coinsEarned: coins,
@@ -1447,8 +1561,7 @@ export default function CartScreen() {
           })
           .catch((error) => {
             setIsProcessingPayment(false);
-            console.log('Payment checkout failure:', error);
-            showAlert('Payment Cancelled/Failed', error.description || 'The payment process was interrupted. Please try again.');
+            console.log('[Razorpay] Payment checkout cancelled or dismissed:', error);
           });
       }
     } catch (err) {
@@ -1490,8 +1603,7 @@ export default function CartScreen() {
     discountAmount = Math.round(discountAmount * 100) / 100;
   }
 
-  const gst = total * 0.05; // 5% GST
-  const platformFee = 2.00; // Constant platform fee
+  const platformFee = 0.00; // Platform fee removed
   const restId = targetRestId;
   const distanceVal = parseFloat(distanceStr) || 0;
   const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
@@ -1501,7 +1613,10 @@ export default function CartScreen() {
   const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
   const isLocationFetched = locationStatus === 'inside';
   const deliveryFee = baseDeliveryFee + surgeFee;
-  const grandTotal = Math.max(0, total - discountAmount + gst + platformFee + deliveryFee);
+  const foodGst = total * 0.05; // 5% Food GST
+  const deliveryGst = isLocationFetched ? (deliveryFee * 0.18) : 0; // 18% Delivery GST
+  const gst = foodGst + deliveryGst;
+  const grandTotal = Math.max(0, total - discountAmount + gst + deliveryFee);
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
   const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1548,6 +1663,7 @@ export default function CartScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: 'rgb(247, 247, 235)' }}>
+      <StatusBar style="dark" backgroundColor="transparent" translucent={true} />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20 }]}
@@ -1667,14 +1783,61 @@ export default function CartScreen() {
             <Text style={styles.billLabel}>Total</Text>
             <Text style={styles.billValue}>₹{total.toFixed(2)}</Text>
           </View>
-          <View style={styles.billRow}>
-            <Text style={styles.billLabel}>GST</Text>
+          <TouchableOpacity
+            style={styles.billRow}
+            onPress={() => setIsGstExpanded(!isGstExpanded)}
+            activeOpacity={0.7}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+              <Text style={styles.billLabel}>GST</Text>
+              <Feather
+                name={isGstExpanded ? 'chevron-up' : 'chevron-down'}
+                size={16}
+                color="#555"
+              />
+            </View>
             <Text style={styles.billValue}>₹{gst.toFixed(2)}</Text>
-          </View>
-          <View style={styles.billRow}>
-            <Text style={styles.billLabel}>Platform fee</Text>
-            <Text style={styles.billValue}>₹{platformFee.toFixed(2)}</Text>
-          </View>
+          </TouchableOpacity>
+
+          {isGstExpanded && (() => {
+            const foodCgst = (foodGst / 2).toFixed(2);
+            const foodSgst = (foodGst / 2).toFixed(2);
+            const delCgst = (deliveryGst / 2).toFixed(2);
+            const delSgst = (deliveryGst / 2).toFixed(2);
+            return (
+              <View style={{ backgroundColor: '#F4F6F8', borderRadius: 10, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
+                  🍽️ Food GST (5%): ₹{foodGst.toFixed(2)}
+                </Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>CGST (2.5%)</Text>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>₹{foodCgst}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>SGST (2.5%)</Text>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>₹{foodSgst}</Text>
+                </View>
+
+                {deliveryGst > 0 && (
+                  <>
+                    <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 8 }} />
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
+                      🛵 Delivery GST (18%): ₹{deliveryGst.toFixed(2)}
+                    </Text>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
+                      <Text style={{ fontSize: 12, color: '#64748B' }}>CGST (9.0%)</Text>
+                      <Text style={{ fontSize: 12, color: '#64748B' }}>₹{delCgst}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
+                      <Text style={{ fontSize: 12, color: '#64748B' }}>SGST (9.0%)</Text>
+                      <Text style={{ fontSize: 12, color: '#64748B' }}>₹{delSgst}</Text>
+                    </View>
+                  </>
+                )}
+              </View>
+            );
+          })()}
+
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>
               Delivery fee {isLocationFetched ? `(${distanceStr})` : ''}
@@ -2001,17 +2164,18 @@ export default function CartScreen() {
                 activeOpacity={0.85}
               >
                 <View style={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 20,
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
                   backgroundColor: '#27AE60',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  alignSelf: 'center'
                 }}>
-                  <Ionicons name="location" size={22} color="#FFFFFF" />
+                  <Ionicons name="location" size={24} color="#FFFFFF" />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <View style={{ flex: 1, justifyContent: 'center', paddingTop: 2 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
                     <Text style={{ fontSize: 11, fontWeight: '800', color: '#1B5E20', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                       Order will be delivered to:
                     </Text>
@@ -2020,7 +2184,7 @@ export default function CartScreen() {
                     </View>
                   </View>
 
-                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1A1A1A' }} numberOfLines={2}>
+                  <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1A1A1A', marginTop: 1, marginBottom: 1 }} numberOfLines={2}>
                     {selectedSavedAddressId && selectedSavedAddressObj
                       ? `${selectedSavedAddressObj.tag || 'Selected Location'}: ${selectedSavedAddressObj.flatNo || ''}, ${selectedSavedAddressObj.street || ''}${selectedSavedAddressObj.landmark ? ' (Near ' + selectedSavedAddressObj.landmark + ')' : ''}`
                       : (flatNo.trim() || street.trim())
@@ -2028,7 +2192,7 @@ export default function CartScreen() {
                         : 'Current GPS Location'}
                   </Text>
 
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 }}>
                     <Ionicons name="map-outline" size={13} color="#2E7D32" />
                     <Text style={{ fontSize: 11, color: '#2E7D32', fontWeight: 'bold' }}>
                       Tap to open in Google Maps ↗
@@ -2074,7 +2238,25 @@ export default function CartScreen() {
         onRequestClose={() => setShowSuccessModal(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { position: 'relative' }]}>
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+              onPress={() => setShowSuccessModal(false)}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#1E3545" />
+            </TouchableOpacity>
             {/* Green Check Circle */}
             <View style={styles.checkmarkOuter}>
               <View style={styles.checkmarkInner}>
@@ -2118,7 +2300,25 @@ export default function CartScreen() {
         onRequestClose={() => setCustomAlert({ ...customAlert, visible: false })}
       >
         <View style={styles.alertBackdrop}>
-          <View style={styles.alertCard}>
+          <View style={[styles.alertCard, { position: 'relative' }]}>
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+              onPress={() => setCustomAlert({ ...customAlert, visible: false })}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#1E3545" />
+            </TouchableOpacity>
             <View style={[styles.alertIconContainer, { backgroundColor: '#FDF0ED' }]}>
               <Feather name="x" size={32} color="#E05A47" />
             </View>
@@ -2173,7 +2373,27 @@ export default function CartScreen() {
         }}
       >
         <View style={styles.alertBackdrop}>
-          <View style={[styles.alertCard, { backgroundColor: '#F9F9F6', padding: 24, maxWidth: 320 }]}>
+          <View style={[styles.alertCard, { backgroundColor: '#F9F9F6', padding: 24, maxWidth: 320, position: 'relative' }]}>
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+              onPress={() => {
+                if (!otpLoading) setShowPhoneOTPModal(false);
+              }}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#1E3545" />
+            </TouchableOpacity>
             <View style={[styles.alertIconContainer, { backgroundColor: '#1E3545', marginBottom: 15 }]}>
               <Feather name="phone" size={28} color="#FFFFFF" />
             </View>
@@ -2343,7 +2563,25 @@ export default function CartScreen() {
         onRequestClose={() => setShowLocationChoiceModal(false)}
       >
         <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
-          <View style={{ width: '85%', maxWidth: 360, maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 22, alignItems: 'center' }}>
+          <View style={{ width: '85%', maxWidth: 360, maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 22, alignItems: 'center', position: 'relative' }}>
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+              onPress={() => setShowLocationChoiceModal(false)}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#1E3545" />
+            </TouchableOpacity>
             <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: '#F0F6F0', justifyContent: 'center', alignItems: 'center', marginBottom: 14 }}>
               <Feather name="map-pin" size={28} color="#2B783E" />
             </View>
@@ -2438,6 +2676,115 @@ export default function CartScreen() {
                 Cancel
               </Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Select Payment Method Modal */}
+      <Modal
+        visible={showPaymentChoiceModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowPaymentChoiceModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContent, { position: 'relative', padding: 22, maxWidth: 360 }]}>
+            {/* Top Right Close X Button */}
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10
+              }}
+              onPress={() => setShowPaymentChoiceModal(false)}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#1E3545" />
+            </TouchableOpacity>
+
+            <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name="card-outline" size={28} color="#27AE60" />
+            </View>
+
+            <Text style={{ fontSize: 20, fontWeight: '800', color: '#1A1A1A', textAlign: 'center', marginBottom: 4 }}>
+              Select Payment Method
+            </Text>
+            <Text style={{ fontSize: 13, color: '#666666', textAlign: 'center', marginBottom: 18 }}>
+              Choose your preferred payment option:
+            </Text>
+
+            {/* Option 1: UPI On Delivery */}
+            <TouchableOpacity
+              style={{
+                width: '100%',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#FFFFFF',
+                borderColor: '#27AE60',
+                borderWidth: 1.5,
+                borderRadius: 18,
+                padding: 16,
+                marginBottom: 12,
+                gap: 12
+              }}
+              onPress={processCodPayment}
+              activeOpacity={0.85}
+            >
+              <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="qr-code-outline" size={22} color="#27AE60" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
+                  UPI On Delivery
+                </Text>
+                <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
+                  Pay via UPI QR Code or cash at doorstep
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color="#27AE60" />
+            </TouchableOpacity>
+
+            {/* Option 2: Pay Online (Razorpay) */}
+            <TouchableOpacity
+              style={{
+                width: '100%',
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#FFFFFF',
+                borderColor: '#E4E1D8',
+                borderWidth: 1.5,
+                borderRadius: 18,
+                padding: 16,
+                marginBottom: 16,
+                gap: 12
+              }}
+              onPress={() => {
+                setShowPaymentChoiceModal(false);
+                processOnlinePayment();
+              }}
+              activeOpacity={0.85}
+            >
+              <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
+                <Ionicons name="card" size={22} color="#E65100" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
+                  Pay Online
+                </Text>
+                <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
+                  Razorpay / UPI / Cards / NetBanking
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={18} color="#E65100" />
+            </TouchableOpacity>
+
           </View>
         </View>
       </Modal>
@@ -2612,10 +2959,15 @@ const styles = StyleSheet.create({
   clearButton: {
     flex: 1,
     backgroundColor: '#FF5E5E',
-    borderRadius: 25,
-    paddingVertical: 14,
+    borderRadius: 32,
+    paddingVertical: 16,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#FF5E5E',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 3,
   },
   clearButtonText: {
     color: '#FFFFFF',
@@ -2625,15 +2977,22 @@ const styles = StyleSheet.create({
   checkoutButton: {
     flex: 1.2,
     backgroundColor: '#27AE60',
-    borderRadius: 25,
-    paddingVertical: 14,
+    borderRadius: 32,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#27AE60',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
   },
   checkoutButtonText: {
     color: '#FFFFFF',
     fontWeight: 'bold',
-    fontSize: 15,
+    fontSize: 16,
+    letterSpacing: 0.3,
   },
   iconCircle: {
     width: 120,
@@ -2725,16 +3084,23 @@ const styles = StyleSheet.create({
   },
   saveAddressButton: {
     backgroundColor: '#FF5E5E',
-    borderRadius: 24,
-    paddingVertical: 14,
+    borderRadius: 32,
+    paddingVertical: 16,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     marginVertical: 16,
+    shadowColor: '#FF5E5E',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
   },
   saveAddressButtonText: {
     color: '#FFFFFF',
     fontWeight: 'bold',
-    fontSize: 15,
+    fontSize: 16,
+    letterSpacing: 0.3,
   },
   savedSection: {
     marginTop: 10,
@@ -2795,16 +3161,25 @@ const styles = StyleSheet.create({
   },
   confirmOrderButton: {
     backgroundColor: '#27AE60',
-    borderRadius: 25,
-    paddingVertical: 16,
+    borderRadius: 35,
+    paddingVertical: 18,
+    paddingHorizontal: 24,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 20,
+    shadowColor: '#27AE60',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 6,
   },
   confirmOrderButtonText: {
     color: '#FFFFFF',
     fontWeight: 'bold',
-    fontSize: 16,
+    fontSize: 17,
+    letterSpacing: 0.4,
+    textAlign: 'center',
   },
   savedCardRight: {
     flexDirection: 'row',
@@ -3045,31 +3420,43 @@ const styles = StyleSheet.create({
   },
   alertButton: {
     backgroundColor: '#E05A47',
-    borderRadius: 20,
-    paddingVertical: 12,
+    borderRadius: 30,
+    paddingVertical: 15,
     paddingHorizontal: 24,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#E05A47',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 3,
   },
   modalButton: {
     backgroundColor: '#27AE60',
-    borderRadius: 20,
-    paddingVertical: 12,
+    borderRadius: 30,
+    paddingVertical: 15,
     paddingHorizontal: 24,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#27AE60',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   alertButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: 'bold',
+    letterSpacing: 0.3,
   },
   modalButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: 'bold',
+    letterSpacing: 0.3,
   },
 });
 

@@ -1,8 +1,9 @@
 import { FontAwesome, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, Animated, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View, StatusBar as RNStatusBar } from 'react-native';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
@@ -63,7 +64,7 @@ export default function Layout() {
     },
     {
       route: '/profile',
-      icon: (isActive) => <FontAwesome name="user" size={isActive ? 22 : 18} color="#000000" />,
+      icon: (isActive) => <FontAwesome name="gear" size={isActive ? 22 : 18} color="#000000" />,
     },
   ];
 
@@ -128,14 +129,10 @@ export default function Layout() {
       }
 
       const userid = await AsyncStorage.getItem('userid');
-      const phone = await AsyncStorage.getItem('phone');
-      const name = await AsyncStorage.getItem('name');
-      const email = await AsyncStorage.getItem('email');
       const logintime = await AsyncStorage.getItem('logintime');
-      const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
 
-      if (!userid || !phone || !name || !email || !logintime || !isPhoneVerified) {
-        console.log('[Layout] Session verification failed: Missing required fields. Redirecting to login.');
+      if (!userid || !logintime) {
+        console.log('[Layout] Session verification failed: Missing userid or logintime. Redirecting to login.');
         await AsyncStorage.clear();
         router.replace('/login');
         return;
@@ -362,8 +359,18 @@ function MainLayoutContent({
     return () => clearInterval(controlsInterval);
   }, [dispatch]);
 
+  useEffect(() => {
+    RNStatusBar.setBarStyle('dark-content', true);
+    if (Platform.OS === 'android') {
+      RNStatusBar.setBackgroundColor('transparent', true);
+      RNStatusBar.setTranslucent(true);
+    }
+  }, [pathname]);
+
   return (
     <View style={styles.rootContainer}>
+      <StatusBar style="dark" backgroundColor="transparent" translucent={true} animated={true} />
+      <RNStatusBar barStyle="dark-content" backgroundColor="transparent" translucent={true} animated={true} />
       <View style={styles.contentArea}>
         <Slot />
       </View>

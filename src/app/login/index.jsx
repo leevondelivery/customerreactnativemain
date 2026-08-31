@@ -63,8 +63,7 @@ export default function LoginScreen() {
   const [showForgotPasswordNewPassword, setShowForgotPasswordNewPassword] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
   const [isFallbackOtpMode, setIsFallbackOtpMode] = useState(false);
-  const [showSupportInline, setShowSupportInline] = useState(false);
-  const [showForgotPasswordSupportInline, setShowForgotPasswordSupportInline] = useState(false);
+  const [showSupportModal, setShowSupportModal] = useState(false);
 
 
   const [showErrorModal, setShowErrorModal] = useState(false);
@@ -74,6 +73,12 @@ export default function LoginScreen() {
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
     try {
+      if (GoogleSignin) {
+        GoogleSignin.configure({
+          webClientId: '549037342596-kkd837btqfu8dfprgtupmpprmiarc5e7.apps.googleusercontent.com',
+          offlineAccess: true,
+        });
+      }
       console.log('[Google Login] Checking play services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
@@ -85,12 +90,20 @@ export default function LoginScreen() {
         console.log('[Google Login] Error signing out before sign in:', signOutError);
       }
 
-      await GoogleSignin.signIn();
+      const signInResponse = await GoogleSignin.signIn();
+      console.log('[Google Login] Sign in response received.');
 
-      console.log('[Google Login] Fetching access and ID tokens...');
+      console.log('[Google Login] Fetching tokens from Google Play Services...');
       const tokens = await GoogleSignin.getTokens();
-      const idToken = tokens.idToken;
-      const accessToken = tokens.accessToken;
+      const idToken = tokens.idToken || signInResponse?.data?.idToken || signInResponse?.idToken;
+      const accessToken = tokens.accessToken || signInResponse?.data?.accessToken || signInResponse?.accessToken;
+
+      if (!idToken) {
+        throw new Error('Google ID token is missing. Please try again.');
+      }
+      if (!accessToken) {
+        throw new Error('Google Access token is missing. Please try again.');
+      }
 
       console.log('[Google Login] Firebase authenticating credential...');
       const googleCredential = GoogleAuthProvider.credential(idToken, accessToken);
@@ -136,6 +149,7 @@ export default function LoginScreen() {
             : 'N/A');
         await AsyncStorage.setItem('email', displayEmail);
         await AsyncStorage.setItem('logintime', logintime);
+        await AsyncStorage.setItem('loginType', 'google');
         await AsyncStorage.setItem('coins', String(user.coins ?? 0));
         await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
 
@@ -146,7 +160,8 @@ export default function LoginScreen() {
       }
     } catch (error) {
       console.error('[Google Login] Flow error:', error);
-      setErrorMessage('Google Sign-in failed. Please verify your Google account or connection.');
+      const detail = error.message || error.code || JSON.stringify(error);
+      setErrorMessage(`Google Sign-in failed: ${detail}`);
       setShowErrorModal(true);
     } finally {
       setGoogleLoading(false);
@@ -164,14 +179,10 @@ export default function LoginScreen() {
         if (lastCheckStr !== todayStr) {
           const storedUserId = await AsyncStorage.getItem('userid');
           if (storedUserId) {
-            const phone = await AsyncStorage.getItem('phone');
-            const name = await AsyncStorage.getItem('name');
-            const email = await AsyncStorage.getItem('email');
             const logintime = await AsyncStorage.getItem('logintime');
-            const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
 
-            if (!phone || !name || !email || !logintime || !isPhoneVerified) {
-              console.log('[Session] Daily check: Required session fields are missing. Clearing storage.');
+            if (!logintime) {
+              console.log('[Session] Daily check: Required logintime missing. Clearing storage.');
               await AsyncStorage.clear();
             } else {
               await AsyncStorage.setItem('lastDailyFieldsCheck', todayStr);
@@ -231,7 +242,7 @@ export default function LoginScreen() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ phone: mobile, password }),
+        body: JSON.stringify({ phone: mobile.trim(), email: mobile.trim(), identifier: mobile.trim(), password }),
       });
 
       const data = await response.json();
@@ -248,6 +259,7 @@ export default function LoginScreen() {
         await AsyncStorage.setItem('name', user.name || 'N/A');
         await AsyncStorage.setItem('email', user.email || 'N/A');
         await AsyncStorage.setItem('logintime', logintime);
+        await AsyncStorage.setItem('loginType', 'phone');
         await AsyncStorage.setItem('coins', String(user.coins ?? 0));
         await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
 
@@ -502,6 +514,93 @@ export default function LoginScreen() {
         </View>
       </Modal>
 
+      {/* Customer Support Card Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showSupportModal}
+        onRequestClose={() => setShowSupportModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.supportModalCard}>
+            {/* Header with Title & X Close Button */}
+            <View style={styles.supportHeaderRow}>
+              <View style={styles.supportTitleContainer}>
+                <Feather name="headphones" size={20} color="#E05A47" />
+                <Text style={styles.supportTitleText}>Customer Support</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.supportCloseIconButton}
+                onPress={() => setShowSupportModal(false)}
+                activeOpacity={0.7}
+              >
+                <Feather name="x" size={18} color="#555555" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.supportSubText}>
+              Have questions or need help logging in? Reach out to our support team directly.
+            </Text>
+
+            {/* Support Options */}
+            <View style={styles.supportOptionsContainer}>
+              {/* Phone Support */}
+              <View style={styles.supportOptionCard}>
+                <View style={styles.supportOptionLeft}>
+                  <View style={[styles.supportIconCircle, { backgroundColor: '#E8F5E9' }]}>
+                    <Feather name="phone-call" size={18} color="#2E7D32" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.supportOptionLabel}>PHONE SUPPORT</Text>
+                    <Text style={styles.supportOptionValue}>{CONTACT_INFO.displayPhone}</Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.supportCallButton}
+                  onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.supportCallButtonText}>Call</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Email Support */}
+              <View style={styles.supportOptionCard}>
+                <View style={styles.supportOptionLeft}>
+                  <View style={[styles.supportIconCircle, { backgroundColor: '#E3F2FD' }]}>
+                    <Feather name="mail" size={18} color="#1877F2" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.supportOptionLabel}>EMAIL SUPPORT</Text>
+                    <Text style={styles.supportOptionValue} numberOfLines={1}>
+                      {CONTACT_INFO.email}
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  style={styles.supportEmailButton}
+                  onPress={() => Linking.openURL(`mailto:${CONTACT_INFO.email}`)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.supportEmailButtonText}>Email</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* OK Close Button */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.supportOkButton,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => setShowSupportModal(false)}
+            >
+              <Text style={styles.supportOkButtonText}>OK</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       {/* Forgot Password Modal */}
       <Modal
         animationType="slide"
@@ -633,55 +732,14 @@ export default function LoginScreen() {
 
               <TouchableOpacity
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingVertical: 4 }}
-                onPress={() => setShowForgotPasswordSupportInline(!showForgotPasswordSupportInline)}
+                onPress={() => setShowSupportModal(true)}
                 activeOpacity={0.7}
               >
                 <Feather name="headphones" size={14} color="#E05A47" />
                 <Text style={{ color: '#E05A47', fontWeight: 'bold', fontSize: 13 }}>
-                  {showForgotPasswordSupportInline ? 'Hide Support' : 'Need Support?'}
+                  Need Support?
                 </Text>
               </TouchableOpacity>
-
-              {showForgotPasswordSupportInline && (
-                <View style={{
-                  width: '100%',
-                  backgroundColor: '#F9F9F6',
-                  borderRadius: 14,
-                  padding: 12,
-                  marginTop: 10,
-                  borderWidth: 1,
-                  borderColor: '#EFEBE4',
-                  gap: 10,
-                }}>
-                  {/* Phone Support */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                      <Feather name="phone-call" size={15} color="#2E7D32" />
-                      <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#000000' }}>{CONTACT_INFO.displayPhone}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#2E7D32', borderRadius: 8, paddingVertical: 4, paddingHorizontal: 12 }}
-                      onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`)}
-                    >
-                      <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>Call</Text>
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Email Support */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                      <Feather name="mail" size={15} color="#1877F2" />
-                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#000000' }} numberOfLines={1}>{CONTACT_INFO.email}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={{ backgroundColor: '#1877F2', borderRadius: 8, paddingVertical: 4, paddingHorizontal: 12 }}
-                      onPress={() => Linking.openURL(`mailto:${CONTACT_INFO.email}`)}
-                    >
-                      <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>Email</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
             </View>
           </View>
         </View>
@@ -838,7 +896,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           {/* Divider */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', width: '85%', marginVertical: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', width: '85%', marginVertical: 4 }}>
             <View style={{ flex: 1, height: 1, backgroundColor: '#7E7C77' }} />
             <Text style={{ marginHorizontal: 12, color: '#7E7C77', fontSize: 13, fontWeight: '700' }}>OR</Text>
             <View style={{ flex: 1, height: 1, backgroundColor: '#7E7C77' }} />
@@ -853,8 +911,9 @@ export default function LoginScreen() {
                 backgroundColor: '#FFFFFF',
                 flexDirection: 'row',
                 alignItems: 'center',
-                gap: 12,
-                paddingHorizontal: 30,
+                gap: 10,
+                paddingHorizontal: 24,
+                paddingVertical: 12,
               }
             ]}
             onPress={handleGoogleLogin}
@@ -865,7 +924,7 @@ export default function LoginScreen() {
             ) : (
               <>
                 <FontAwesome name="google" size={18} color="#DB4437" />
-                <Text style={[styles.buttonText, { fontSize: 16 }]}>
+                <Text style={[styles.buttonText, { fontSize: 15 }]}>
                   {isSignUp ? 'Sign up with Google' : 'Continue with Google'}
                 </Text>
               </>
@@ -878,78 +937,21 @@ export default function LoginScreen() {
               flexDirection: 'row',
               alignItems: 'center',
               gap: 8,
-              marginTop: 18,
-              marginBottom: 6,
-              paddingVertical: 8,
-              paddingHorizontal: 18,
+              marginTop: 6,
+              marginBottom: 4,
+              paddingVertical: 6,
+              paddingHorizontal: 16,
               backgroundColor: 'rgba(0, 0, 0, 0.05)',
               borderRadius: 20,
             }}
-            onPress={() => setShowSupportInline(!showSupportInline)}
+            onPress={() => setShowSupportModal(true)}
             activeOpacity={0.75}
           >
             <Feather name="headphones" size={16} color="#000000" />
             <Text style={{ color: '#000000', fontWeight: 'bold', fontSize: 13 }}>
-              {showSupportInline ? 'Hide Support' : 'Need Support?'}
+              Need Support?
             </Text>
           </TouchableOpacity>
-
-          {/* Inline Support Details */}
-          {showSupportInline && (
-            <View style={{
-              width: '85%',
-              backgroundColor: '#FFFFFF',
-              borderRadius: 16,
-              padding: 14,
-              marginBottom: 16,
-              borderWidth: 1,
-              borderColor: '#EFEBE4',
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 2 },
-              shadowOpacity: 0.08,
-              shadowRadius: 4,
-              elevation: 2,
-              gap: 12,
-            }}>
-              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#000000', textAlign: 'center', marginBottom: 2 }}>
-                Customer Support
-              </Text>
-              
-              {/* Phone Support */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                  <Feather name="phone-call" size={16} color="#2E7D32" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 10, color: '#7E7C77', fontWeight: 'bold' }}>PHONE SUPPORT</Text>
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#000000', marginTop: 1 }}>{CONTACT_INFO.displayPhone}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#2E7D32', borderRadius: 10, paddingVertical: 5, paddingHorizontal: 14 }}
-                  onPress={() => Linking.openURL(`tel:${CONTACT_INFO.phone}`)}
-                >
-                  <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>Call</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Email Support */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                  <Feather name="mail" size={16} color="#1877F2" />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 10, color: '#7E7C77', fontWeight: 'bold' }}>EMAIL SUPPORT</Text>
-                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#000000', marginTop: 1 }} numberOfLines={1}>{CONTACT_INFO.email}</Text>
-                  </View>
-                </View>
-                <TouchableOpacity
-                  style={{ backgroundColor: '#1877F2', borderRadius: 10, paddingVertical: 5, paddingHorizontal: 14 }}
-                  onPress={() => Linking.openURL(`mailto:${CONTACT_INFO.email}`)}
-                >
-                  <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>Email</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

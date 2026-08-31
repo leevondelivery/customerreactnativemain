@@ -1,6 +1,8 @@
+
 import { Feather, FontAwesome, FontAwesome5, MaterialIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -79,6 +81,7 @@ export default function OrderStatusScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [isGstExpanded, setIsGstExpanded] = useState(false);
 
   // ── Review Modal State ────────────────────────────────────────────────────
   const [showReviewModal, setShowReviewModal] = useState(false);
@@ -129,7 +132,7 @@ export default function OrderStatusScreen() {
     if (value === undefined || value === null || value === '') return '';
     const num = Number(value);
     if (isNaN(num)) return '';
-    return num % 1 === 0 ? `₹ ${num.toFixed(0)}` : `₹ ${num.toFixed(2)}`;
+    return `₹ ${num.toFixed(2)}`;
   };
 
   // Check if this order was already reviewed
@@ -333,8 +336,24 @@ export default function OrderStatusScreen() {
         orderStatusRef.current = data.orderStatus;
         setOrderStatus(data.orderStatus);
 
-        const statusStr = (data.orderStatus.status || '').toLowerCase();
-        if (statusStr.includes('delivered') || statusStr.includes('completed')) {
+        const statusStr = (data.orderStatus.status || '').toLowerCase().trim();
+        const isOngoing = 
+          statusStr.includes('accept') ||
+          statusStr.includes('assign') ||
+          statusStr.includes('way') ||
+          statusStr.includes('prep') ||
+          statusStr.includes('place') ||
+          statusStr.includes('pickup') ||
+          statusStr.includes('doorstep');
+
+        const isStrictlyDelivered = !isOngoing && (
+          statusStr === 'delivered' ||
+          statusStr === 'order delivered' ||
+          statusStr === 'completed' ||
+          statusStr === 'order completed'
+        );
+
+        if (isStrictlyDelivered) {
           handleOpenReviewModal(data.orderStatus);
         }
       } else {
@@ -349,21 +368,30 @@ export default function OrderStatusScreen() {
             const sorted = [...compData.orders].reverse();
             for (const compOrd of sorted) {
               const compId = compOrd.orderId || compOrd.orderID || compOrd.order_id || compOrd._id || '';
-              const compStatus = (compOrd.status || compOrd.orderStatus || '').toLowerCase();
+              const compStatus = (compOrd.status || compOrd.orderStatus || '').toLowerCase().trim();
               const isRejected =
                 compStatus.includes('reject') ||
                 compStatus.includes('cancel') ||
                 compStatus.includes('declin') ||
                 compStatus.includes('failed');
 
-              const isDeliveredOrCompleted =
-                compStatus.includes('delivered') ||
-                compStatus.includes('completed') ||
-                Boolean(compOrd.completedAt) ||
-                Boolean(compOrd.deliveredAt) ||
-                compOrd.isCompleted === true;
+              const isCompOngoing = 
+                compStatus.includes('accept') ||
+                compStatus.includes('assign') ||
+                compStatus.includes('way') ||
+                compStatus.includes('prep') ||
+                compStatus.includes('place') ||
+                compStatus.includes('pickup') ||
+                compStatus.includes('doorstep');
 
-              if (compId && !isRejected && isDeliveredOrCompleted) {
+              const isFullyDelivered = !isCompOngoing && !isRejected && (
+                compStatus === 'delivered' ||
+                compStatus === 'order delivered' ||
+                compStatus === 'completed' ||
+                compStatus === 'order completed'
+              );
+
+              if (compId && isFullyDelivered) {
                 const reviewed = await isOrderAlreadyReviewed(compId);
                 if (!reviewed) {
                   handleOpenReviewModal(compOrd);
@@ -599,12 +627,26 @@ export default function OrderStatusScreen() {
   }
 
   const paymentStatus = orderStatus.paymentStatus || 'Paid';
-  const paymentId = orderStatus.razorpayPaymentId || orderStatus.paymentId || '';
-  const razorpayOrderId = orderStatus.razorpayOrderId || orderStatus.orderId || '';
-  const otp = razorpayOrderId ? razorpayOrderId.toString().slice(-5) : '';
+  const isPaid = String(paymentStatus).trim().toLowerCase() === 'paid';
+  const rawRzpOrderId = (
+    orderStatus.razorpayOrderId || 
+    orderStatus.razorpay_order_id || 
+    orderStatus.razorpayOrder || 
+    orderStatus.razorpay_order_ID || 
+    orderStatus.razorpay_orderid || 
+    orderStatus.rzpOrderId || 
+    ''
+  ).toString().trim();
+  const cleanedRzpId = rawRzpOrderId.replace(/^(order_|ord_)/i, '');
+  const rzpDigits = cleanedRzpId.replace(/\D/g, '');
+  const rzpCode = rzpDigits ? rzpDigits.slice(-5) : (cleanedRzpId ? cleanedRzpId.slice(-5).toUpperCase() : '');
+  const fallbackDigits = (orderStatus.orderId || '').toString().replace(/\D/g, '');
+  const finalOtpCode = rzpCode || (fallbackDigits ? fallbackDigits.slice(-5) : '');
+  const otp = isPaid && finalOtpCode ? finalOtpCode.padStart(5, '0') : '';
 
   return (
     <View style={styles.container}>
+      <StatusBar style="dark" backgroundColor="transparent" translucent={true} />
       {renderReviewModal()}
 
       <ScrollView
@@ -635,7 +677,7 @@ export default function OrderStatusScreen() {
           {/* Order Details */}
           <Text style={styles.sectionLabel}>Order details</Text>
           <View style={styles.orderIdBadge}>
-            <Text style={styles.orderIdText}>Order ID - {orderId}</Text>
+            <Text style={styles.orderIdText}>Order ID - {String(orderId).replace(/^ord-/i, '')}</Text>
           </View>
 
           {/* 3-Stage Progress Bar */}
@@ -669,7 +711,7 @@ export default function OrderStatusScreen() {
             <>
               <Text style={styles.sectionLabel}>Order will be delivered to</Text>
               <View style={styles.deliveryAddressCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                   <View style={styles.addressIconCircle}>
                     <Feather name="map-pin" size={18} color="#2E7D32" />
                   </View>
@@ -730,17 +772,66 @@ export default function OrderStatusScreen() {
               </View>
             )}
             {(gst !== '' && gst !== null && gst !== undefined && Number(gst) > 0) && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>GST (5%)</Text>
-                <Text style={styles.summaryValue}>{formatCurrency(gst)}</Text>
-              </View>
+              <>
+                <TouchableOpacity
+                  style={styles.summaryRow}
+                  onPress={() => setIsGstExpanded(!isGstExpanded)}
+                  activeOpacity={0.7}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 3 }}>
+                    <Text style={[styles.summaryLabel, { flex: 0 }]}>GST</Text>
+                    <Feather
+                      name={isGstExpanded ? 'chevron-up' : 'chevron-down'}
+                      size={16}
+                      color="#555"
+                    />
+                  </View>
+                  <Text style={styles.summaryValue}>{formatCurrency(gst)}</Text>
+                </TouchableOpacity>
+                {isGstExpanded && (() => {
+                  const foodGstVal = orderStatus.foodGst !== undefined ? Number(orderStatus.foodGst) : ((Number(subTotal) || 0) * 0.05);
+                  const delFeeVal = Number(deliveryCharges) || 0;
+                  const deliveryGstVal = orderStatus.deliveryGst !== undefined ? Number(orderStatus.deliveryGst) : (delFeeVal * 0.18);
+                  const fCgst = (foodGstVal / 2);
+                  const fSgst = (foodGstVal / 2);
+                  const dCgst = (deliveryGstVal / 2);
+                  const dSgst = (deliveryGstVal / 2);
+                  return (
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
+                        🍽️ Food GST (5%): {formatCurrency(foodGstVal)}
+                      </Text>
+                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                        <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (2.5%)</Text>
+                        <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(fCgst)}</Text>
+                      </View>
+                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                        <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>SGST (2.5%)</Text>
+                        <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(fSgst)}</Text>
+                      </View>
+
+                      {deliveryGstVal > 0 && (
+                        <>
+                          <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 6 }} />
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
+                            🛵 Delivery GST (18%): {formatCurrency(deliveryGstVal)}
+                          </Text>
+                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                            <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (9.0%)</Text>
+                            <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(dCgst)}</Text>
+                          </View>
+                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                            <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>SGST (9.0%)</Text>
+                            <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(dSgst)}</Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  );
+                })()}
+              </>
             )}
-            {platformFee !== '' && (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Platform Fee</Text>
-                <Text style={styles.summaryValue}>{formatCurrency(platformFee)}</Text>
-              </View>
-            )}
+
             {discountAmount !== '' && Number(discountAmount) > 0 && (
               <View style={styles.summaryRow}>
                 <Text style={[styles.summaryLabel, { color: '#2B783E', fontWeight: '700' }]}>
@@ -767,17 +858,18 @@ export default function OrderStatusScreen() {
                 <Text style={styles.paidBadgeText}>{paymentStatus}</Text>
               </View>
             </View>
-            {paymentId ? (
-              <Text style={styles.paymentIdText}>
-                Payment ID <Text style={styles.paymentIdValue}>{paymentId}</Text>
-              </Text>
-            ) : null}
           </View>
 
           {/* OTP */}
           {otp ? (
             <View style={styles.otpBox}>
               <Text style={styles.otpText}>OTP - {otp}</Text>
+            </View>
+          ) : !isPaid ? (
+            <View style={[styles.otpBox, { backgroundColor: '#FFF3E0', paddingHorizontal: 16 }]}>
+              <Text style={[styles.otpText, { fontSize: 13, letterSpacing: 0, color: '#E65100', textAlign: 'center' }]}>
+                Scan & Pay Delivery Partner via QR Code at doorstep to reveal your 5-digit OTP.
+              </Text>
             </View>
           ) : null}
 

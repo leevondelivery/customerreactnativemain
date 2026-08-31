@@ -19,14 +19,10 @@ export default function Index() {
         if (lastCheckStr !== todayStr) {
           const storedUserId = await AsyncStorage.getItem('userid');
           if (storedUserId) {
-            const phone = await AsyncStorage.getItem('phone');
-            const name = await AsyncStorage.getItem('name');
-            const email = await AsyncStorage.getItem('email');
             const logintime = await AsyncStorage.getItem('logintime');
-            const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
 
-            if (!phone || !name || !email || !logintime || !isPhoneVerified) {
-              console.log('[Session] Daily check: Required session fields are missing. Clearing storage.');
+            if (!logintime) {
+              console.log('[Session] Daily check: Required logintime missing. Clearing storage.');
               await AsyncStorage.clear();
             } else {
               await AsyncStorage.setItem('lastDailyFieldsCheck', todayStr);

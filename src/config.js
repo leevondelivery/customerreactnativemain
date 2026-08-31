@@ -1,12 +1,14 @@
-const getApiUrl = () => {
-  // For local web browser testing:
-  // return 'http://localhost:5000';
-  
-  // Production URL:
-  // return 'https://api.leevondelivery.in';
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
-  // Temporary Render URL:
-  return 'https://customerbackendfile.onrender.com';
+const getApiUrl = () => {
+  // If explicitly set via environment variable:
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+
+  // Production Railway backend URL:
+  return 'https://customerbackendfile-production.up.railway.app';
 };
 
 export const API_URL = getApiUrl();
@@ -23,3 +25,4 @@ export const CONTACT_INFO = {
     facebook: 'https://www.facebook.com/profile.php?id=61588710924852',
   },
 };
+

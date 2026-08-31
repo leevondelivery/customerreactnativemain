@@ -210,16 +210,44 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
               <td style="color: #EF4444;">Surge Fee:</td>
               <td style="text-align: right; font-weight: 600; color: #EF4444;">₹${Number(surgeFee).toFixed(2)}</td>
             </tr>` : ''}
-            ${gst ? `
-            <tr>
-              <td style="color: #6B7280;">GST & Taxes:</td>
-              <td style="text-align: right; font-weight: 600;">₹${Number(gst).toFixed(2)}</td>
-            </tr>` : ''}
-            ${platformFee ? `
-            <tr>
-              <td style="color: #6B7280;">Platform Fee:</td>
-              <td style="text-align: right; font-weight: 600;">₹${Number(platformFee).toFixed(2)}</td>
-            </tr>` : ''}
+            ${gst ? (() => {
+               const gNum = Number(gst) || 0;
+               const foodGstVal = order.foodGst !== undefined ? Number(order.foodGst) : ((Number(subTotal || order.totalPrice) || 0) * 0.05);
+               const delFeeVal = Number(deliveryFee) || 0;
+               const deliveryGstVal = order.deliveryGst !== undefined ? Number(order.deliveryGst) : (delFeeVal * 0.18);
+               const fHalf = (foodGstVal / 2).toFixed(2);
+               const dHalf = (deliveryGstVal / 2).toFixed(2);
+               return `
+             <tr>
+               <td style="color: #1F2937; font-weight: 700;">GST & Taxes (Total):</td>
+               <td style="text-align: right; font-weight: 700; color: #1F2937;">₹${gNum.toFixed(2)}</td>
+             </tr>
+             <tr>
+               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">🍽️ Food GST (5%):</td>
+               <td style="text-align: right; font-size: 12px; color: #4B5563; font-weight: 600;">₹${foodGstVal.toFixed(2)}</td>
+             </tr>
+             <tr>
+               <td style="color: #9CA3AF; font-size: 11px; padding-left: 18px;">CGST (2.5%):</td>
+               <td style="text-align: right; font-size: 11px; color: #6B7280;">₹${fHalf}</td>
+             </tr>
+             <tr>
+               <td style="color: #9CA3AF; font-size: 11px; padding-left: 18px;">SGST (2.5%):</td>
+               <td style="text-align: right; font-size: 11px; color: #6B7280;">₹${fHalf}</td>
+             </tr>
+             ${deliveryGstVal > 0 ? `
+             <tr>
+               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">🛵 Delivery Services GST (18%):</td>
+               <td style="text-align: right; font-size: 12px; color: #4B5563; font-weight: 600;">₹${deliveryGstVal.toFixed(2)}</td>
+             </tr>
+             <tr>
+               <td style="color: #9CA3AF; font-size: 11px; padding-left: 18px;">CGST (9.0%):</td>
+               <td style="text-align: right; font-size: 11px; color: #6B7280;">₹${dHalf}</td>
+             </tr>
+             <tr>
+               <td style="color: #9CA3AF; font-size: 11px; padding-left: 18px;">SGST (9.0%):</td>
+               <td style="text-align: right; font-size: 11px; color: #6B7280;">₹${dHalf}</td>
+             </tr>` : ''}`;
+             })() : ''}
             ${discountAmount ? `
             <tr>
               <td style="color: #10B981;">Discount:</td>
@@ -583,19 +611,53 @@ export default function MyOrdersScreen() {
                     </View>
                   ) : null}
 
-                  {previewOrder.gst || previewOrder.tax ? (
-                    <View style={styles.previewPriceRow}>
-                      <Text style={styles.previewPriceLabel}>GST</Text>
-                      <Text style={styles.previewPriceValue}>₹{previewOrder.gst ?? previewOrder.tax}</Text>
-                    </View>
-                  ) : null}
+                  {(previewOrder.gst || previewOrder.tax) ? (() => {
+                    const gNum = Number(previewOrder.gst ?? previewOrder.tax) || 0;
+                    const foodGstVal = previewOrder.foodGst !== undefined ? Number(previewOrder.foodGst) : ((Number(previewOrder.totalPrice) || 0) * 0.05);
+                    const delFeeVal = Number(previewOrder.deliveryFee) || 0;
+                    const deliveryGstVal = previewOrder.deliveryGst !== undefined ? Number(previewOrder.deliveryGst) : (delFeeVal * 0.18);
+                    const fHalf = (foodGstVal / 2).toFixed(2);
+                    const dHalf = (deliveryGstVal / 2).toFixed(2);
+                    return (
+                      <View style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                        <View style={styles.previewPriceRow}>
+                          <Text style={[styles.previewPriceLabel, { fontWeight: '700', color: '#1E293B' }]}>GST & Taxes (Total)</Text>
+                          <Text style={[styles.previewPriceValue, { fontWeight: '700', color: '#1E293B' }]}>₹{gNum.toFixed(2)}</Text>
+                        </View>
 
-                  {previewOrder.platformFee ? (
-                    <View style={styles.previewPriceRow}>
-                      <Text style={styles.previewPriceLabel}>Platform Fee</Text>
-                      <Text style={styles.previewPriceValue}>₹{previewOrder.platformFee}</Text>
-                    </View>
-                  ) : null}
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', marginTop: 4, marginBottom: 2 }}>
+                          🍽️ Food GST (5%): ₹{foodGstVal.toFixed(2)}
+                        </Text>
+                        <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                          <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>CGST (2.5%)</Text>
+                          <Text style={[styles.previewPriceValue, { fontSize: 11, color: '#64748B' }]}>₹{fHalf}</Text>
+                        </View>
+                        <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                          <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>SGST (2.5%)</Text>
+                          <Text style={[styles.previewPriceValue, { fontSize: 11, color: '#64748B' }]}>₹{fHalf}</Text>
+                        </View>
+
+                        {deliveryGstVal > 0 && (
+                          <>
+                            <View style={{ height: 1, backgroundColor: '#E2E8F0', marginVertical: 4 }} />
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', marginBottom: 2 }}>
+                              🛵 Delivery Services GST (18%): ₹{deliveryGstVal.toFixed(2)}
+                            </Text>
+                            <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                              <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>CGST (9.0%)</Text>
+                              <Text style={[styles.previewPriceValue, { fontSize: 11, color: '#64748B' }]}>₹{dHalf}</Text>
+                            </View>
+                            <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
+                              <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>SGST (9.0%)</Text>
+                              <Text style={[styles.previewPriceValue, { fontSize: 11, color: '#64748B' }]}>₹{dHalf}</Text>
+                            </View>
+                          </>
+                        )}
+                      </View>
+                    );
+                  })() : null}
+
+
 
                   {previewOrder.discountAmount && Number(previewOrder.discountAmount) > 0 ? (
                     <View style={styles.previewPriceRow}>

@@ -90,7 +90,14 @@ export default function MyReviewsScreen() {
     return str;
   };
 
-  // Merge backend reviews + locally submitted reviews, deduplicating by orderId
+  const hasAnyReview = (r) => {
+    if (!r) return false;
+    const hasRest = (r.restaurantRating && Number(r.restaurantRating) > 0) || (r.restaurantReview && r.restaurantReview.trim() !== '');
+    const hasDeliv = (r.deliveryBoyRating && Number(r.deliveryBoyRating) > 0) || (r.deliveryBoyReview && r.deliveryBoyReview.trim() !== '');
+    return hasRest || hasDeliv;
+  };
+
+  // Merge backend reviews + locally submitted reviews, deduplicating by orderId and filtering out unreviewed orders
   const displayReviews = [
     ...locallySubmittedReviews,
     ...reviews.filter((r) => {
@@ -100,7 +107,7 @@ export default function MyReviewsScreen() {
         return (rOrderId && lrOrderId && rOrderId === lrOrderId) || String(lr._id) === String(r._id);
       });
     }),
-  ];
+  ].filter(hasAnyReview);
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
@@ -187,10 +194,23 @@ export default function MyReviewsScreen() {
             const discountAmount = orderDetailsObj?.discountAmount ?? matchingCompletedOrder?.discountAmount ?? matchingCompletedOrder?.discount ?? '';
             const grandTotal = orderDetailsObj?.grandTotal ?? matchingCompletedOrder?.grandTotal ?? matchingCompletedOrder?.totalPrice ?? '';
 
+            const rawOrderId = review.orderId || getOrderIdFromReview(review);
+            const displayOrderId = String(rawOrderId || '').replace(/^ord-/i, '');
+
+            const hasRestaurantExperience = Boolean(
+              (review.restaurantRating && Number(review.restaurantRating) > 0) ||
+              (review.restaurantReview && review.restaurantReview.trim() !== '')
+            );
+
+            const hasDeliveryExperience = Boolean(
+              (review.deliveryBoyRating && Number(review.deliveryBoyRating) > 0) ||
+              (review.deliveryBoyReview && review.deliveryBoyReview.trim() !== '')
+            );
+
             return (
               <View key={review._id || review.orderId} style={styles.reviewCard}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={styles.orderTitle}>Order #{review.orderId}</Text>
+                  <Text style={styles.orderTitle}>Order ID - {displayOrderId}</Text>
                   <Text style={styles.dateText}>{formatDate(review.createdAt)}</Text>
                 </View>
 
@@ -198,23 +218,27 @@ export default function MyReviewsScreen() {
                   <Text style={[styles.restaurantNameTag, { marginBottom: 10 }]}>{restaurantName}</Text>
                 ) : null}
 
-                {/* Restaurant Experience */}
-                <View style={styles.experienceBox}>
-                  <Text style={styles.experienceTitle}>Restaurant Experience</Text>
-                  {renderStars(review.restaurantRating)}
-                  {review.restaurantReview && review.restaurantReview.trim() ? (
-                    <Text style={styles.reviewCommentText}>{`"${review.restaurantReview.trim()}"`}</Text>
-                  ) : null}
-                </View>
+                {/* Restaurant Experience (Shown only if given) */}
+                {hasRestaurantExperience && (
+                  <View style={styles.experienceBox}>
+                    <Text style={styles.experienceTitle}>Restaurant Experience</Text>
+                    {renderStars(review.restaurantRating)}
+                    {review.restaurantReview && review.restaurantReview.trim() ? (
+                      <Text style={styles.reviewCommentText}>{review.restaurantReview.trim()}</Text>
+                    ) : null}
+                  </View>
+                )}
 
-                {/* Delivery Experience */}
-                <View style={styles.experienceBox}>
-                  <Text style={styles.experienceTitle}>Delivery Experience</Text>
-                  {renderStars(review.deliveryBoyRating)}
-                  {review.deliveryBoyReview && review.deliveryBoyReview.trim() ? (
-                    <Text style={styles.reviewCommentText}>{`"${review.deliveryBoyReview.trim()}"`}</Text>
-                  ) : null}
-                </View>
+                {/* Delivery Experience (Shown only if given) */}
+                {hasDeliveryExperience && (
+                  <View style={styles.experienceBox}>
+                    <Text style={styles.experienceTitle}>Delivery Experience</Text>
+                    {renderStars(review.deliveryBoyRating)}
+                    {review.deliveryBoyReview && review.deliveryBoyReview.trim() ? (
+                      <Text style={styles.reviewCommentText}>{review.deliveryBoyReview.trim()}</Text>
+                    ) : null}
+                  </View>
+                )}
 
                 {/* Order Details & Price Breakdown */}
                 {(items.length > 0 || grandTotal !== '') && (
@@ -248,18 +272,27 @@ export default function MyReviewsScreen() {
                           <Text style={[styles.priceValue, { color: '#FF5E5E' }]}>{formatCurrency(surgeFee)}</Text>
                         </View>
                       )}
-                      {gst !== '' && (
-                        <View style={styles.priceRow}>
-                          <Text style={styles.priceLabel}>GST</Text>
-                          <Text style={styles.priceValue}>{formatCurrency(gst)}</Text>
-                        </View>
-                      )}
-                      {platformFee !== '' && (
-                        <View style={styles.priceRow}>
-                          <Text style={styles.priceLabel}>Platform Fee</Text>
-                          <Text style={styles.priceValue}>{formatCurrency(platformFee)}</Text>
-                        </View>
-                      )}
+                      {gst !== '' && Number(gst) > 0 && (() => {
+                        const gNum = Number(gst) || 0;
+                        const halfVal = gNum / 2;
+                        return (
+                          <>
+                            <View style={styles.priceRow}>
+                              <Text style={styles.priceLabel}>GST & Taxes</Text>
+                              <Text style={styles.priceValue}>{formatCurrency(gNum)}</Text>
+                            </View>
+                            <View style={[styles.priceRow, { paddingLeft: 12, marginTop: -2, marginBottom: 2 }]}>
+                              <Text style={[styles.priceLabel, { fontSize: 12, color: '#666' }]}>CGST (2.5%)</Text>
+                              <Text style={[styles.priceValue, { fontSize: 12, color: '#666' }]}>{formatCurrency(halfVal)}</Text>
+                            </View>
+                            <View style={[styles.priceRow, { paddingLeft: 12, marginBottom: 2 }]}>
+                              <Text style={[styles.priceLabel, { fontSize: 12, color: '#666' }]}>SGST (2.5%)</Text>
+                              <Text style={[styles.priceValue, { fontSize: 12, color: '#666' }]}>{formatCurrency(halfVal)}</Text>
+                            </View>
+                          </>
+                        );
+                      })()}
+
                       {discountAmount !== '' && Number(discountAmount) > 0 && (
                         <View style={styles.priceRow}>
                           <Text style={[styles.priceLabel, { color: '#2E7D32' }]}>Discount</Text>

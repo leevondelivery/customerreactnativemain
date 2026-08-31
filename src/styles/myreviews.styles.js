@@ -117,8 +117,8 @@ export const styles = StyleSheet.create({
   },
   reviewCommentText: {
     fontSize: 14,
-    fontWeight: '600',
-    fontStyle: 'italic',
+    fontWeight: '500',
+    fontStyle: 'normal',
     color: '#333333',
     marginTop: 8,
   },
