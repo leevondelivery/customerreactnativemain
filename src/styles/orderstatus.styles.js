@@ -222,8 +222,8 @@ export const styles = StyleSheet.create({
   },
   deliveryBoyRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 12,
   },
   deliveryBoyLabel: {
     fontSize: 13,
@@ -236,9 +236,10 @@ export const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   deliveryBoyName: {
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '800',
     color: '#1A1A1A',
+    letterSpacing: -0.2,
   },
   notAssignedText: {
     fontSize: 12,

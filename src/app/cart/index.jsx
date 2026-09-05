@@ -16,7 +16,8 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
+  BackHandler
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
@@ -98,6 +99,18 @@ export default function CartScreen() {
   const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
   const restaurants = useSelector((state) => state.restaurants.list);
   const confirmPayEnabled = useSelector((state) => state.controls.confirmPayEnabled);
+
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        router.replace('/restaurentlist');
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router])
+  );
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isGstExpanded, setIsGstExpanded] = useState(false);
@@ -151,6 +164,8 @@ export default function CartScreen() {
     setIsValidatingCoupon(true);
     setCouponError('');
     try {
+      const activeUid = userid || (await AsyncStorage.getItem('userid')) || (await AsyncStorage.getItem('user_id'));
+      const activePhone = await AsyncStorage.getItem('phone');
       const response = await fetch(`${API_URL}/api/coupon/validate`, {
         method: 'POST',
         headers: {
@@ -159,6 +174,8 @@ export default function CartScreen() {
         body: JSON.stringify({
           couponCode: couponInput.trim(),
           cartTotal: calculateTotal(),
+          userId: activeUid,
+          userPhone: activePhone,
         }),
       });
       const data = await response.json();
@@ -169,6 +186,7 @@ export default function CartScreen() {
           discountType: data.discountType,
           discountValue: data.discountValue,
           discountAmount: data.discountAmount,
+          minOrderAmount: Number(data.minOrderAmount || 0),
         };
         setAppliedCoupon(couponObj);
         await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
@@ -187,6 +205,17 @@ export default function CartScreen() {
     }
   };
 
+  // Automatically remove coupon and discount if cart total drops below minimum order requirement
+  useEffect(() => {
+    if (appliedCoupon && appliedCoupon.minOrderAmount > 0 && cartItems.length > 0) {
+      const currentSub = calculateTotal();
+      if (currentSub < appliedCoupon.minOrderAmount) {
+        setAppliedCoupon(null);
+        AsyncStorage.removeItem('applied_coupon');
+      }
+    }
+  }, [cartItems, appliedCoupon]);
+
   const handleRemoveCoupon = async () => {
     setAppliedCoupon(null);
     setCouponInput('');
@@ -198,13 +227,10 @@ export default function CartScreen() {
   // Phone OTP Verification States
   const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
   const [verificationPhone, setVerificationPhone] = useState('');
-  const [firstInputPhone, setFirstInputPhone] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [confirmResult, setConfirmResult] = useState(null);
   const [otpLoading, setOtpLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
-  const resendCountRef = useRef(0);
-  const [isBypassMode, setIsBypassMode] = useState(false);
 
   useEffect(() => {
     let interval = null;
@@ -530,17 +556,18 @@ export default function CartScreen() {
       return;
     }
 
-    // If user skipped location or location is not available and no saved address is selected
-    if (locationStatus === 'skipped' || (!userLocation && !selectedSavedAddressId)) {
-      console.log('[Cart] Location was skipped or unavailable. Opening Location Choice modal...');
-      setShowLocationChoiceModal(true);
-      return;
+    const userChoice = await AsyncStorage.getItem('user_location_choice');
+    const hasLocation = !!(userLocation || selectedSavedAddressId || userChoice === 'inside' || userChoice === 'saved');
+
+    if (!hasLocation) {
+      console.log('[Cart] Location missing when clicking Place Order. Requesting location...');
+      const success = await handleEnableLocation();
+      if (!success) {
+        setShowLocationChoiceModal(true);
+        return;
+      }
     }
 
-    if (!isDistanceCalculated && !selectedSavedAddressId) {
-      showAlert('Calculating Delivery Charge', 'Please wait until your delivery location and charge are calculated.');
-      return;
-    }
     setShowDeliveryForm(true);
   };
 
@@ -590,18 +617,13 @@ export default function CartScreen() {
     // 2. Instantly show toast
     triggerToast('ADDRESS SAVED SUCCESSFULLY!', 'success');
 
-    // 3. Keep inputs backup and instantly reset fields
+    // 3. Keep inputs populated & auto-select the newly saved address
     const savedFlatNo = flatNo;
     const savedStreet = street;
     const savedLandmark = landmark;
     const savedTag = effectiveTag;
 
-    setFlatNo('');
-    setStreet('');
-    setLandmark('');
-    setCustomTag('');
-    setSelectedTag('Home');
-    setSelectedSavedAddressId(null);
+    setSelectedSavedAddressId(tempId);
 
     // 4. Send POST to DB in the background
     fetch(`${API_URL}/user/${userid}/addresses`, {
@@ -622,8 +644,18 @@ export default function CartScreen() {
       .then(async (data) => {
         if (data.success) {
           // Sync state and cache with actual DB response (receives actual database ID)
-          setSavedAddresses(data.addresses || []);
-          await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(data.addresses || []));
+          const freshAddrs = data.addresses || [];
+          setSavedAddresses(freshAddrs);
+          await AsyncStorage.setItem(`saved_addresses_${userid}`, JSON.stringify(freshAddrs));
+          if (freshAddrs.length > 0) {
+            const matched = freshAddrs.find(a => 
+              (a.flatNo || '').trim().toLowerCase() === (savedFlatNo || '').trim().toLowerCase() &&
+              (a.street || '').trim().toLowerCase() === (savedStreet || '').trim().toLowerCase()
+            );
+            if (matched) {
+              setSelectedSavedAddressId(matched.id || matched._id);
+            }
+          }
         } else {
           // Revert and fetch actual db addresses
           fetchSavedAddresses(userid);
@@ -814,54 +846,36 @@ export default function CartScreen() {
       const formattedPhone = `+91${cleanFirstPhone}`;
       console.log('[Phone Auth] Requesting OTP for:', formattedPhone);
 
-      // Save the first input phone number
-      setFirstInputPhone(cleanFirstPhone);
-
-      const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
-      setConfirmResult(confirmation);
-      triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
-      setResendTimer(30);
-
-      if (isResend) {
-        resendCountRef.current += 1;
-        if (resendCountRef.current >= 2) {
-          setIsBypassMode(true);
-          setVerificationPhone(''); // Clear it so they must re-enter to confirm!
+      try {
+        if (auth && typeof auth === 'function' && auth().signInWithPhoneNumber) {
+          const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+          setConfirmResult(confirmation);
+          triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
+          setResendTimer(30);
+        } else {
+          throw new Error('Firebase Phone Auth service unavailable');
         }
+      } catch (smsError) {
+        console.error('[Phone Auth] Firebase SMS failed:', smsError);
+        setConfirmResult(null);
+        showAlert('OTP Send Failed', smsError.message || 'SMS service failed to send verification code. Please check your phone number and try again.');
       }
     } catch (error) {
       console.error('[Phone Auth] Send OTP Error:', error);
-      if (error.code === 'auth/too-many-requests' || error.message?.includes('blocked')) {
-        showAlert('Temporarily Blocked', 'Too many requests. Switching to verbal confirmation.');
-        const cleanFirstPhone = verificationPhone.trim().slice(-10);
-        setFirstInputPhone(cleanFirstPhone);
-        setIsBypassMode(true);
-        setVerificationPhone(''); // Clear it so they must re-enter to confirm!
-      } else {
-        // If they click resend and it fails due to network/etc., check if resend count reached 2
-        if (isResend) {
-          resendCountRef.current += 1;
-          if (resendCountRef.current >= 2) {
-            showAlert('Switching to Verbal Confirmation', 'SMS service is not responding. Please confirm your number.');
-            const cleanFirstPhone = verificationPhone.trim().slice(-10);
-            setFirstInputPhone(cleanFirstPhone);
-            setIsBypassMode(true);
-            setVerificationPhone(''); // Clear it so they must re-enter to confirm!
-          } else {
-            showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
-          }
-        } else {
-          showAlert('OTP Send Failed', 'Failed to send OTP. Please check your network or try again.');
-        }
-      }
+      showAlert('Verification Error', 'Could not verify phone number. Please try again.');
     } finally {
       setOtpLoading(false);
     }
   };
 
   const handleVerifyOTP = async () => {
-    if (!otpCode || otpCode.length < 6) {
+    if (!otpCode || otpCode.trim().length < 6) {
       showAlert('Invalid OTP', 'Please enter the 6-digit verification code.');
+      return;
+    }
+
+    if (!confirmResult) {
+      showAlert('Session Expired', 'Verification session expired. Please click Resend OTP.');
       return;
     }
 
@@ -870,12 +884,12 @@ export default function CartScreen() {
 
     try {
       console.log('[Phone Auth] Confirming OTP code:', otpCode);
-      await confirmResult.confirm(otpCode);
+      await confirmResult.confirm(otpCode.trim());
       console.log('[Phone Auth] Verification successful!');
       verified = true;
     } catch (otpError) {
       console.error('[Phone Auth] OTP verification error:', otpError);
-      showAlert('Verification Failed', 'The code you entered is invalid or expired. Please try again.');
+      showAlert('Verification Failed', 'The code you entered is invalid or expired. Please enter the exact 6-digit OTP received via SMS.');
       setOtpLoading(false);
       return;
     }
@@ -889,43 +903,6 @@ export default function CartScreen() {
         showAlert('Phone Number Linked', 'Phone number already linked to another account.');
         setOtpLoading(false);
       }
-    }
-  };
-
-  const handleBypassSubmit = async () => {
-    if (!verificationPhone || verificationPhone.trim().length < 10) {
-      showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
-      return;
-    }
-
-    setOtpLoading(true);
-    try {
-      const cleanPhone = verificationPhone.trim().slice(-10);
-      const activeUserId = await AsyncStorage.getItem('userid');
-
-      // Check phone uniqueness
-      console.log('[Phone Auth] Bypass checking phone uniqueness for:', cleanPhone);
-      const checkRes = await fetch(`${API_URL}/check-phone/${cleanPhone}?excludeUserId=${activeUserId || ''}`);
-      const checkData = await checkRes.json();
-      if (checkRes.ok && checkData.success && checkData.exists) {
-        showAlert('Phone Number Linked', 'Phone number already linked to another account.');
-        setOtpLoading(false);
-        return;
-      }
-
-      // Verify both phone numbers are the same
-      if (cleanPhone !== firstInputPhone) {
-        showAlert('Verification Error', 'The phone number entered does not match the first number you entered. Please verify your number.');
-        setOtpLoading(false);
-        return;
-      }
-
-      console.log('[Phone Auth] Bypassing OTP, saving number as unverified:', cleanPhone);
-      await saveVerifiedPhoneToBackend(cleanPhone, false);
-    } catch (error) {
-      console.error('[Phone Auth] Bypass submit error:', error);
-      showAlert('Error saving number', 'Failed to save your phone number. Please try again.');
-      setOtpLoading(false);
     }
   };
 
@@ -966,6 +943,27 @@ export default function CartScreen() {
       setIsProcessingPayment(false);
       showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
       return;
+    }
+
+    // 0. Live Active Order Check
+    const activeUserIdCheck = await AsyncStorage.getItem('userid');
+    if (activeUserIdCheck) {
+      try {
+        const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserIdCheck}`);
+        const activeData = await activeRes.json();
+        if (activeRes.ok && activeData.success && activeData.orderStatus) {
+          setHasActiveOrder(true);
+          await AsyncStorage.setItem(`has_active_order_${activeUserIdCheck}`, 'true');
+          setIsProcessingPayment(false);
+          showAlert(
+            'Active Order Exists',
+            'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+          );
+          return;
+        }
+      } catch (activeErr) {
+        console.warn('[Cart] Error checking active order during checkout:', activeErr);
+      }
     }
 
     // 1. SHOW LOADING INDICATOR & FETCH LIVE DB RESTAURANT & MENU STATUS IN PARALLEL
@@ -1085,21 +1083,19 @@ export default function CartScreen() {
 
     setIsProcessingPayment(false);
 
-    if (!selectedSavedAddressId) {
-      if (locationStatus === 'skipped' || locationStatus !== 'inside' || !userLocation) {
-        console.log('[Cart] Location is skipped or missing in handleConfirmOrder. Requesting location...');
-        const success = await handleEnableLocation();
-        if (!success || locationStatus !== 'inside' || !userLocation) {
-          showAlert('Location Required', 'Location verification is required to place your order. Please enable your location.');
-          return;
-        }
+    const userChoice = await AsyncStorage.getItem('user_location_choice');
+    const hasValidLocation = !!(userLocation || selectedSavedAddressId || userChoice === 'inside' || userChoice === 'saved');
+
+    if (!hasValidLocation) {
+      console.log('[Cart] Location is missing in handleConfirmOrder. Requesting location...');
+      const success = await handleEnableLocation();
+      if (!success) {
+        showAlert('Location Required', 'Location verification is required to place your order. Please enable your location.');
+        return;
       }
     }
 
-    if (!isDistanceCalculated && !selectedSavedAddressId) {
-      showAlert('Calculating Delivery Charge', 'Please wait until your delivery charge has been fully calculated with 100% accuracy.');
-      return;
-    }
+
 
     if (!flatNo.trim() || !street.trim()) {
       showAlert('Delivery Address Required', 'Please enter Flat/House No and Street to proceed.');
@@ -1114,9 +1110,6 @@ export default function CartScreen() {
       setVerificationPhone(activePhone && activePhone !== 'N/A' && !isTempPhone ? activePhone : '');
       setOtpCode('');
       setConfirmResult(null);
-      setIsBypassMode(false);
-      setFirstInputPhone('');
-      resendCountRef.current = 0;
       setResendTimer(0);
       setShowPhoneOTPModal(true);
       return;
@@ -1149,11 +1142,11 @@ export default function CartScreen() {
       const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
       const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
       const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
-      const deliveryFee = baseDeliveryFee + surgeFee;
-      const foodGstAmount = subTotal * 0.05;
-      const deliveryGstAmount = deliveryFee * 0.18;
-      const gstAmount = foodGstAmount + deliveryGstAmount;
-      const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee);
+      const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
+      const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
+      const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
+      const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
+      const gTotal = Math.round(Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee) * 100) / 100;
 
       const activeUserId = await AsyncStorage.getItem('userid');
       const activeName = await AsyncStorage.getItem('name');
@@ -1161,6 +1154,25 @@ export default function CartScreen() {
       const activePhone = await AsyncStorage.getItem('phone');
       const activePhoneVerified = (await AsyncStorage.getItem('isPhoneVerified')) === 'true';
       const restName = cartItems[0]?.restaurantName || 'Restaurant';
+
+      if (activeUserId) {
+        try {
+          const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserId}`);
+          const activeData = await activeRes.json();
+          if (activeRes.ok && activeData.success && activeData.orderStatus) {
+            setHasActiveOrder(true);
+            await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+            setIsProcessingPayment(false);
+            showAlert(
+              'Active Order Exists',
+              'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+            );
+            return;
+          }
+        } catch (activeErr) {
+          console.warn('[Cart] Live active order check warning in COD:', activeErr);
+        }
+      }
 
       const codPayload = {
         userId: activeUserId,
@@ -1206,12 +1218,23 @@ export default function CartScreen() {
 
       const data = await response.json();
       if (data.success) {
+        if (activeUserId) {
+          await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+          await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
+        }
+        setHasActiveOrder(true);
         await AsyncStorage.removeItem('cart');
         await AsyncStorage.removeItem('applied_coupon');
         setIsProcessingPayment(false);
         setShowSuccessModal(true);
       } else {
         setIsProcessingPayment(false);
+        if (response.status === 403 || data.isBlocked) {
+          await AsyncStorage.clear();
+          showAlert('Account Blocked', data.message || 'Your account has been blocked by admin.');
+          router.replace('/login');
+          return;
+        }
         showAlert('Order Error', data.message || 'Failed to place order.');
       }
     } catch (err) {
@@ -1244,11 +1267,11 @@ export default function CartScreen() {
     const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
     const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
     const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
-    const deliveryFee = baseDeliveryFee + surgeFee;
-    const foodGstAmount = subTotal * 0.05;
-    const deliveryGstAmount = deliveryFee * 0.18;
-    const gstAmount = foodGstAmount + deliveryGstAmount;
-    const gTotal = Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee);
+    const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
+    const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
+    const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
+    const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
+    const gTotal = Math.round(Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee) * 100) / 100;
     // Dynamic Coins Calculation
     const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
     const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1273,6 +1296,25 @@ export default function CartScreen() {
     const activeEmail = await AsyncStorage.getItem('email');
     const activePhone = await AsyncStorage.getItem('phone');
     const activePhoneVerified = (await AsyncStorage.getItem('isPhoneVerified')) === 'true';
+
+    if (activeUserId) {
+      try {
+        const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserId}`);
+        const activeData = await activeRes.json();
+        if (activeRes.ok && activeData.success && activeData.orderStatus) {
+          setHasActiveOrder(true);
+          await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+          setIsProcessingPayment(false);
+          showAlert(
+            'Active Order Exists',
+            'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+          );
+          return;
+        }
+      } catch (activeErr) {
+        console.warn('[Cart] Live active order check warning in online payment:', activeErr);
+      }
+    }
 
     const rawPhone = (activePhone || '').replace(/\D/g, '');
     const cleanPhone = rawPhone.length >= 10 ? rawPhone.slice(-10) : '';
@@ -1367,6 +1409,11 @@ export default function CartScreen() {
 
               const verifyData = await verifyResponse.json();
               if (verifyData.success) {
+                if (activeUserId) {
+                  await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+                  await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
+                }
+                setHasActiveOrder(true);
                 // Clear cart in AsyncStorage
                 await AsyncStorage.removeItem('cart');
                 await AsyncStorage.removeItem('applied_coupon');
@@ -1394,7 +1441,7 @@ export default function CartScreen() {
       } else {
         // Mobile (Android / iOS)
         const { NativeModules } = require('react-native');
-        const hasNativeRazorpay = NativeModules && NativeModules.RazorpayCheckout;
+        const hasNativeRazorpay = NativeModules && (NativeModules.RazorpayCheckout || NativeModules.Razorpay || NativeModules.RNPay);
 
         let RazorpayCheckout = null;
         try {
@@ -1420,149 +1467,85 @@ export default function CartScreen() {
           theme: { color: '#27AE60' },
         };
 
-        if (!RazorpayCheckout || !RazorpayCheckout.open || !hasNativeRazorpay) {
-          console.warn('[Razorpay] Native module not available. Simulating success for testing...');
-          Alert.alert(
-            'Expo Go Testing Mode',
-            'react-native-razorpay native module is not linked in Expo Go. Would you like to simulate a successful payment for testing?',
-            [
-              {
-                text: 'Cancel',
-                style: 'cancel',
-                onPress: () => setIsProcessingPayment(false),
-              },
-              {
-                text: 'Simulate Success',
-                onPress: async () => {
-                  try {
-                    const mockPaymentId = `pay_mock_${Date.now()}`;
-                    const mockSignature = `sig_mock_${Date.now()}`;
-                    const verifyResponse = await fetch(`${API_URL}/payment/verify`, {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        razorpay_order_id: orderData.orderId,
-                        razorpay_payment_id: mockPaymentId,
-                        razorpay_signature: mockSignature,
-                        userId: activeUserId,
-                        cartItems: cartItems,
-                        restaurantId: restId,
-                        restaurantName: restName,
-                        totalPrice: subTotal,
-                        gst: gstAmount,
-                        platformFee: pFee,
-                        grandTotal: gTotal,
-                        coinsEarned: coins,
-                        userName: activeName,
-                        userEmail: activeEmail,
-                        userPhone: activePhone,
-                        isPhoneVerified: activePhoneVerified,
-                        deliveryAddressInfo: {
-                          flatNo,
-                          street,
-                          landmark,
-                          tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
-                        },
-                        userCoordinates: userLocation ? {
-                          lat: userLocation.latitude,
-                          lng: userLocation.longitude
-                        } : null,
-                        deliveryDistance: roadDistances[restId] || null,
-                        deliveryFee: deliveryFee,
-                        surgeFee: surgeFee,
-                        couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
-                        influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
-                        discountAmount: discountValAmount,
-                      }),
-                    });
+        if (RazorpayCheckout && typeof RazorpayCheckout.open === 'function') {
+          console.log('[Razorpay] Opening official Razorpay Checkout SDK for real-time payment...');
+          RazorpayCheckout.open(options)
+            .then(async (paymentResult) => {
+              try {
+                const verifyResponse = await fetch(`${API_URL}/payment/verify`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    razorpay_order_id: paymentResult.razorpay_order_id,
+                    razorpay_payment_id: paymentResult.razorpay_payment_id,
+                    razorpay_signature: paymentResult.razorpay_signature,
+                    userId: activeUserId,
+                    cartItems: cartItems,
+                    restaurantId: restId,
+                    restaurantName: restName,
+                    totalPrice: subTotal,
+                    gst: gstAmount,
+                    foodGst: foodGstAmount,
+                    deliveryGst: deliveryGstAmount,
+                    platformFee: pFee,
+                    grandTotal: gTotal,
+                    coinsEarned: coins,
+                    userName: activeName,
+                    userEmail: activeEmail,
+                    userPhone: activePhone,
+                    isPhoneVerified: activePhoneVerified,
+                    deliveryAddressInfo: {
+                      flatNo,
+                      street,
+                      landmark,
+                      tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
+                    },
+                    userCoordinates: userLocation ? {
+                      lat: userLocation.latitude,
+                      lng: userLocation.longitude
+                    } : null,
+                    deliveryDistance: roadDistances[restId] || null,
+                    deliveryFee: deliveryFee,
+                    surgeFee: surgeFee,
+                    couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
+                    influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                    discountAmount: discountValAmount,
+                  }),
+                });
 
-                    const verifyData = await verifyResponse.json();
-                    if (verifyData.success) {
-                      await AsyncStorage.removeItem('cart');
-                      await AsyncStorage.removeItem('applied_coupon');
-                      setIsProcessingPayment(false);
-                      setShowSuccessModal(true);
-                    } else {
-                      setIsProcessingPayment(false);
-                      showAlert('Verification Failed', verifyData.message || 'Unable to verify payment.');
-                    }
-                  } catch (verifyError) {
-                    setIsProcessingPayment(false);
-                    console.error('Verify payment error on mock checkout:', verifyError);
-                    showAlert('Server Error', 'Failed to connect to backend server for verification.');
+                const verifyData = await verifyResponse.json();
+                if (verifyData.success) {
+                  if (activeUserId) {
+                    await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+                    await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
                   }
+                  setHasActiveOrder(true);
+                  // Clear cart in AsyncStorage
+                  await AsyncStorage.removeItem('cart');
+                  await AsyncStorage.removeItem('applied_coupon');
+                  setIsProcessingPayment(false);
+                  setShowSuccessModal(true);
+                } else {
+                  setIsProcessingPayment(false);
+                  showAlert('Verification Failed', verifyData.message || 'Unable to verify payment with server.');
                 }
-              }
-            ]
-          );
-          return;
-        }
-
-        RazorpayCheckout.open(options)
-          .then(async (paymentResult) => {
-            try {
-              const verifyResponse = await fetch(`${API_URL}/payment/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  razorpay_order_id: paymentResult.razorpay_order_id,
-                  razorpay_payment_id: paymentResult.razorpay_payment_id,
-                  razorpay_signature: paymentResult.razorpay_signature,
-                  userId: activeUserId,
-                  cartItems: cartItems,
-                  restaurantId: restId,
-                  restaurantName: restName,
-                  totalPrice: subTotal,
-                  gst: gstAmount,
-                  foodGst: foodGstAmount,
-                  deliveryGst: deliveryGstAmount,
-                  platformFee: pFee,
-                  grandTotal: gTotal,
-                  coinsEarned: coins,
-                  userName: activeName,
-                  userEmail: activeEmail,
-                  userPhone: activePhone,
-                  isPhoneVerified: activePhoneVerified,
-                  deliveryAddressInfo: {
-                    flatNo,
-                    street,
-                    landmark,
-                    tag: selectedTag === 'Other' ? (customTag.trim() || 'Other') : selectedTag,
-                  },
-                  userCoordinates: userLocation ? {
-                    lat: userLocation.latitude,
-                    lng: userLocation.longitude
-                  } : null,
-                  deliveryDistance: roadDistances[restId] || null,
-                  deliveryFee: deliveryFee,
-                  surgeFee: surgeFee,
-                  couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
-                  influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
-                  discountAmount: discountValAmount,
-                }),
-              });
-
-              const verifyData = await verifyResponse.json();
-              if (verifyData.success) {
-                // Clear cart in AsyncStorage
-                await AsyncStorage.removeItem('cart');
-                await AsyncStorage.removeItem('applied_coupon');
+              } catch (verifyError) {
                 setIsProcessingPayment(false);
-                setShowSuccessModal(true);
-              } else {
-                setIsProcessingPayment(false);
-                showAlert('Verification Failed', verifyData.message || 'Unable to verify payment with server.');
+                console.error('Verify payment error:', verifyError);
+                showAlert('Server Error', 'Failed to connect to backend server for verification.');
               }
-            } catch (verifyError) {
+            })
+            .catch((error) => {
               setIsProcessingPayment(false);
-              console.error('Verify payment error:', verifyError);
-              showAlert('Server Error', 'Failed to connect to backend server for verification.');
-            }
-          })
-          .catch((error) => {
-            setIsProcessingPayment(false);
-            console.log('[Razorpay] Payment checkout cancelled or dismissed:', error);
-          });
+              console.log('[Razorpay] Payment checkout cancelled or dismissed:', error);
+            });
+        } else {
+          setIsProcessingPayment(false);
+          showAlert(
+            'Razorpay Native Checkout',
+            'To process live Razorpay payments on mobile, please run on a compiled APK / Android build (npx expo run:android) or on web.'
+          );
+        }
       }
     } catch (err) {
       setIsProcessingPayment(false);
@@ -1612,11 +1595,11 @@ export default function CartScreen() {
   const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
   const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
   const isLocationFetched = locationStatus === 'inside';
-  const deliveryFee = baseDeliveryFee + surgeFee;
-  const foodGst = total * 0.05; // 5% Food GST
-  const deliveryGst = isLocationFetched ? (deliveryFee * 0.18) : 0; // 18% Delivery GST
-  const gst = foodGst + deliveryGst;
-  const grandTotal = Math.max(0, total - discountAmount + gst + deliveryFee);
+  const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
+  const foodGst = Math.round((total * 0.05) * 100) / 100; // 5% Food GST
+  const deliveryGst = isLocationFetched ? Math.round((deliveryFee * 0.18) * 100) / 100 : 0; // 18% Delivery GST
+  const gst = Math.round((foodGst + deliveryGst) * 100) / 100;
+  const grandTotal = Math.round(Math.max(0, total - discountAmount + gst + deliveryFee) * 100) / 100;
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
   const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1807,7 +1790,7 @@ export default function CartScreen() {
             return (
               <View style={{ backgroundColor: '#F4F6F8', borderRadius: 10, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: '#E2E8F0' }}>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
-                  🍽️ Food GST (5%): ₹{foodGst.toFixed(2)}
+                  Food GST (5%): ₹{foodGst.toFixed(2)}
                 </Text>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
                   <Text style={{ fontSize: 12, color: '#64748B' }}>CGST (2.5%)</Text>
@@ -1822,7 +1805,7 @@ export default function CartScreen() {
                   <>
                     <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 8 }} />
                     <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
-                      🛵 Delivery GST (18%): ₹{deliveryGst.toFixed(2)}
+                      Delivery GST (18%): ₹{deliveryGst.toFixed(2)}
                     </Text>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
                       <Text style={{ fontSize: 12, color: '#64748B' }}>CGST (9.0%)</Text>
@@ -1925,13 +1908,13 @@ export default function CartScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder || (!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId)) && styles.checkoutButtonDisabled]}
+            style={[styles.checkoutButton, (showDeliveryForm || hasActiveOrder) && styles.checkoutButtonDisabled]}
             onPress={handlePlaceOrder}
-            disabled={showDeliveryForm || hasActiveOrder || (!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId)}
+            disabled={showDeliveryForm || hasActiveOrder}
             activeOpacity={0.85}
           >
             <Text style={styles.checkoutButtonText}>
-              {!isDistanceCalculated && locationStatus !== 'skipped' && !selectedSavedAddressId ? 'Calculating Charge...' : 'Place the order'}
+              Place the order
             </Text>
           </TouchableOpacity>
         </View>
@@ -2203,19 +2186,17 @@ export default function CartScreen() {
 
               {/* Confirm Order Button */}
               <TouchableOpacity
-                style={[styles.confirmOrderButton, (!isLocationVerified || hasActiveOrder || !isDistanceCalculated) && { backgroundColor: '#CCC' }]}
+                style={[styles.confirmOrderButton, (hasActiveOrder || (!flatNo.trim() || !street.trim())) && { backgroundColor: '#CCC' }]}
                 onPress={handleConfirmOrder}
-                disabled={!isLocationVerified || hasActiveOrder || !isDistanceCalculated}
+                disabled={hasActiveOrder}
                 activeOpacity={0.85}
               >
                 <Text style={styles.confirmOrderButtonText}>
                   {hasActiveOrder
                     ? 'Active order in progress'
-                    : !isDistanceCalculated
-                      ? 'Calculating Delivery Charge...'
-                      : (!flatNo.trim() || !street.trim())
-                        ? 'Please enter flat & street details'
-                        : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
+                    : (!flatNo.trim() || !street.trim())
+                      ? 'Please enter flat & street details'
+                      : `Confirm order and pay ₹${grandTotal.toFixed(2)}`}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -2398,7 +2379,7 @@ export default function CartScreen() {
               <Feather name="phone" size={28} color="#FFFFFF" />
             </View>
 
-            {!confirmResult && !isBypassMode ? (
+            {!confirmResult ? (
               // Step 1: Input Phone Number
               <>
                 <Text style={styles.alertTitle}>Verify Phone Number</Text>
@@ -2429,61 +2410,6 @@ export default function CartScreen() {
                     <ActivityIndicator color="#FFFFFF" />
                   ) : (
                     <Text style={styles.alertButtonText}>Send OTP</Text>
-                  )}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={{ marginTop: 15 }}
-                  onPress={() => setShowPhoneOTPModal(false)}
-                  disabled={otpLoading}
-                >
-                  <Text style={{ color: '#E05A47', fontWeight: '700', fontSize: 14 }}>Cancel</Text>
-                </TouchableOpacity>
-              </>
-            ) : isBypassMode ? (
-              // Bypass Mode: Input Number directly (manual verbal confirmation)
-              <>
-                <Text style={styles.alertTitle}>Confirm Phone Number</Text>
-                <Text style={[styles.alertMessage, { color: '#B78103', fontWeight: '600', marginBottom: 12 }]}>
-                  SMS services are delayed. Please confirm your 10-digit number below. We will call you to verify your order details.
-                </Text>
-
-                {/* First Input: Already Entered Number (Disabled/ReadOnly) */}
-                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Original Number Entered:</Text>
-                <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFEFEF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 12, opacity: 0.8 }]}>
-                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
-                  <TextInput
-                    style={{ flex: 1, fontSize: 16, color: '#7E7C77', padding: 0 }}
-                    value={firstInputPhone}
-                    editable={false}
-                  />
-                </View>
-
-                {/* Second Input: Manually Entered Confirmation Number */}
-                <Text style={{ fontSize: 13, color: '#7E7C77', fontWeight: 'bold', alignSelf: 'flex-start', marginBottom: 5 }}>Confirm Mobile Number:</Text>
-                <View style={[styles.addressInput, { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', paddingHorizontal: 12, marginBottom: 20 }]}>
-                  <Text style={{ fontSize: 16, color: '#7E7C77', fontWeight: 'bold', marginRight: 5 }}>+91</Text>
-                  <TextInput
-                    style={{ flex: 1, fontSize: 16, color: '#1A1A1A', padding: 0 }}
-                    placeholder="Re-enter Mobile Number"
-                    placeholderTextColor="#A19E95"
-                    keyboardType="phone-pad"
-                    maxLength={10}
-                    value={verificationPhone}
-                    onChangeText={setVerificationPhone}
-                    disabled={otpLoading}
-                  />
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.alertButton, { backgroundColor: '#B78103' }, otpLoading && { opacity: 0.6 }]}
-                  onPress={handleBypassSubmit}
-                  disabled={otpLoading}
-                >
-                  {otpLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <Text style={styles.alertButtonText}>Confirm & Checkout</Text>
                   )}
                 </TouchableOpacity>
 
@@ -2720,7 +2646,7 @@ export default function CartScreen() {
               Choose your preferred payment option:
             </Text>
 
-            {/* Option 1: UPI On Delivery */}
+            {/* Option 1: Pay Online (Razorpay) */}
             <TouchableOpacity
               style={{
                 width: '100%',
@@ -2734,24 +2660,27 @@ export default function CartScreen() {
                 marginBottom: 12,
                 gap: 12
               }}
-              onPress={processCodPayment}
+              onPress={() => {
+                setShowPaymentChoiceModal(false);
+                processOnlinePayment();
+              }}
               activeOpacity={0.85}
             >
               <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#E8F5E9', alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="qr-code-outline" size={22} color="#27AE60" />
+                <Ionicons name="card" size={22} color="#27AE60" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
-                  UPI On Delivery
+                  Pay Online
                 </Text>
                 <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
-                  Pay via UPI QR Code or cash at doorstep
+                  Razorpay / UPI / Cards / NetBanking
                 </Text>
               </View>
               <Feather name="chevron-right" size={18} color="#27AE60" />
             </TouchableOpacity>
 
-            {/* Option 2: Pay Online (Razorpay) */}
+            {/* Option 2: UPI On Delivery */}
             <TouchableOpacity
               style={{
                 width: '100%',
@@ -2765,21 +2694,18 @@ export default function CartScreen() {
                 marginBottom: 16,
                 gap: 12
               }}
-              onPress={() => {
-                setShowPaymentChoiceModal(false);
-                processOnlinePayment();
-              }}
+              onPress={processCodPayment}
               activeOpacity={0.85}
             >
               <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="card" size={22} color="#E65100" />
+                <Ionicons name="qr-code-outline" size={22} color="#E65100" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
-                  Pay Online
+                  UPI On Delivery
                 </Text>
                 <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
-                  Razorpay / UPI / Cards / NetBanking
+                  Pay via UPI QR Code or cash at doorstep
                 </Text>
               </View>
               <Feather name="chevron-right" size={18} color="#E65100" />

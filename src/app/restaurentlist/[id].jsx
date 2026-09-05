@@ -2,6 +2,7 @@ import { Feather, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTabBar } from '../_layout';
 import {
   Alert,
   Animated,
@@ -20,6 +21,26 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 
+import { skipLocation } from '../../store/locationSlice';
+
+// Precise search query matcher (matches word prefixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
+const isTextMatchingQuery = (text, query) => {
+  if (!text || !query) return false;
+  const t = String(text).toLowerCase().trim();
+  const q = String(query).toLowerCase().trim();
+  if (!q) return false;
+
+  const words = t.split(/[\s,/\-\(\)]+/).filter(Boolean);
+  const queryWords = q.split(/[\s,/\-\(\)]+/).filter(Boolean);
+
+  if (queryWords.length === 0) return false;
+
+  return queryWords.every((qWord) => {
+    // Singular variant if query word ends with 's' and length > 3 (e.g. 'fries' -> 'frie')
+    const sWord = (qWord.length > 3 && qWord.endsWith('s')) ? qWord.slice(0, -1) : null;
+    return words.some((w) => w.startsWith(qWord) || (sWord && w.startsWith(sWord)));
+  });
+};
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
@@ -57,6 +78,29 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
 };
 
 export default function RestaurantMenuScreen() {
+  const { showTabBar, hideTabBar } = useTabBar();
+  const lastOffsetY = useRef(0);
+
+  const handleScroll = (event) => {
+    const currentOffset = event.nativeEvent.contentOffset.y;
+    const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
+
+    if (Math.abs(currentOffset - lastOffsetY.current) > 15) {
+      if (direction === 'down' && currentOffset > 60) {
+        hideTabBar();
+      } else if (direction === 'up') {
+        showTabBar();
+      }
+      lastOffsetY.current = currentOffset;
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      showTabBar();
+    }, [showTabBar])
+  );
+
   const [nowTime, setNowTime] = useState(new Date());
 
   useEffect(() => {
@@ -71,7 +115,8 @@ export default function RestaurantMenuScreen() {
   const dispatch = useDispatch();
 
   // Route parameters
-  const { restId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime, offerTitle: passedOfferTitle } = useLocalSearchParams();
+  const { id: urlId, restId: paramRestId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime, offerTitle: passedOfferTitle } = useLocalSearchParams();
+  const restId = paramRestId || urlId;
 
   // State
   const [searchQuery, setSearchQuery] = useState('');
@@ -238,7 +283,16 @@ export default function RestaurantMenuScreen() {
     return () => clearInterval(interval);
   }, [dispatch, restId]);
 
-  if (menuLoading && menuItems.length === 0) {
+  const [initialLoading, setInitialLoading] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setInitialLoading(false);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (initialLoading && menuLoading && menuItems.length === 0) {
     return <LoadingView />;
   }
 
@@ -269,9 +323,14 @@ const isItemAvailable = (item) => {
   const sortedItems = menuItems
     .filter((item) => {
       // Filter by search query
-      const name = item.itemName ? item.itemName.toLowerCase() : '';
-      const query = searchQuery.trim().toLowerCase();
-      const matchesSearch = name.includes(query);
+      const name = item.itemName || item.name || '';
+      const cat = item.category || '';
+      const desc = item.description || '';
+      const query = searchQuery.trim();
+      const matchesSearch = !query ||
+        isTextMatchingQuery(name, query) ||
+        isTextMatchingQuery(cat, query) ||
+        (query.length >= 3 && desc.toLowerCase().includes(query.toLowerCase()));
 
       // Filter by type
       const itemVegType = item.vegOrNonVeg || 'Veg'; // default fallback
@@ -488,6 +547,8 @@ const isItemAvailable = (item) => {
         columnWrapperStyle={styles.columnWrapper}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         ListHeaderComponent={
           <>
             {/* Restaurant Hero Card (redesigned) */}
@@ -583,36 +644,42 @@ const isItemAvailable = (item) => {
                   value={searchQuery}
                   onChangeText={setSearchQuery}
                   autoCorrect={false}
+                  numberOfLines={1}
+                  multiline={false}
+                  textAlignVertical="center"
                 />
               </View>
 
               {/* Filtering Pills */}
               <View style={styles.filterPillContainer}>
+                {/* All segment */}
                 <TouchableOpacity
-                  style={filterType === 'All' ? styles.allButtonActive : styles.filterIconWrapper}
+                  style={[styles.filterButton, filterType === 'All' && styles.filterButtonActive]}
                   activeOpacity={0.7}
                   onPress={() => setFilterType('All')}
                 >
                   <Text style={[
                     styles.allButtonText,
-                    filterType !== 'All' && { color: '#808C94' }
+                    filterType !== 'All' && { color: '#666666' }
                   ]}>All</Text>
                 </TouchableOpacity>
 
+                {/* Veg leaf segment */}
                 <TouchableOpacity
-                  style={filterType === 'Veg' ? styles.allButtonActive : styles.filterIconWrapper}
+                  style={[styles.filterButton, filterType === 'Veg' && styles.filterButtonActive]}
                   activeOpacity={0.7}
                   onPress={() => setFilterType('Veg')}
                 >
-                  <FontAwesome5 name="leaf" size={14} color="#5EC48D" solid={filterType === 'Veg'} />
+                  <FontAwesome5 name="leaf" size={20} color={filterType === 'Veg' ? "#2B783E" : "#5EC48D"} solid />
                 </TouchableOpacity>
 
+                {/* Non-veg segment */}
                 <TouchableOpacity
-                  style={filterType === 'Non-Veg' ? styles.allButtonActive : styles.filterIconWrapper}
+                  style={[styles.filterButton, filterType === 'Non-Veg' && styles.filterButtonActive]}
                   activeOpacity={0.7}
                   onPress={() => setFilterType('Non-Veg')}
                 >
-                  <FontAwesome5 name="drumstick-bite" size={13} color="#FA4D56" />
+                  <FontAwesome5 name="drumstick-bite" size={19} color={filterType === 'Non-Veg' ? "#D9383A" : "#FA4D56"} />
                 </TouchableOpacity>
               </View>
             </View>
@@ -699,14 +766,14 @@ const isItemAvailable = (item) => {
           })}
         </ScrollView>
 
-        {/* Categories floating handle tab (attached to the right edge of sidebar) */}
+        {/* Categories floating handle tab (attached to the left edge of right sidebar) */}
         <TouchableOpacity
           style={styles.categoriesTabHandle}
           onPress={() => setIsSidebarOpen(!isSidebarOpen)}
           activeOpacity={0.9}
         >
           <Feather
-            name={isSidebarOpen ? "chevron-left" : "chevron-right"}
+            name={isSidebarOpen ? "chevron-right" : "chevron-left"}
             size={16}
             color="#FFFFFF"
             style={{ marginBottom: 4 }}
@@ -919,56 +986,83 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   searchBarContainer: {
-    backgroundColor: 'rgb(224, 214, 188)', // Matching restaurentlist card background
-    borderRadius: 24,
-    height: 52,
+    backgroundColor: 'rgb(224, 214, 188)',
+    borderRadius: 28,
+    height: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    marginVertical: 16,
+    paddingHorizontal: 14,
+    marginVertical: 18,
     justifyContent: 'space-between',
+    width: '100%',
+    alignSelf: 'center',
+    flexWrap: 'nowrap',
+    overflow: 'hidden',
   },
   searchInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
-    gap: 8,
+    flexShrink: 1,
+    gap: 6,
+    height: 40,
+    overflow: 'hidden',
   },
   searchPlaceholderText: {
-    fontSize: 15,
+    fontSize: 13,
     color: '#000000',
     flex: 1,
-    marginLeft: 4,
+    marginLeft: 2,
     outlineStyle: 'none',
+    paddingVertical: 0,
+    paddingTop: 0,
+    paddingBottom: 0,
+    height: 40,
+    maxHeight: 40,
+    textAlignVertical: 'center',
+    includeFontPadding: false,
+    alignSelf: 'center',
   },
   filterPillContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.05)',
-    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.06)',
+    borderRadius: 23,
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 4,
-    gap: 16,
-    paddingHorizontal: 12,
+    padding: 3,
+    gap: 4,
+    paddingHorizontal: 4,
+    flexShrink: 0,
   },
-  filterIconWrapper: {
-    paddingHorizontal: 2,
-  },
-  allButtonActive: {
-    backgroundColor: '#FFFFFF',
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  filterButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+  },
+  filterButtonActive: {
+    backgroundColor: '#FFFFFF',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 3,
+      },
+      default: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 4,
+      },
+    }),
   },
   allButtonText: {
-    fontSize: 11,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '800',
     color: '#1E3545',
   },
   sortContainer: {
@@ -1144,18 +1238,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgb(247, 247, 235)',
     zIndex: 1000,
     shadowColor: '#000',
-    shadowOffset: { width: 3, height: 0 },
+    shadowOffset: { width: -3, height: 0 },
     shadowOpacity: 0.15,
     shadowRadius: 8,
     elevation: 8,
-    borderRightWidth: 1,
-    borderRightColor: '#E8E2D4',
+    borderLeftWidth: 1,
+    borderLeftColor: '#E8E2D4',
   },
   drawerOpen: {
-    left: 0,
+    right: 0,
   },
   drawerClosed: {
-    left: -220,
+    right: -220,
   },
   drawerHeaderContainer: {
     paddingTop: 50,
@@ -1180,7 +1274,7 @@ const styles = StyleSheet.create({
   drawerCloseButton: {
     position: 'absolute',
     top: 20,
-    right: 16,
+    left: 16,
     padding: 6,
   },
   drawerScrollContent: {
@@ -1212,17 +1306,17 @@ const styles = StyleSheet.create({
   },
   categoriesTabHandle: {
     position: 'absolute',
-    right: -36,
+    left: -36,
     top: '30%',
     width: 36,
     backgroundColor: '#333333',
-    borderTopRightRadius: 10,
-    borderBottomRightRadius: 10,
+    borderTopLeftRadius: 10,
+    borderBottomLeftRadius: 10,
     paddingVertical: 10, // Shrunken vertical padding for shorter tab height
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 3, height: 0 },
+    shadowOffset: { width: -3, height: 0 },
     shadowOpacity: 0.15,
     shadowRadius: 5,
     elevation: 5,

@@ -1,12 +1,13 @@
-import React, { useRef } from 'react';
+import React, { useRef, useCallback } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   ScrollView,
   Linking,
+  BackHandler,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather, FontAwesome } from '@expo/vector-icons';
 import { useTabBar } from '../../_layout';
 import { CONTACT_INFO } from '../../../config';
@@ -16,6 +17,23 @@ export default function ContactUsScreen() {
   const router = useRouter();
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      showTabBar(true);
+      const onBackPress = () => {
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/profile');
+        }
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router, showTabBar])
+  );
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;

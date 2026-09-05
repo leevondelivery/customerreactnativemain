@@ -7,6 +7,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  BackHandler,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -22,8 +23,26 @@ export default function MyReviewsScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  useFocusEffect(
+    useCallback(() => {
+      showTabBar(true);
+      const onBackPress = () => {
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/profile');
+        }
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router, showTabBar])
+  );
+
   const reviews = useSelector((state) => state.restaurants.reviews || []);
   const completedOrders = useSelector((state) => state.restaurants.orders || []);
+  const profileLoaded = useSelector((state) => state.restaurants.profileLoaded);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -50,7 +69,7 @@ export default function MyReviewsScreen() {
     }, [showTabBar, dispatch])
   );
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [locallySubmittedReviews, setLocallySubmittedReviews] = useState([]);
 
   useEffect(() => {
@@ -70,7 +89,9 @@ export default function MyReviewsScreen() {
           }
         }
 
-        if (userid) await dispatch(fetchProfileData(userid)).unwrap();
+        if (userid && !profileLoaded) {
+          await dispatch(fetchProfileData(userid));
+        }
       } catch (err) {
         console.error('[MyReviews] Error initializing data:', err);
       } finally {
@@ -165,10 +186,7 @@ export default function MyReviewsScreen() {
           <View style={styles.placeholderRight} />
         </View>
 
-        {/* Section Title */}
-        {displayReviews.length > 0 && (
-          <Text style={styles.sectionHeaderTitle}>Your Given Reviews</Text>
-        )}
+
 
         {/* Reviews List */}
         {displayReviews.length === 0 ? (

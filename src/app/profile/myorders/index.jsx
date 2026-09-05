@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,6 +11,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  BackHandler,
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -223,7 +224,7 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
                <td style="text-align: right; font-weight: 700; color: #1F2937;">₹${gNum.toFixed(2)}</td>
              </tr>
              <tr>
-               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">🍽️ Food GST (5%):</td>
+               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">Food GST (5%):</td>
                <td style="text-align: right; font-size: 12px; color: #4B5563; font-weight: 600;">₹${foodGstVal.toFixed(2)}</td>
              </tr>
              <tr>
@@ -236,7 +237,7 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
              </tr>
              ${deliveryGstVal > 0 ? `
              <tr>
-               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">🛵 Delivery Services GST (18%):</td>
+               <td style="color: #4B5563; font-weight: 600; font-size: 12px; padding-left: 8px;">Delivery Services GST (18%):</td>
                <td style="text-align: right; font-size: 12px; color: #4B5563; font-weight: 600;">₹${deliveryGstVal.toFixed(2)}</td>
              </tr>
              <tr>
@@ -274,10 +275,26 @@ export default function MyOrdersScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        if (router.canGoBack()) {
+          router.back();
+        } else {
+          router.replace('/profile');
+        }
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router])
+  );
+
   const orders = useSelector((state) => state.restaurants.orders || []);
   const profileLoaded = useSelector((state) => state.restaurants.profileLoaded);
 
-  const [loading, setLoading] = useState(!profileLoaded);
+  const [loading, setLoading] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState(null);
 
   // Invoice Preview Modal states
@@ -356,22 +373,22 @@ export default function MyOrdersScreen() {
   };
 
   useEffect(() => {
+    let isMounted = true;
     const checkAndFetch = async () => {
-      if (!profileLoaded) {
-        try {
-          const userid = await AsyncStorage.getItem('userid');
-          if (userid) {
-            await dispatch(fetchProfileData(userid)).unwrap();
-          }
-        } catch (err) {
-          console.error('Error fetching orders in background:', err);
-        } finally {
-          setLoading(false);
+      try {
+        const userid = await AsyncStorage.getItem('userid');
+        if (userid && !profileLoaded) {
+          await dispatch(fetchProfileData(userid));
         }
+      } catch (err) {
+        console.error('Error fetching orders in background:', err);
+      } finally {
+        if (isMounted) setLoading(false);
       }
     };
     checkAndFetch();
-  }, [profileLoaded, dispatch]);
+    return () => { isMounted = false; };
+  }, [dispatch]);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -436,55 +453,51 @@ export default function MyOrdersScreen() {
           </View>
         ) : (
           orders.map((order) => (
-            <View key={order._id} style={[styles.orderCard, styles.shadow]}>
+            <View key={order._id || order.orderId} style={[styles.orderCard, styles.shadow]}>
               {/* Header */}
               <View style={styles.orderCardHeader}>
                 <Text style={styles.restaurantName} numberOfLines={1}>
                   {order.restaurantName || 'Restaurant'}
                 </Text>
                 <Text style={styles.grandTotal}>
-                  ₹{order.grandTotal}
+                  ₹{order.grandTotal ?? order.totalPrice ?? order.total ?? 0}
                 </Text>
               </View>
 
               {/* Order ID */}
               <Text style={styles.orderIdText}>
-                Order ID: {order.orderId}
+                Order ID: {order.orderId || order._id || 'N/A'}
               </Text>
 
               <View style={styles.separator} />
 
               {/* Items List */}
               <Text style={styles.itemsTitle}>Items</Text>
-              {order.items && order.items.map((item, idx) => (
-                <View key={item._id || idx} style={styles.itemRow}>
-                  <Text style={styles.itemName} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  <Text style={styles.itemQty}>
-                    x{item.quantity}
-                  </Text>
-                  <Text style={styles.itemPrice}>
-                    ₹{item.price * item.quantity}
-                  </Text>
-                </View>
-              ))}
+              {order.items && order.items.map((item, idx) => {
+                const iName = item.name || item.itemName || 'Food Item';
+                const iQty = item.quantity || item.qty || 1;
+                const iPrice = item.price || item.cost || 0;
+                return (
+                  <View key={item._id || idx} style={styles.itemRow}>
+                    <Text style={styles.itemName} numberOfLines={1}>
+                      {iName}
+                    </Text>
+                    <Text style={styles.itemQty}>
+                      x{iQty}
+                    </Text>
+                    <Text style={styles.itemPrice}>
+                      ₹{iPrice * iQty}
+                    </Text>
+                  </View>
+                );
+              })}
 
               {/* Footer */}
               <View style={styles.orderFooter}>
-                {order.isRejected || (order.status && order.status.toLowerCase().includes('reject')) ? (
-                  <View style={[styles.statusContainer, { backgroundColor: '#FEE2E2' }]}>
-                    <Feather name="x-circle" size={14} color="#DC2626" />
-                    <Text style={[styles.statusText, { color: '#DC2626' }]}>
-                      {order.status || 'Rejected'}
-                    </Text>
-                  </View>
-                ) : (
-                  <View style={styles.statusContainer}>
-                    <Feather name="check-circle" size={14} color="#15803D" />
-                    <Text style={styles.statusText}>{order.status || 'Completed'}</Text>
-                  </View>
-                )}
+                <View style={styles.statusContainer}>
+                  <Feather name="check-circle" size={14} color="#15803D" />
+                  <Text style={styles.statusText}>{order.status || 'Completed'}</Text>
+                </View>
                 <Text style={styles.dateText}>
                   {formatDate(order.orderDate || order.completedAt || order.createdAt)}
                 </Text>
@@ -626,7 +639,7 @@ export default function MyOrdersScreen() {
                         </View>
 
                         <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', marginTop: 4, marginBottom: 2 }}>
-                          🍽️ Food GST (5%): ₹{foodGstVal.toFixed(2)}
+                          Food GST (5%): ₹{foodGstVal.toFixed(2)}
                         </Text>
                         <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
                           <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>CGST (2.5%)</Text>
@@ -641,7 +654,7 @@ export default function MyOrdersScreen() {
                           <>
                             <View style={{ height: 1, backgroundColor: '#E2E8F0', marginVertical: 4 }} />
                             <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', marginBottom: 2 }}>
-                              🛵 Delivery Services GST (18%): ₹{deliveryGstVal.toFixed(2)}
+                              Delivery Services GST (18%): ₹{deliveryGstVal.toFixed(2)}
                             </Text>
                             <View style={[styles.previewPriceRow, { paddingLeft: 12, marginVertical: 1 }]}>
                               <Text style={[styles.previewPriceLabel, { fontSize: 11, color: '#64748B' }]}>CGST (9.0%)</Text>

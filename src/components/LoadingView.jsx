@@ -10,7 +10,7 @@ export default function LoadingView() {
         toValue: 1,
         duration: 1200,
         easing: Easing.linear,
-        useNativeDriver: Platform.OS !== 'web', // avoid issue on web if native driver not supported for rotation
+        useNativeDriver: false,
       })
     ).start();
   }, [rotateAnim]);

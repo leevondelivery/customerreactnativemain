@@ -4,7 +4,11 @@
     "slug": "customerreactnative",
     "version": "1.0.3",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/logo.png",
+    "notification": {
+      "icon": "./assets/images/logo.png",
+      "color": "#2B783E"
+    },
     "scheme": "customerreactnative",
     "userInterfaceStyle": "light",
     "statusBar": {
@@ -16,6 +20,7 @@
       "bundleIdentifier": "com.leevondelivery.customer"
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -38,6 +43,13 @@
     "plugins": [
       "expo-router",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/logo.png",
+          "color": "#2B783E"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
@@ -55,7 +67,12 @@
         }
       ],
       "@react-native-google-signin/google-signin",
-      "@react-native-firebase/app",
+      [
+        "@react-native-firebase/app",
+        {
+          "notification_icon": "./assets/images/logo.png"
+        }
+      ],
       "@react-native-firebase/auth",
       "expo-sharing"
     ],

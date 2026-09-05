@@ -1,9 +1,10 @@
 import { Feather, FontAwesome } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Image,
   KeyboardAvoidingView,
   Linking,
@@ -62,8 +63,49 @@ export default function LoginScreen() {
   const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
   const [showForgotPasswordNewPassword, setShowForgotPasswordNewPassword] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
-  const [isFallbackOtpMode, setIsFallbackOtpMode] = useState(false);
   const [showSupportModal, setShowSupportModal] = useState(false);
+
+  // Signup OTP Modal States
+  const [showSignupOtpModal, setShowSignupOtpModal] = useState(false);
+  const [signupOtp, setSignupOtp] = useState('');
+  const [signupConfirmResult, setSignupConfirmResult] = useState(null);
+  const [signupOtpLoading, setSignupOtpLoading] = useState(false);
+  const [signupOtpError, setSignupOtpError] = useState('');
+  const [signupResendTimer, setSignupResendTimer] = useState(0);
+  const otpInputRef = useRef(null);
+
+  useEffect(() => {
+    let interval = null;
+    if (showSignupOtpModal && signupResendTimer > 0) {
+      interval = setInterval(() => {
+        setSignupResendTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [showSignupOtpModal, signupResendTimer]);
+
+  const handleResendSignupOTP = async () => {
+    if (signupResendTimer > 0) return;
+    setSignupOtpError('');
+    setSignupResendTimer(30);
+    const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
+    const formattedPhone = `+91${cleanPhone}`;
+    console.log(`[Signup OTP] Resending Firebase SMS OTP for: ${formattedPhone}`);
+    try {
+      if (auth && typeof auth === 'function') {
+        const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+        setSignupConfirmResult(confirmation);
+      } else {
+        throw new Error('Firebase Auth service unavailable');
+      }
+    } catch (otpErr) {
+      console.error('[Signup OTP] Firebase SMS resend failed:', otpErr);
+      setSignupConfirmResult(null);
+      setSignupOtpError(otpErr.message || 'Failed to resend OTP via Firebase. Please try again.');
+    }
+  };
 
 
   const [showErrorModal, setShowErrorModal] = useState(false);
@@ -128,9 +170,9 @@ export default function LoginScreen() {
         const user = data.user;
         const logintime = String(Date.now());
 
-        // Save session in AsyncStorage
-        await AsyncStorage.setItem('userid', user._id || 'N/A');
-        await AsyncStorage.setItem('phone', user.phone || 'N/A');
+        const rawUserId = user._id || user.id || user.userId || '';
+        await AsyncStorage.setItem('userid', String(rawUserId));
+        await AsyncStorage.setItem('phone', String(user.phone || 'N/A'));
         await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
 
         // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
@@ -139,7 +181,7 @@ export default function LoginScreen() {
           : (userCredential.user.displayName && userCredential.user.displayName.toLowerCase() !== 'n/a'
             ? userCredential.user.displayName
             : 'N/A');
-        await AsyncStorage.setItem('name', displayName);
+        await AsyncStorage.setItem('name', String(displayName));
 
         // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
         const displayEmail = user.email && user.email.toLowerCase() !== 'n/a'
@@ -147,11 +189,28 @@ export default function LoginScreen() {
           : (userCredential.user.email && userCredential.user.email.toLowerCase() !== 'n/a'
             ? userCredential.user.email
             : 'N/A');
-        await AsyncStorage.setItem('email', displayEmail);
+        await AsyncStorage.setItem('email', String(displayEmail));
         await AsyncStorage.setItem('logintime', logintime);
         await AsyncStorage.setItem('loginType', 'google');
         await AsyncStorage.setItem('coins', String(user.coins ?? 0));
         await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+        // Pre-fetch active order status flag so tracker tab is ready on login
+        if (rawUserId) {
+          try {
+            const orderRes = await fetch(`${API_URL}/orderstatus/user/${rawUserId}`);
+            if (orderRes.ok) {
+              const orderData = await orderRes.json();
+              if (orderData.success && orderData.orderStatus) {
+                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
+                await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+              } else {
+                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+                await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+              }
+            }
+          } catch (e) {}
+        }
 
         router.replace('/restaurentlist');
       } else {
@@ -253,15 +312,33 @@ export default function LoginScreen() {
         const logintime = String(Date.now());
 
         // Save session in AsyncStorage
-        await AsyncStorage.setItem('userid', user._id || 'N/A');
-        await AsyncStorage.setItem('phone', user.phone || 'N/A');
+        const rawUserId = user._id || user.id || user.userId || '';
+        await AsyncStorage.setItem('userid', String(rawUserId));
+        await AsyncStorage.setItem('phone', String(user.phone || 'N/A'));
         await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
-        await AsyncStorage.setItem('name', user.name || 'N/A');
-        await AsyncStorage.setItem('email', user.email || 'N/A');
+        await AsyncStorage.setItem('name', String(user.name || 'N/A'));
+        await AsyncStorage.setItem('email', String(user.email || 'N/A'));
         await AsyncStorage.setItem('logintime', logintime);
         await AsyncStorage.setItem('loginType', 'phone');
         await AsyncStorage.setItem('coins', String(user.coins ?? 0));
         await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+        // Pre-fetch active order status flag so tracker tab is ready on login
+        if (rawUserId) {
+          try {
+            const orderRes = await fetch(`${API_URL}/orderstatus/user/${rawUserId}`);
+            if (orderRes.ok) {
+              const orderData = await orderRes.json();
+              if (orderData.success && orderData.orderStatus) {
+                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
+                await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+              } else {
+                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+                await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+              }
+            }
+          } catch (e) {}
+        }
 
         router.replace('/restaurentlist');
       } else {
@@ -284,6 +361,13 @@ export default function LoginScreen() {
       return;
     }
 
+    const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length < 10) {
+      setErrorMessage('Please enter a valid 10-digit mobile number');
+      setShowErrorModal(true);
+      return;
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
       setErrorMessage('Please enter a valid email address');
@@ -297,38 +381,126 @@ export default function LoginScreen() {
       return;
     }
 
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters long');
+      setShowErrorModal(true);
+      return;
+    }
+
     setLoading(true);
     try {
-      console.log(`Attempting signup at: ${API_URL}/signup`);
+      // 1. Pre-check if phone number already exists in DB
+      console.log(`Checking if phone exists: ${API_URL}/check-phone/${cleanPhone}`);
+      const checkResponse = await fetch(`${API_URL}/check-phone/${cleanPhone}`);
+      const checkData = await checkResponse.json();
+      if (checkResponse.ok && checkData.success && checkData.exists) {
+        setErrorMessage('An account with this phone number already exists. Please log in or reset password.');
+        setShowErrorModal(true);
+        setLoading(false);
+        return;
+      }
+
+      // 2. Trigger Firebase SMS OTP
+      const formattedPhone = `+91${cleanPhone}`;
+      console.log(`[Signup OTP] Triggering Firebase SMS OTP for: ${formattedPhone}`);
+
+      try {
+        if (auth && typeof auth === 'function') {
+          const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+          setSignupConfirmResult(confirmation);
+          setSignupOtp('');
+          setSignupOtpError('');
+          setSignupResendTimer(30);
+          setShowSignupOtpModal(true);
+        } else {
+          throw new Error('Firebase Auth service unavailable');
+        }
+      } catch (otpErr) {
+        console.error('[Signup OTP] Firebase SMS failed:', otpErr);
+        setSignupConfirmResult(null);
+        setErrorMessage(otpErr.message || 'Failed to send SMS verification code via Firebase. Please verify your phone number and try again.');
+        setShowErrorModal(true);
+      }
+    } catch (error) {
+      console.error('Signup pre-check error:', error);
+      setErrorMessage('Could not connect to backend server. Make sure the server is running.');
+      setShowErrorModal(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifySignupOTP = async () => {
+    setSignupOtpError('');
+    if (!signupOtp || signupOtp.trim().length < 4) {
+      setSignupOtpError('Please enter a valid OTP code');
+      return;
+    }
+
+    if (!signupConfirmResult) {
+      setSignupOtpError('Verification session expired or invalid. Please click Resend OTP.');
+      return;
+    }
+
+    const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
+    setSignupOtpLoading(true);
+
+    try {
+      console.log('[Signup OTP] Confirming Firebase OTP code:', signupOtp);
+      await signupConfirmResult.confirm(signupOtp.trim());
+      console.log('[Signup OTP] Phone number verified successfully via SMS!');
+
+      console.log(`[Signup] Registering account in MongoDB at: ${API_URL}/signup`);
       const response = await fetch(`${API_URL}/signup`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ phone: mobile, password, name, email: email.trim() }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: cleanPhone,
+          password,
+          name: name.trim(),
+          email: email.trim(),
+          isPhoneVerified: true
+        }),
       });
 
       const data = await response.json();
       console.log('Signup response:', data);
 
       if (response.ok && data.success) {
+        const user = data.user;
+        const logintime = String(Date.now());
+        const rawUserId = user._id || user.id || user.userId || '';
+
+        await AsyncStorage.setItem('userid', String(rawUserId));
+        await AsyncStorage.setItem('phone', String(user.phone || cleanPhone));
+        await AsyncStorage.setItem('isPhoneVerified', 'true');
+        await AsyncStorage.setItem('name', String(user.name || name.trim()));
+        await AsyncStorage.setItem('email', String(user.email || email.trim()));
+        await AsyncStorage.setItem('logintime', logintime);
+        await AsyncStorage.setItem('loginType', 'phone');
+        await AsyncStorage.setItem('coins', String(user.coins ?? 0));
+        await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+        setShowSignupOtpModal(false);
         setPassword('');
         setConfirmPassword('');
         setName('');
         setEmail('');
         setIsSignUp(false);
-        setErrorMessage('Account created successfully! Please enter your password to log in.');
-        setShowErrorModal(true);
+
+        router.replace('/restaurentlist');
       } else {
-        setErrorMessage(data.message || 'Signup failed. Please try again.');
-        setShowErrorModal(true);
+        setSignupOtpError(data.message || 'Signup failed. Please try again.');
       }
     } catch (error) {
-      setErrorMessage('Could not connect to backend server. Make sure the server is running.');
-      setShowErrorModal(true);
-      console.error('Signup request error:', error);
+      console.error('[Signup OTP] Verification error:', error);
+      if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
+        setSignupOtpError('Invalid OTP code. Please enter the exact 6-digit code received via SMS.');
+      } else {
+        setSignupOtpError(error.message || 'Failed to verify OTP or complete registration.');
+      }
     } finally {
-      setLoading(false);
+      setSignupOtpLoading(false);
     }
   };
 
@@ -364,14 +536,12 @@ export default function LoginScreen() {
       try {
         const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
         setForgotPasswordConfirmResult(confirmation);
-        setIsFallbackOtpMode(false);
+        setForgotPasswordStep(2);
       } catch (otpErr) {
-        console.warn('[Forgot Password] Firebase SMS OTP failed, switching to fallback verification mode:', otpErr);
+        console.error('[Forgot Password] Firebase SMS OTP failed:', otpErr);
         setForgotPasswordConfirmResult(null);
-        setIsFallbackOtpMode(true);
+        setForgotPasswordError(otpErr.message || 'Failed to send SMS verification code via Firebase. Please check your number.');
       }
-
-      setForgotPasswordStep(2);
     } catch (error) {
       console.error('[Forgot Password] Check phone request error:', error);
       setForgotPasswordError('Failed to verify phone number. Please try again.');
@@ -397,20 +567,16 @@ export default function LoginScreen() {
       return;
     }
 
+    if (!forgotPasswordConfirmResult) {
+      setForgotPasswordError('Verification session expired or invalid. Please request a new OTP.');
+      return;
+    }
+
     setForgotPasswordLoading(true);
     try {
-      if (forgotPasswordConfirmResult && !isFallbackOtpMode) {
-        console.log('[Forgot Password] Confirming Firebase OTP code:', forgotPasswordOtp);
-        await forgotPasswordConfirmResult.confirm(forgotPasswordOtp);
-        console.log('[Forgot Password] Firebase OTP verified successfully!');
-      } else {
-        console.log('[Forgot Password] Verifying code in Fallback Verification Mode...');
-        if (forgotPasswordOtp.trim().length < 4) {
-          setForgotPasswordError('Please enter a valid OTP code');
-          setForgotPasswordLoading(false);
-          return;
-        }
-      }
+      console.log('[Forgot Password] Confirming Firebase OTP code:', forgotPasswordOtp);
+      await forgotPasswordConfirmResult.confirm(forgotPasswordOtp.trim());
+      console.log('[Forgot Password] Firebase OTP verified successfully!');
 
       console.log('[Forgot Password] Resetting password in backend...');
       const response = await fetch(`${API_URL}/forgot-password/reset-password`, {
@@ -433,7 +599,6 @@ export default function LoginScreen() {
         setForgotPasswordNewPassword('');
         setForgotPasswordConfirmPassword('');
         setForgotPasswordStep(1);
-        setIsFallbackOtpMode(false);
         setErrorMessage('Password reset successfully! Please login with your new password.');
         setShowErrorModal(true);
       } else {
@@ -441,8 +606,8 @@ export default function LoginScreen() {
       }
     } catch (error) {
       console.error('[Forgot Password] Reset error:', error);
-      if (error.code === 'auth/invalid-verification-code') {
-        setForgotPasswordError('Invalid OTP code. Please check the code and try again.');
+      if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
+        setForgotPasswordError('Invalid OTP code. Please check the code received via SMS and try again.');
       } else {
         setForgotPasswordError(error.message || 'Failed to verify OTP or reset password. Please try again.');
       }
@@ -462,6 +627,46 @@ export default function LoginScreen() {
     setForgotPasswordError('');
   };
 
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        if (showSignupOtpModal) {
+          setShowSignupOtpModal(false);
+          setSignupOtp('');
+          setSignupOtpError('');
+          return true;
+        }
+        if (showForgotPasswordModal) {
+          handleCloseForgotPasswordModal();
+          return true;
+        }
+        if (showSupportModal) {
+          setShowSupportModal(false);
+          return true;
+        }
+        if (showErrorModal) {
+          setShowErrorModal(false);
+          return true;
+        }
+        if (isSignUp) {
+          setIsSignUp(false);
+          return true;
+        }
+        BackHandler.exitApp();
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [
+      showSignupOtpModal,
+      showForgotPasswordModal,
+      showSupportModal,
+      showErrorModal,
+      isSignUp,
+    ])
+  );
+
   if (checkingAuth || loading || googleLoading) {
     return <LoadingView />;
   }
@@ -471,6 +676,123 @@ export default function LoginScreen() {
       {/* Root Split Background */}
       <View style={styles.leftBg} />
       <View style={styles.rightBg} />
+
+      {/* Signup OTP Verification Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showSignupOtpModal}
+        onRequestClose={() => setShowSignupOtpModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalBackdrop}
+        >
+          <View style={styles.otpModalCard}>
+            {/* Top Close Button */}
+            <TouchableOpacity
+              style={styles.otpCloseIconButton}
+              onPress={() => setShowSignupOtpModal(false)}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#555555" />
+            </TouchableOpacity>
+
+            {/* Shield Icon Badge */}
+            <View style={styles.otpIconBadge}>
+              <Feather name="shield" size={30} color="#000000" />
+            </View>
+
+            {/* Modal Title */}
+            <Text style={styles.otpModalTitle}>Verify Phone Number</Text>
+
+            {/* Subtitle with mobile */}
+            <Text style={styles.otpModalSubtitle}>
+              Enter the 6-digit OTP sent to{'\n'}
+              <Text style={styles.otpMobileHighlight}>+91 {mobile}</Text>
+            </Text>
+
+            {/* 6 Digit Visual OTP Boxes */}
+            <Pressable
+              style={styles.otpBoxesContainer}
+              onPress={() => otpInputRef.current?.focus()}
+            >
+              {[0, 1, 2, 3, 4, 5].map((idx) => {
+                const char = (signupOtp || '')[idx] || '';
+                const isCurrent = (signupOtp || '').length === idx;
+                return (
+                  <View
+                    key={idx}
+                    style={[
+                      styles.otpBox,
+                      char ? styles.otpBoxFilled : null,
+                      isCurrent ? styles.otpBoxActive : null,
+                    ]}
+                  >
+                    <Text style={styles.otpBoxChar}>{char}</Text>
+                  </View>
+                );
+              })}
+              <TextInput
+                ref={otpInputRef}
+                style={styles.otpInvisibleInput}
+                keyboardType="number-pad"
+                value={signupOtp}
+                onChangeText={(text) => {
+                  setSignupOtp(text.replace(/[^0-9]/g, '').slice(0, 6));
+                  if (signupOtpError) setSignupOtpError('');
+                }}
+                maxLength={6}
+                autoFocus={true}
+                caretHidden={true}
+              />
+            </Pressable>
+
+            {/* Error Message */}
+            {signupOtpError ? (
+              <View style={styles.otpErrorContainer}>
+                <Feather name="alert-circle" size={14} color="#E05A47" style={{ marginRight: 6 }} />
+                <Text style={styles.otpErrorText}>{signupOtpError}</Text>
+              </View>
+            ) : null}
+
+            {/* Verify & Create Account Button */}
+            <TouchableOpacity
+              style={[
+                styles.otpVerifyButton,
+                styles.shadow,
+                (!signupOtp || signupOtp.length < 4) && { opacity: 0.7 }
+              ]}
+              onPress={handleVerifySignupOTP}
+              disabled={signupOtpLoading}
+              activeOpacity={0.85}
+            >
+              {signupOtpLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.otpVerifyButtonText}>Create Account</Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Resend OTP Row */}
+            <View style={styles.otpResendRow}>
+              <Text style={styles.otpResendLabel}>Didn't receive code? </Text>
+              <TouchableOpacity
+                onPress={handleResendSignupOTP}
+                disabled={signupResendTimer > 0 || signupOtpLoading}
+                activeOpacity={0.7}
+              >
+                <Text style={[
+                  styles.otpResendButtonText,
+                  signupResendTimer > 0 && styles.otpResendDisabledText
+                ]}>
+                  {signupResendTimer > 0 ? `Resend in ${signupResendTimer}s` : 'Resend OTP'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* Custom Error Modal */}
       <Modal
@@ -849,12 +1171,11 @@ export default function LoginScreen() {
 
 
             {/* Sign Up / Login / Forgot Password Toggle Row */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingHorizontal: 2 }}>
               {!isSignUp && (
                 <TouchableOpacity
                   onPress={() => {
                     setForgotPasswordStep(1);
-                    setIsFallbackOtpMode(false);
                     setForgotPasswordPhone(mobile); // Prefill if they typed a mobile number
                     setForgotPasswordOtp('');
                     setForgotPasswordConfirmResult(null);
@@ -863,7 +1184,7 @@ export default function LoginScreen() {
                     setForgotPasswordError('');
                     setShowForgotPasswordModal(true);
                   }}
-                  style={{ paddingVertical: 4 }}
+                  style={{ paddingVertical: 6 }}
                 >
                   <Text style={{ color: '#000000', fontWeight: '700', fontSize: 13 }}>
                     Forgot Password?
@@ -873,10 +1194,10 @@ export default function LoginScreen() {
 
               <TouchableOpacity
                 onPress={() => setIsSignUp(!isSignUp)}
-                style={{ paddingVertical: 4, flex: 1, alignItems: 'flex-end' }}
+                style={{ paddingVertical: 6, marginLeft: 'auto' }}
               >
                 <Text style={{ color: '#000000', fontWeight: 'bold', fontSize: 13 }}>
-                  {isSignUp ? 'Already have an account? Login' : 'Create an Account'}
+                  {isSignUp ? 'Already have an account? Login' : 'Create Account'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -891,7 +1212,9 @@ export default function LoginScreen() {
             {loading ? (
               <ActivityIndicator color="#000000" />
             ) : (
-              <Text style={styles.buttonText}>{isSignUp ? 'Sign Up' : 'Login'}</Text>
+              <Text style={styles.buttonText}>
+                {isSignUp ? 'Create Account' : 'Login'}
+              </Text>
             )}
           </TouchableOpacity>
 

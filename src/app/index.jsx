@@ -57,16 +57,36 @@ export default function Index() {
         const userid = await AsyncStorage.getItem('userid');
         if (userid) {
           setIsLoggedIn(true);
+
+          const cachedActiveOrder = await AsyncStorage.getItem(`has_active_order_${userid}`);
+          if (cachedActiveOrder === 'true') {
+            setHasActiveOrder(true);
+          }
           
-          // Check if there is an active order
+          // Check if there is an active order with a fast 2.5s timeout to prevent cold-start hanging
           try {
-            const response = await fetch(`${API_URL}/orderstatus/user/${userid}`);
-            const data = await response.json();
-            if (response.ok && data.success && data.orderStatus) {
-              setHasActiveOrder(true);
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 2500) : null;
+
+            const response = await fetch(`${API_URL}/orderstatus/user/${userid}`, {
+              signal: controller ? controller.signal : undefined,
+            });
+            if (timeoutId) clearTimeout(timeoutId);
+
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.orderStatus) {
+                setHasActiveOrder(true);
+                AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
+                AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});
+              } else {
+                setHasActiveOrder(false);
+                AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+                AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+              }
             }
           } catch (orderErr) {
-            console.warn('Error checking active order on startup:', orderErr);
+            console.warn('[Index] Active order check timed out or failed on startup:', orderErr.message);
           }
         }
       } catch (e) {

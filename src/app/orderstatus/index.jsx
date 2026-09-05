@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Linking,
   Modal,
   RefreshControl,
@@ -16,45 +17,323 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useDispatch } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
+import { skipLocation } from '../../store/locationSlice';
 import { styles } from '../../styles/orderstatus.styles';
 import { useTabBar } from '../_layout';
 
 
-// Map DB status value to one of 4 progress stages (text always comes from DB)
-const getStageInfo = (status) => {
-  if (!status) return { percent: 10 };
-  const s = status.trim().toLowerCase();
-  // Stage 4 — Out for delivery / Delivered
-  if (s.includes('delivered') || s.includes('completed') || s.includes('out for delivery') || s.includes('out for')) return { percent: 100 };
-  // Stage 3 — Delivered soon (waiting to pickup)
-  if (s.includes('delivered soon') || s.includes('pickup') || s.includes('pick up') || s.includes('waiting to pickup')) return { percent: 75 };
-  // Stage 2 — Waiting for delivery boy to accept
-  if (s.includes('waiting for delivery') || s.includes('delivery boy') || s.includes('waiting for driver')) return { percent: 50 };
-  // Stage 1 — Pending (restaurant to be accepted)
+// Helper to check if order is picked up (Stage 4 - 100%)
+const checkIsPickedUp = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return false;
+  const s = String(status || '').trim().toLowerCase();
+  const cleanStr = s.replace(/_/g, ' ').replace(/\s+/g, ' ');
+
+  if (
+    cleanStr.includes('picked') ||
+    cleanStr.includes('pick up order') ||
+    cleanStr.includes('order picked up') ||
+    cleanStr.includes('picked up') ||
+    (cleanStr.includes('pickup') && !cleanStr.includes('ready for pickup')) ||
+    cleanStr.includes('out for') ||
+    cleanStr.includes('on the way') ||
+    cleanStr.includes('reaching') ||
+    cleanStr.includes('doorstep') ||
+    cleanStr.includes('delivered') ||
+    cleanStr.includes('completed') ||
+    String(orderStatusObj.isPickedUp) === 'true' ||
+    String(orderStatusObj.pickedUp) === 'true' ||
+    String(orderStatusObj.is_picked_up) === 'true' ||
+    String(orderStatusObj.picked_up) === 'true'
+  ) {
+    if (!cleanStr.includes('ready for pickup') && !cleanStr.includes('ready for pick up')) {
+      return true;
+    }
+  }
+  return false;
+};
+
+// Helper to check if delivery boy accepted (Stage 3 - 75%)
+const checkIsDeliveryBoyAccepted = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return false;
+  const s = String(status || '').trim().toLowerCase();
+  const cleanStr = s.replace(/_/g, ' ').replace(/\s+/g, ' ');
+
+  // 1. Check main status text keywords
+  if (
+    cleanStr.includes('driver accept') ||
+    cleanStr.includes('delivery boy accept') ||
+    cleanStr.includes('delivery partner accept') ||
+    cleanStr.includes('boy accept') ||
+    cleanStr.includes('partner accept') ||
+    cleanStr.includes('delivery accept') ||
+    cleanStr.includes('assigned') ||
+    cleanStr.includes('heading') ||
+    cleanStr.includes('at restaurant') ||
+    cleanStr.includes('at store') ||
+    cleanStr.includes('arrived') ||
+    cleanStr.includes('reached') ||
+    cleanStr.includes('accepted by delivery') ||
+    cleanStr.includes('accepted by driver') ||
+    cleanStr.includes('accepted by partner') ||
+    cleanStr.includes('accepted by savior')
+  ) {
+    return true;
+  }
+
+  if (!orderStatusObj || typeof orderStatusObj !== 'object') return false;
+
+  // 2. Check boolean / string acceptance flags
+  const isAcceptedFlag =
+    String(orderStatusObj.isDeliveryBoyAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.deliveryBoyAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.is_delivery_boy_accepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.delivery_boy_accepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.isDriverAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.driverAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.is_driver_accepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.driver_accepted).toLowerCase() === 'true' ||
+    orderStatusObj.deliveryBoyAccepted === true ||
+    orderStatusObj.isDeliveryBoyAccepted === true ||
+    orderStatusObj.delivery_boy_accepted === true ||
+    orderStatusObj.driverAccepted === true ||
+    orderStatusObj.deliveryBoyAccepted === 1 ||
+    orderStatusObj.isDeliveryBoyAccepted === 1;
+
+  if (isAcceptedFlag) return true;
+
+  // 3. Check delivery status subfields (e.g. deliveryBoyStatus, delivery_boy_status, driverStatus, driver_status, deliveryStatus)
+  const delivBoyStatusStr = String(
+    orderStatusObj.deliveryBoyStatus ||
+    orderStatusObj.delivery_boy_status ||
+    orderStatusObj.driverStatus ||
+    orderStatusObj.driver_status ||
+    orderStatusObj.deliveryStatus ||
+    orderStatusObj.delivery_status ||
+    ''
+  ).trim().toLowerCase();
+
+  if (
+    delivBoyStatusStr.includes('accept') ||
+    delivBoyStatusStr.includes('assign') ||
+    delivBoyStatusStr.includes('heading') ||
+    delivBoyStatusStr.includes('arrived') ||
+    delivBoyStatusStr.includes('reached') ||
+    delivBoyStatusStr.includes('pick') ||
+    delivBoyStatusStr.includes('active') ||
+    delivBoyStatusStr === 'true' ||
+    delivBoyStatusStr === '1'
+  ) {
+    return true;
+  }
+
+  // 4. Check presence of delivery boy ID
+  const rawId =
+    orderStatusObj.deliveryBoyId ||
+    orderStatusObj.delivery_boy_id ||
+    orderStatusObj.driverId ||
+    orderStatusObj.driver_id ||
+    orderStatusObj.saviorId ||
+    orderStatusObj.savior_id ||
+    orderStatusObj.deliveryPartnerId ||
+    orderStatusObj.delivery_partner_id ||
+    (orderStatusObj.deliveryBoy && (orderStatusObj.deliveryBoy._id || orderStatusObj.deliveryBoy.id || orderStatusObj.deliveryBoy)) ||
+    (orderStatusObj.delivery_boy && (orderStatusObj.delivery_boy._id || orderStatusObj.delivery_boy.id || orderStatusObj.delivery_boy)) ||
+    (orderStatusObj.driver && (orderStatusObj.driver._id || orderStatusObj.driver.id || orderStatusObj.driver)) ||
+    null;
+
+  if (rawId) {
+    const idStr = (typeof rawId === 'object' ? JSON.stringify(rawId) : String(rawId)).trim().toLowerCase();
+    if (
+      idStr &&
+      idStr !== 'null' &&
+      idStr !== 'undefined' &&
+      idStr !== 'not assigned' &&
+      idStr !== 'none' &&
+      idStr !== '{}' &&
+      idStr !== ''
+    ) {
+      return true;
+    }
+  }
+
+  // 5. Check presence of delivery boy Name
+  const rawName =
+    orderStatusObj.deliveryBoyName ||
+    orderStatusObj.delivery_boy_name ||
+    orderStatusObj.deliveryName ||
+    orderStatusObj.driverName ||
+    orderStatusObj.driver_name ||
+    orderStatusObj.saviorName ||
+    orderStatusObj.savior_name ||
+    orderStatusObj.deliveryPartnerName ||
+    orderStatusObj.delivery_partner_name ||
+    (orderStatusObj.deliveryBoy && orderStatusObj.deliveryBoy.name) ||
+    (orderStatusObj.delivery_boy && orderStatusObj.delivery_boy.name) ||
+    (orderStatusObj.driver && orderStatusObj.driver.name) ||
+    null;
+
+  if (rawName) {
+    const nameStr = String(rawName).trim().toLowerCase();
+    if (
+      nameStr &&
+      nameStr !== 'null' &&
+      nameStr !== 'undefined' &&
+      nameStr !== 'not assigned' &&
+      nameStr !== 'none' &&
+      nameStr !== ''
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+// Helper to check if restaurant accepted (Stage 2 - 50%)
+const checkIsRestaurantAccepted = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return false;
+  const s = String(status || '').trim().toLowerCase();
+  const cleanStr = s.replace(/_/g, ' ').replace(/\s+/g, ' ');
+
+  return (
+    String(orderStatusObj.isRestaurantAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.restaurantAccepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.is_restaurant_accepted).toLowerCase() === 'true' ||
+    String(orderStatusObj.restaurant_accepted).toLowerCase() === 'true' ||
+    orderStatusObj.isRestaurantAccepted === true ||
+    orderStatusObj.restaurantAccepted === true ||
+    orderStatusObj.is_restaurant_accepted === true ||
+    orderStatusObj.restaurant_accepted === true ||
+    cleanStr.includes('restaurant accept') ||
+    cleanStr.includes('restaurent accept') ||
+    cleanStr.includes('food prep') ||
+    cleanStr.includes('prep') ||
+    cleanStr.includes('cook') ||
+    cleanStr.includes('kitchen') ||
+    cleanStr.includes('ready') ||
+    cleanStr.includes('packed') ||
+    cleanStr.includes('waiting for delivery boy to accept') ||
+    cleanStr.includes('waiting for delivery partner') ||
+    cleanStr.includes('waiting for driver') ||
+    cleanStr.includes('waiting for boy') ||
+    cleanStr.includes('waiting for delivery') ||
+    cleanStr.includes('searching') ||
+    (cleanStr.includes('accept') &&
+      !cleanStr.includes('restaurent to accept') &&
+      !cleanStr.includes('restaurant to accept') &&
+      !cleanStr.includes('pending'))
+  );
+};
+
+// Map DB status value to one of 4 progress stages
+const getStageInfo = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return { percent: 25 };
+
+  // Stage 4 (100% - Picked Up / Out for Delivery / On the Way / Delivered)
+  if (checkIsPickedUp(status, orderStatusObj)) {
+    return { percent: 100 };
+  }
+
+  // Stage 3 (75% - Delivery Partner Accepts / Driver Assigned / Heading to Restaurant)
+  if (checkIsDeliveryBoyAccepted(status, orderStatusObj)) {
+    return { percent: 75 };
+  }
+
+  // Stage 2 (50% - Restaurant Accepts / Food Preparing in Kitchen)
+  if (checkIsRestaurantAccepted(status, orderStatusObj)) {
+    return { percent: 50 };
+  }
+
+  // Stage 1 (25% - Order Placed / Waiting for Restaurant to Accept)
   return { percent: 25 };
 };
 
-// Auto-generate fun notification message based on status
-const getNotificationMessage = (status) => {
-  if (!status) return null;
-  const s = status.trim().toLowerCase();
-  if (s.includes('delivered') || s.includes('completed')) return `Your order has been delivered! Enjoy your meal! 🎉`;
-  if (s.includes('out for delivery') || s.includes('out for')) return `Clear the table! Greatness is on its way... 🛵`;
-  if (s.includes('delivered soon') || s.includes('pickup') || s.includes('waiting to pickup')) return `Your order is packed and ready for pickup! 📦`;
-  if (s.includes('waiting for delivery') || s.includes('delivery boy')) return `Searching for your hunger savior... 🚴`;
-  return `Your order is pending restaurant confirmation 🍽️`;
+// Generate friendly notification message based on status
+const getNotificationMessage = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return null;
+  const s = String(status || '').trim().toLowerCase();
+
+  // 1. Stage 4 (100%) - Delivered / Completed / Picked Up / Out for delivery
+  if (s.includes('delivered') || s.includes('completed')) {
+    return `Your order has been delivered! Enjoy your meal! 🎉`;
+  }
+  if (s.includes('out for delivery') || s.includes('reaching') || s.includes('doorstep')) {
+    return `Clear the table! Greatness is on its way... 🛵`;
+  }
+  if (checkIsPickedUp(status, orderStatusObj)) {
+    return `Your order is picked up & on the way to your location! 🛵`;
+  }
+
+  // 2. Stage 3 (75%) - Driver / Delivery Boy Accepted (Assigned)
+  if (checkIsDeliveryBoyAccepted(status, orderStatusObj)) {
+    return `Delivery partner assigned & heading to restaurant! 🛵`;
+  }
+
+  // 3. Stage 2 (50%) - Restaurant Accepted / Food Preparing
+  if (checkIsRestaurantAccepted(status, orderStatusObj)) {
+    return `Order accepted & food is preparing in the kitchen! 🍳`;
+  }
+
+  // 4. Stage 1 (25%) - Pending & Waiting for Restaurant Accept
+  return `Your order is placed & pending restaurant confirmation 🍽️`;
+};
+
+// Format clean display status inside the progress bar
+const formatDisplayStatus = (status, orderStatusObj = {}) => {
+  if (!status && !orderStatusObj) return 'Waiting for restaurant to accept';
+  const s = String(status || '').trim().toLowerCase();
+
+  // 1. Stage 4 (100%)
+  if (s.includes('delivered') || s.includes('completed')) {
+    return 'Order delivered';
+  }
+  if (s.includes('out for delivery') || s.includes('reaching') || s.includes('doorstep')) {
+    return 'Out for delivery';
+  }
+  if (checkIsPickedUp(status, orderStatusObj)) {
+    return 'Order picked up & on the way';
+  }
+
+  // 2. Stage 3 (75%)
+  if (checkIsDeliveryBoyAccepted(status, orderStatusObj)) {
+    return 'Delivery partner assigned';
+  }
+
+  // 3. Stage 2 (50%)
+  if (checkIsRestaurantAccepted(status, orderStatusObj)) {
+    return 'Order accepted · Food preparing in kitchen';
+  }
+
+  // 4. Stage 1 (25%)
+  return 'Order placed';
 };
 
 export default function OrderStatusScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const router = useRouter();
+  const dispatch = useDispatch();
   const insets = useSafeAreaInsets();
   const lastOffsetY = useRef(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      showTabBar(true);
+      const onBackPress = () => {
+        router.replace('/restaurentlist');
+        return true;
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router, showTabBar])
+  );
 
   // Floating animation for empty state icon
   const [floatAnim] = useState(() => new Animated.Value(0));
@@ -78,7 +357,8 @@ export default function OrderStatusScreen() {
   }, [floatAnim]);
 
   const [orderStatus, setOrderStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [recentRejectedOrder, setRecentRejectedOrder] = useState(null);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [isGstExpanded, setIsGstExpanded] = useState(false);
@@ -135,13 +415,36 @@ export default function OrderStatusScreen() {
     return `₹ ${num.toFixed(2)}`;
   };
 
-  // Check if this order was already reviewed
-  const isOrderAlreadyReviewed = useCallback(async (orderId) => {
+  // Check if this order was already reviewed or review prompt was dismissed
+  const isOrderAlreadyReviewed = useCallback(async (orderId, orderObj = null) => {
+    if (orderObj) {
+      if (
+        (orderObj.restaurantRating && Number(orderObj.restaurantRating) > 0) ||
+        (orderObj.deliveryBoyRating && Number(orderObj.deliveryBoyRating) > 0) ||
+        (orderObj.rating && Number(orderObj.rating) > 0) ||
+        orderObj.isReviewed === true ||
+        orderObj.reviewed === true
+      ) {
+        return true;
+      }
+    }
+
     try {
+      const targetId = String(orderId || orderObj?.orderId || orderObj?.orderID || orderObj?.order_id || orderObj?._id || orderObj?.id || '');
+      if (!targetId) return false;
+
       const storedIds = await AsyncStorage.getItem('submitted_reviewed_orders');
       if (storedIds) {
         const parsed = JSON.parse(storedIds);
-        if (Array.isArray(parsed) && parsed.map(String).includes(String(orderId))) {
+        if (Array.isArray(parsed) && parsed.map(String).includes(targetId)) {
+          return true;
+        }
+      }
+
+      const dismissedIds = await AsyncStorage.getItem('dismissed_review_prompts');
+      if (dismissedIds) {
+        const parsed = JSON.parse(dismissedIds);
+        if (Array.isArray(parsed) && parsed.map(String).includes(targetId)) {
           return true;
         }
       }
@@ -155,29 +458,18 @@ export default function OrderStatusScreen() {
     const orderId = order?.orderId || order?.orderID || order?.order_id || order?._id || '';
     if (!orderId) return;
 
-    // Don't show review modal if order was rejected or cancelled
-    const statusStr = (order?.status || order?.orderStatus || order?.order_status || '').toLowerCase();
+    // Show review modal ONLY if order was successfully delivered or completed
+    const statusStr = (order?.status || order?.orderStatus || order?.order_status || '').toLowerCase().trim();
+    const isDelivered = statusStr.includes('delivered') || statusStr.includes('completed');
     const isRejectedOrCancelled =
       statusStr.includes('reject') ||
       statusStr.includes('cancel') ||
       statusStr.includes('declin') ||
-      statusStr.includes('failed');
+      statusStr.includes('failed') ||
+      !isDelivered;
 
-    if (isRejectedOrCancelled) {
-      console.log('[OrderStatus] Order was rejected/cancelled, skipping review modal.');
-      return;
-    }
-
-    // Only allow review for orders that are actually delivered or completed
-    const isDeliveredOrCompleted =
-      statusStr.includes('delivered') ||
-      statusStr.includes('completed') ||
-      Boolean(order.completedAt) ||
-      Boolean(order.deliveredAt) ||
-      order.isCompleted === true;
-
-    if (!isDeliveredOrCompleted) {
-      console.log('[OrderStatus] Order is not completed/delivered, skipping review modal.');
+    if (isRejectedOrCancelled || !isDelivered) {
+      console.log('[OrderStatus] Order was rejected, cancelled, or not delivered yet. Skipping review modal.');
       return;
     }
 
@@ -191,11 +483,11 @@ export default function OrderStatusScreen() {
     setReviewOrder({
       orderId,
       restaurantName: order.restaurantName || order.restaurant_name || order.restName || 'Restaurant',
-      restaurantId: order.restaurantId || order.restaurant_id || '',
-      deliveryBoyId: order.deliveryBoyId || order.delivery_boy_id || order.driverId || '',
-      deliveryBoyName: order.deliveryBoyName || order.deliveryName || order.driverName || 'Delivery Partner',
-      items: order.items || order.orderItems || [],
-      subTotal: order.subTotal ?? order.subtotal ?? '',
+      restaurantId: order.restaurantId || order.restaurant_id || order.restId || '',
+      deliveryBoyId: order.deliveryBoyId || order.delivery_boy_id || order.driverId || order.saviorId || '',
+      deliveryBoyName: order.deliveryBoyName || order.deliveryName || order.driverName || order.saviorName || 'Delivery Partner',
+      items: order.items || order.orderItems || order.cartItems || [],
+      subTotal: order.subTotal ?? order.subtotal ?? order.totalPrice ?? '',
       deliveryCharges: order.deliveryFee ?? order.deliveryCharges ?? '',
       gst: order.gst ?? order.GST ?? order.tax ?? '',
       platformFee: order.platformFee ?? order.platform_fee ?? '',
@@ -212,7 +504,18 @@ export default function OrderStatusScreen() {
     setShowReviewModal(true);
   }, [isOrderAlreadyReviewed]);
 
-  const handleDismissReview = () => {
+  const handleDismissReview = async () => {
+    if (reviewOrder?.orderId) {
+      try {
+        const targetId = String(reviewOrder.orderId);
+        const storedDismissed = await AsyncStorage.getItem('dismissed_review_prompts');
+        const existingIds = storedDismissed ? JSON.parse(storedDismissed) : [];
+        const updatedIds = Array.from(new Set([...existingIds, targetId]));
+        await AsyncStorage.setItem('dismissed_review_prompts', JSON.stringify(updatedIds));
+      } catch (e) {
+        console.warn('[OrderStatus] Error saving dismissed review prompt:', e);
+      }
+    }
     setShowReviewModal(false);
     setReviewOrder(null);
   };
@@ -307,12 +610,12 @@ export default function OrderStatusScreen() {
   };
 
   // ── Order Fetch ───────────────────────────────────────────────────────────
-  const fetchStatus = useCallback(async (isRefresh = false) => {
+  const fetchStatus = useCallback(async (isRefresh = false, isSilent = false) => {
     try {
-      if (isRefresh) {
+      if (isSilent) {
+        // Silent background polling: DO NOT trigger any loading or refreshing spinners
+      } else if (isRefresh) {
         setRefreshing(true);
-      } else if (!orderStatusRef.current) {
-        setLoading(true);
       }
       setError(null);
 
@@ -331,82 +634,71 @@ export default function OrderStatusScreen() {
       console.log('[OrderStatus] Response fields:', Object.keys(data.orderStatus || {}));
 
       if (res.ok && data.success && data.orderStatus) {
-        hadActiveOrderRef.current = true;
-        lastActiveOrderRef.current = data.orderStatus;
-        orderStatusRef.current = data.orderStatus;
-        setOrderStatus(data.orderStatus);
+        const sStr = (data.orderStatus.status || data.orderStatus.orderStatus || '').toLowerCase().trim();
+        const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
 
-        const statusStr = (data.orderStatus.status || '').toLowerCase().trim();
-        const isOngoing = 
-          statusStr.includes('accept') ||
-          statusStr.includes('assign') ||
-          statusStr.includes('way') ||
-          statusStr.includes('prep') ||
-          statusStr.includes('place') ||
-          statusStr.includes('pickup') ||
-          statusStr.includes('doorstep');
-
-        const isStrictlyDelivered = !isOngoing && (
-          statusStr === 'delivered' ||
-          statusStr === 'order delivered' ||
-          statusStr === 'completed' ||
-          statusStr === 'order completed'
-        );
-
-        if (isStrictlyDelivered) {
-          handleOpenReviewModal(data.orderStatus);
+        if (isRej) {
+          const rejData = {
+            orderId: data.orderStatus.orderId || data.orderStatus.orderID || data.orderStatus.order_id || data.orderStatus._id || '',
+            restaurantName: data.orderStatus.restaurantName || data.orderStatus.restaurant_name || data.orderStatus.restName || 'Restaurant',
+            timestamp: Date.now(),
+          };
+          setOrderStatus(null);
+          setRecentRejectedOrder(rejData);
+          AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
+          AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+          AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+        } else {
+          hadActiveOrderRef.current = true;
+          lastActiveOrderRef.current = data.orderStatus;
+          orderStatusRef.current = data.orderStatus;
+          setOrderStatus(data.orderStatus);
+          setRecentRejectedOrder(null);
+          AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
+          AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
+          AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});
         }
       } else {
+        // Capture previous active order before clearing refs
+        const previousActiveOrder = lastActiveOrderRef.current || orderStatusRef.current;
+
         hadActiveOrderRef.current = false;
         lastActiveOrderRef.current = null;
-
-        // Check user's completed orders collection ONLY for any unreviewed completed order
-        try {
-          const compRes = await fetch(`${API_URL}/orders/completed/${userid}`);
-          const compData = await compRes.json();
-          if (compRes.ok && compData.orders && compData.orders.length > 0) {
-            const sorted = [...compData.orders].reverse();
-            for (const compOrd of sorted) {
-              const compId = compOrd.orderId || compOrd.orderID || compOrd.order_id || compOrd._id || '';
-              const compStatus = (compOrd.status || compOrd.orderStatus || '').toLowerCase().trim();
-              const isRejected =
-                compStatus.includes('reject') ||
-                compStatus.includes('cancel') ||
-                compStatus.includes('declin') ||
-                compStatus.includes('failed');
-
-              const isCompOngoing = 
-                compStatus.includes('accept') ||
-                compStatus.includes('assign') ||
-                compStatus.includes('way') ||
-                compStatus.includes('prep') ||
-                compStatus.includes('place') ||
-                compStatus.includes('pickup') ||
-                compStatus.includes('doorstep');
-
-              const isFullyDelivered = !isCompOngoing && !isRejected && (
-                compStatus === 'delivered' ||
-                compStatus === 'order delivered' ||
-                compStatus === 'completed' ||
-                compStatus === 'order completed'
-              );
-
-              if (compId && isFullyDelivered) {
-                const reviewed = await isOrderAlreadyReviewed(compId);
-                if (!reviewed) {
-                  handleOpenReviewModal(compOrd);
-                  break;
-                }
-              }
-            }
-          }
-        } catch (compErr) {
-          console.warn('[OrderStatus] Error checking completed orders for review:', compErr);
-        }
-
         orderStatusRef.current = null;
         setOrderStatus(null);
         setError(data.message || 'No active order found');
+        showTabBar(true);
+        dispatch(skipLocation());
+
+        AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+        AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+
+        // If an active order was rejected or completed
+        if (previousActiveOrder) {
+          const prevStatus = (previousActiveOrder.status || previousActiveOrder.orderStatus || '').toLowerCase().trim();
+          const isPrevRej = prevStatus.includes('reject') || prevStatus.includes('cancel') || prevStatus.includes('declin') || prevStatus.includes('failed');
+          const isDelivered = prevStatus.includes('delivered') || prevStatus.includes('completed');
+
+          if (isPrevRej || !isDelivered) {
+            console.log('[OrderStatus] Active order ended before delivery (rejected/cancelled). Skipping review modal.');
+            const rejData = {
+              orderId: previousActiveOrder.orderId || previousActiveOrder.orderID || previousActiveOrder.order_id || previousActiveOrder._id || '',
+              restaurantName: previousActiveOrder.restaurantName || previousActiveOrder.restaurant_name || previousActiveOrder.restName || 'Restaurant',
+              timestamp: Date.now(),
+            };
+            setRecentRejectedOrder(rejData);
+            AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
+          } else {
+            const prevId = previousActiveOrder.orderId || previousActiveOrder.orderID || previousActiveOrder.order_id || previousActiveOrder._id || previousActiveOrder.id || '';
+            if (prevId) {
+              const reviewed = await isOrderAlreadyReviewed(prevId, previousActiveOrder);
+              if (!reviewed) {
+                console.log('[OrderStatus] Active order delivered successfully! Opening review modal ONCE for order:', prevId);
+                await handleOpenReviewModal(previousActiveOrder);
+              }
+            }
+          }
+        }
       }
     } catch (err) {
       console.error('[OrderStatus] Fetch error:', err);
@@ -415,15 +707,61 @@ export default function OrderStatusScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [handleOpenReviewModal]);
+  }, [handleOpenReviewModal, showTabBar, dispatch]);
 
-  // Auto-refresh every 15 seconds while focused & ensure navbar is visible
+  // Auto-refresh silently while focused & app is active
   useFocusEffect(
     useCallback(() => {
       showTabBar(true);
-      fetchStatus(orderStatusRef.current ? true : false);
-      const interval = setInterval(() => fetchStatus(true), 15000);
-      return () => clearInterval(interval);
+
+      // Load active order data & recent rejected order on focus
+      AsyncStorage.getItem('userid').then((uid) => {
+        if (uid) {
+          AsyncStorage.getItem(`recent_rejected_order_${uid}`).then((rejStr) => {
+            if (rejStr) {
+              try {
+                const parsed = JSON.parse(rejStr);
+                if (parsed && parsed.timestamp && (Date.now() - Number(parsed.timestamp) < 3600000)) {
+                  setRecentRejectedOrder(parsed);
+                } else {
+                  AsyncStorage.removeItem(`recent_rejected_order_${uid}`).catch(() => {});
+                  setRecentRejectedOrder(null);
+                }
+              } catch (e) {}
+            }
+          });
+
+          AsyncStorage.getItem(`active_order_data_${uid}`).then((cached) => {
+            if (cached) {
+              try {
+                const parsed = JSON.parse(cached);
+                if (parsed) {
+                  setOrderStatus(parsed);
+                  orderStatusRef.current = parsed;
+                }
+              } catch (e) {}
+            }
+          });
+        }
+      });
+
+      fetchStatus(false, true); // ALWAYS fetch live order status silently in background on tab focus
+      const interval = setInterval(() => {
+        if (AppState.currentState === 'active') {
+          fetchStatus(false, true); // Silent background polling
+        }
+      }, 5000);
+
+      const subscription = AppState.addEventListener('change', (nextState) => {
+        if (nextState === 'active') {
+          fetchStatus(false, true); // Silent check on app resume
+        }
+      });
+
+      return () => {
+        clearInterval(interval);
+        subscription.remove();
+      };
     }, [fetchStatus, showTabBar])
   );
 
@@ -433,10 +771,6 @@ export default function OrderStatusScreen() {
       Linking.openURL(`tel:${phone}`).catch(err => console.error('Phone dialer error:', err));
     }
   };
-
-  if (loading) {
-    return <LoadingView />;
-  }
 
   // Render Modal inline directly to prevent component unmounting & input focus flickering on state changes
   const renderReviewModal = () => (
@@ -533,8 +867,50 @@ export default function OrderStatusScreen() {
     </Modal>
   );
 
-  // ── Empty State ───────────────────────────────────────────────────────────
+  // ── Empty / Cancelled State ───────────────────────────────────────────────
   if (!orderStatus || error) {
+    const isRejectedWithin1Hour = recentRejectedOrder && (Date.now() - Number(recentRejectedOrder.timestamp || 0) < 3600000);
+
+    if (isRejectedWithin1Hour) {
+      return (
+        <View style={[styles.emptyContainer, { paddingTop: insets.top + 20 }]}>
+          {renderReviewModal()}
+
+          <Animated.View style={[styles.emptyIconCircle, { backgroundColor: '#FEE2E2', transform: [{ translateY: floatAnim }] }]}>
+            <Feather name="x-circle" size={54} color="#DC2626" />
+          </Animated.View>
+
+          <Text style={[styles.emptyTitle, { color: '#991B1B' }]}>
+            Sorry, your order got cancelled
+          </Text>
+
+          <Text style={styles.emptySubText}>
+            Your order from <Text style={{ fontWeight: '700', color: '#1A1A1A' }}>{recentRejectedOrder.restaurantName || 'Restaurant'}</Text> was rejected by the restaurant.
+          </Text>
+
+          {recentRejectedOrder.orderId ? (
+            <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, marginVertical: 4 }}>
+              <Text style={{ fontSize: 13, color: '#4B5563', fontWeight: '600' }}>
+                Order ID: #{recentRejectedOrder.orderId}
+              </Text>
+            </View>
+          ) : null}
+
+          <Text style={[styles.emptySubText, { fontSize: 12, color: '#6B7280' }]}>
+            If any payment was deducted, a full refund will be processed back to your original payment method.
+          </Text>
+
+          <TouchableOpacity
+            onPress={() => router.replace('/restaurentlist')}
+            style={[styles.orderButton, { backgroundColor: '#DC2626', marginTop: 16 }]}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.orderButtonText}>Browse Other Restaurants</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
     return (
       <View style={[styles.emptyContainer, { paddingTop: insets.top + 20 }]}>
         {renderReviewModal()}
@@ -562,8 +938,8 @@ export default function OrderStatusScreen() {
 
   // ── Derived data ──────────────────────────────────────────────────────────
   const statusText = orderStatus.status || 'Order Placed';
-  const { percent } = getStageInfo(statusText);
-  const notifMsg = orderStatus.notification || orderStatus.message || orderStatus.announcement || getNotificationMessage(statusText);
+  const { percent } = getStageInfo(statusText, orderStatus);
+  const notifMsg = getNotificationMessage(statusText, orderStatus);
 
   const restaurantName = orderStatus.restaurantName || orderStatus.restaurant_name || orderStatus.restName || 'Restaurant';
   const orderId = orderStatus.orderId || orderStatus.orderID || orderStatus.order_id || '';
@@ -582,8 +958,35 @@ export default function OrderStatusScreen() {
     || orderStatus.label 
     || null;
 
-  const deliveryBoyName = orderStatus.deliveryBoyName || orderStatus.deliveryName || orderStatus.driverName || null;
-  const hasDeliveryBoy = !!(deliveryBoyName && deliveryBoyName.toString().trim().length > 0);
+  const deliveryBoyName = 
+    orderStatus.deliveryBoyName ||
+    orderStatus.delivery_boy_name ||
+    orderStatus.deliveryName ||
+    orderStatus.driverName ||
+    orderStatus.driver_name ||
+    orderStatus.saviorName ||
+    orderStatus.savior_name ||
+    orderStatus.deliveryPartnerName ||
+    orderStatus.delivery_partner_name ||
+    (orderStatus.deliveryBoy && (orderStatus.deliveryBoy.name || orderStatus.deliveryBoy.fullName)) ||
+    (orderStatus.delivery_boy && (orderStatus.delivery_boy.name || orderStatus.delivery_boy.fullName)) ||
+    (orderStatus.driver && (orderStatus.driver.name || orderStatus.driver.fullName)) ||
+    null;
+  const statusClean = String(statusText).toLowerCase().trim();
+
+  // Delivery partner details are shown ONLY after the delivery boy has explicitly accepted the order
+  const isDriverAcceptedStatus = 
+    checkIsDeliveryBoyAccepted(statusText, orderStatus) ||
+    checkIsPickedUp(statusText, orderStatus);
+
+  const hasDeliveryBoy = !!(
+    isDriverAcceptedStatus &&
+    deliveryBoyName && 
+    deliveryBoyName.toString().trim().length > 0 &&
+    deliveryBoyName.toString().trim().toLowerCase() !== 'null' &&
+    deliveryBoyName.toString().trim().toLowerCase() !== 'undefined' &&
+    deliveryBoyName.toString().trim().toLowerCase() !== 'not assigned'
+  );
 
   const items = orderStatus.items || orderStatus.orderItems || [];
   const subTotal = orderStatus.subTotal ?? orderStatus.subtotal ?? (orderStatus.totalPrice && orderStatus.totalPrice !== orderStatus.grandTotal ? orderStatus.totalPrice : '') ?? '';
@@ -626,23 +1029,46 @@ export default function OrderStatusScreen() {
     }
   }
 
-  const paymentStatus = orderStatus.paymentStatus || 'Paid';
-  const isPaid = String(paymentStatus).trim().toLowerCase() === 'paid';
-  const rawRzpOrderId = (
-    orderStatus.razorpayOrderId || 
-    orderStatus.razorpay_order_id || 
-    orderStatus.razorpayOrder || 
-    orderStatus.razorpay_order_ID || 
-    orderStatus.razorpay_orderid || 
-    orderStatus.rzpOrderId || 
+  const paymentStatus = orderStatus.paymentStatus || orderStatus.payment_status || orderStatus.paymentState || 'Pending';
+  const paymentStatusClean = String(paymentStatus).trim().toLowerCase();
+  const isPaid = 
+    orderStatus.isPaid === true ||
+    paymentStatusClean === 'paid' || 
+    paymentStatusClean === 'completed' || 
+    paymentStatusClean === 'success' || 
+    paymentStatusClean === 'successful';
+
+  // 1. Prioritize direct DB OTP fields if present
+  const dbOtp = (
+    orderStatus.otp ||
+    orderStatus.OTP ||
+    orderStatus.deliveryOtp ||
+    orderStatus.delivery_otp ||
+    orderStatus.orderOtp ||
     ''
   ).toString().trim();
-  const cleanedRzpId = rawRzpOrderId.replace(/^(order_|ord_)/i, '');
-  const rzpDigits = cleanedRzpId.replace(/\D/g, '');
-  const rzpCode = rzpDigits ? rzpDigits.slice(-5) : (cleanedRzpId ? cleanedRzpId.slice(-5).toUpperCase() : '');
-  const fallbackDigits = (orderStatus.orderId || '').toString().replace(/\D/g, '');
-  const finalOtpCode = rzpCode || (fallbackDigits ? fallbackDigits.slice(-5) : '');
-  const otp = isPaid && finalOtpCode ? finalOtpCode.padStart(5, '0') : '';
+
+  let finalOtpCode = dbOtp;
+
+  // 2. If DB does not have an explicit OTP field, extract from razorpayOrderId / orderId
+  if (!finalOtpCode) {
+    const rawRzpOrderId = (
+      orderStatus.razorpayOrderId || 
+      orderStatus.razorpay_order_id || 
+      orderStatus.razorpayOrder || 
+      orderStatus.razorpay_order_ID || 
+      orderStatus.razorpay_orderid || 
+      orderStatus.rzpOrderId || 
+      ''
+    ).toString().trim();
+    const cleanedRzpId = rawRzpOrderId.replace(/^(order_|ord_)/i, '');
+    const rzpDigits = cleanedRzpId.replace(/\D/g, '');
+    const rzpCode = rzpDigits ? rzpDigits.slice(-5) : (cleanedRzpId ? cleanedRzpId.slice(-5).toUpperCase() : '');
+    const fallbackDigits = (orderStatus.orderId || '').toString().replace(/\D/g, '');
+    finalOtpCode = rzpCode || (fallbackDigits ? fallbackDigits.slice(-5) : '');
+  }
+
+  const otp = isPaid && finalOtpCode ? finalOtpCode.padStart(5, '0') : (dbOtp ? dbOtp.padStart(5, '0') : '');
 
   return (
     <View style={styles.container}>
@@ -674,6 +1100,8 @@ export default function OrderStatusScreen() {
           <Text style={styles.restaurantName}>{restaurantName}</Text>
           <View style={styles.restaurantDivider} />
 
+
+
           {/* Order Details */}
           <Text style={styles.sectionLabel}>Order details</Text>
           <View style={styles.orderIdBadge}>
@@ -684,7 +1112,7 @@ export default function OrderStatusScreen() {
           <View style={styles.progressSection}>
             <View style={styles.progressBarWrapper}>
               <View style={[styles.progressBarFill, { width: `${percent}%` }]} />
-              <Text style={styles.progressBarText}>{statusText}</Text>
+              <Text style={styles.progressBarText}>{formatDisplayStatus(statusText, orderStatus)}</Text>
             </View>
           </View>
 
@@ -799,7 +1227,7 @@ export default function OrderStatusScreen() {
                   return (
                     <View style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
                       <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
-                        🍽️ Food GST (5%): {formatCurrency(foodGstVal)}
+                        Food GST (5%): {formatCurrency(foodGstVal)}
                       </Text>
                       <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
                         <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (2.5%)</Text>
@@ -814,7 +1242,7 @@ export default function OrderStatusScreen() {
                         <>
                           <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 6 }} />
                           <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
-                            🛵 Delivery GST (18%): {formatCurrency(deliveryGstVal)}
+                            Delivery GST (18%): {formatCurrency(deliveryGstVal)}
                           </Text>
                           <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
                             <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (9.0%)</Text>

@@ -266,10 +266,14 @@ const locationSlice = createSlice({
     showOutOfZoneModal: false,
     locationError: null,
     selectedSavedAddressId: null,
+    savedAddresses: [],
   },
   reducers: {
     setRoadDistances: (state, action) => {
       state.roadDistances = { ...state.roadDistances, ...action.payload };
+    },
+    setSavedAddressesRedux: (state, action) => {
+      state.savedAddresses = action.payload || [];
     },
     resetLocationState: (state) => {
       state.locationStatus = 'idle';
@@ -284,9 +288,17 @@ const locationSlice = createSlice({
       state.showFetchingModal = false;
       state.showOutOfZoneModal = false;
       state.locationError = null;
+      AsyncStorage.removeItem('user_location_choice');
+      AsyncStorage.removeItem('selected_saved_address_id');
     },
     setSelectedSavedAddressId: (state, action) => {
       state.selectedSavedAddressId = action.payload;
+      if (action.payload) {
+        AsyncStorage.setItem('selected_saved_address_id', String(action.payload));
+        AsyncStorage.setItem('user_location_choice', 'saved');
+      } else {
+        AsyncStorage.removeItem('selected_saved_address_id');
+      }
     }
   },
   extraReducers: (builder) => {
@@ -306,6 +318,7 @@ const locationSlice = createSlice({
         state.showLocationModal = false;
         state.showOutOfZoneModal = false;
         state.locationError = null;
+        AsyncStorage.setItem('user_location_choice', 'inside');
       })
       .addCase(checkLocationAndCalculateDistances.rejected, (state, action) => {
         const errorDetail = action.payload || { type: 'ERROR', message: 'Failed to get location.' };
@@ -317,11 +330,11 @@ const locationSlice = createSlice({
           state.showOutOfZoneModal = true;
         } else {
           state.locationStatus = 'denied';
-          state.showLocationModal = true;
+          state.showLocationModal = false; // Never open a 2nd modal box
         }
       });
   }
 });
 
-export const { setRoadDistances, resetLocationState, skipLocation, setSelectedSavedAddressId } = locationSlice.actions;
+export const { setRoadDistances, setSavedAddressesRedux, resetLocationState, skipLocation, setSelectedSavedAddressId } = locationSlice.actions;
 export default locationSlice.reducer;

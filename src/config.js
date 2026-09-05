@@ -7,7 +7,7 @@ const getApiUrl = () => {
     return process.env.EXPO_PUBLIC_API_URL;
   }
 
-  // Production Railway backend URL:
+  // Live Railway backend URL:
   return 'https://customerbackendfile-production.up.railway.app';
 };
 

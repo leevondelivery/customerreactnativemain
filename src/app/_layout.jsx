@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View, StatusBar as RNStatusBar } from 'react-native';
+import { Alert, Animated, AppState, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View, StatusBar as RNStatusBar } from 'react-native';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
@@ -13,6 +13,7 @@ import { fetchControlsStatus } from '../store/controlsSlice';
 // does not include these modules (e.g. Expo Go, or missing native linking).
 let GoogleSignin = null;
 let messaging = null;
+let Notifications = null;
 
 if (Platform.OS !== 'web') {
   try {
@@ -22,6 +23,19 @@ if (Platform.OS !== 'web') {
     });
   } catch (e) {
     console.warn('[Layout] GoogleSignin native module not available:', e.message);
+  }
+
+  try {
+    Notifications = require('expo-notifications');
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+      }),
+    });
+  } catch (e) {
+    console.warn('[Layout] expo-notifications native module not available:', e.message);
   }
 
   try {
@@ -45,6 +59,9 @@ export const useTabBar = () => useContext(TabBarContext);
 export default function Layout() {
   const pathname = usePathname();
   const router = useRouter();
+
+  // AppState tracking for pausing background tasks & instant wakeup resume
+  const appStateRef = useRef(AppState.currentState);
 
   // Hide the floating tab bar on login and root index redirection screens
   const isLoginPage = pathname === '/login' || pathname === '/' || pathname === '';
@@ -83,98 +100,172 @@ export default function Layout() {
   const prevHasActiveOrder = useRef(false);
   const lastActiveOrderRef = useRef(null);
 
-  // Check active order status from backend (on mount, path change, and every 10 seconds)
-  useEffect(() => {
-    const checkActiveOrder = async () => {
-      try {
-        const userid = await AsyncStorage.getItem('userid');
-        if (!userid) {
-          setHasActiveOrder(false);
-          return;
-        }
-        const response = await fetch(`${API_URL}/orderstatus/user/${userid}`);
-        const data = await response.json();
-        if (response.ok && data.success && data.orderStatus) {
-          setHasActiveOrder(true);
-          prevHasActiveOrder.current = true;
-          lastActiveOrderRef.current = data.orderStatus;
-        } else {
-          // If active order was being tracked previously and is now gone/completed
-          if (prevHasActiveOrder.current) {
-            prevHasActiveOrder.current = false;
-            setHasActiveOrder(false);
-            // The orderstatus page handles the review modal inline — no redirect needed
-            console.log('[Layout] Order completed. Orderstatus page will show the review modal.');
-            return;
-          }
-          setHasActiveOrder(false);
-        }
-      } catch (e) {
-        console.warn('Error checking active order in layout:', e.message);
+  const checkActiveOrder = useCallback(async () => {
+    try {
+      const userid = await AsyncStorage.getItem('userid');
+      if (!userid) {
         setHasActiveOrder(false);
-      }
-    };
-
-    checkActiveOrder();
-    const interval = setInterval(checkActiveOrder, 10000);
-    return () => clearInterval(interval);
-  }, [pathname]);
-
-
-  // Global Authentication, Session Verification & Data Pre-Caching
-  useEffect(() => {
-    const syncSessionAndData = async () => {
-      if (pathname === '/login' || pathname === '/' || pathname === '') {
         return;
       }
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
 
-      const userid = await AsyncStorage.getItem('userid');
-      const logintime = await AsyncStorage.getItem('logintime');
+      const response = await fetch(`${API_URL}/orderstatus/user/${userid}`, {
+        signal: controller ? controller.signal : undefined,
+      });
+      if (timeoutId) clearTimeout(timeoutId);
 
-      if (!userid || !logintime) {
-        console.log('[Layout] Session verification failed: Missing userid or logintime. Redirecting to login.');
+      const data = await response.json();
+      if (response.ok && data.success && data.orderStatus) {
+        setHasActiveOrder(true);
+        prevHasActiveOrder.current = true;
+        lastActiveOrderRef.current = data.orderStatus;
+        AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
+        AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});
+      } else {
+        AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+        AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+        if (prevHasActiveOrder.current) {
+          prevHasActiveOrder.current = false;
+          setHasActiveOrder(false);
+          
+          const prevOrder = lastActiveOrderRef.current;
+          const prevStatus = (prevOrder?.status || prevOrder?.orderStatus || '').toLowerCase().trim();
+          const isDelivered = prevStatus.includes('delivered') || prevStatus.includes('completed');
+
+          if (!isDelivered) {
+            const rejData = {
+              orderId: prevOrder?.orderId || prevOrder?.orderID || prevOrder?.order_id || prevOrder?._id || '',
+              restaurantName: prevOrder?.restaurantName || prevOrder?.restaurant_name || prevOrder?.restName || 'Restaurant',
+              timestamp: Date.now(),
+            };
+            AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
+            console.log('[Layout] Order was rejected/cancelled before delivery.');
+          } else {
+            console.log('[Layout] Order delivered successfully. Orderstatus page will show the review modal.');
+          }
+          return;
+        }
+        setHasActiveOrder(false);
+      }
+    } catch (e) {
+      console.warn('Error checking active order in layout:', e.message);
+      // Keep previous hasActiveOrder state on network error to prevent red dot badge flickering
+    }
+  }, []);
+
+  useEffect(() => {
+    const initActiveOrderState = async () => {
+      try {
+        const userid = await AsyncStorage.getItem('userid');
+        if (userid) {
+          const cachedActiveOrder = await AsyncStorage.getItem(`has_active_order_${userid}`);
+          if (cachedActiveOrder === 'true') {
+            setHasActiveOrder(true);
+            prevHasActiveOrder.current = true;
+          }
+        }
+      } catch (e) {}
+    };
+    initActiveOrderState();
+  }, []);
+
+  const updateCartCount = useCallback(async () => {
+    try {
+      const cartData = await AsyncStorage.getItem('cart');
+      const items = cartData ? JSON.parse(cartData) : [];
+      const totalQty = Array.isArray(items) ? items.reduce((sum, item) => sum + (item.quantity || 0), 0) : 0;
+      setCartCount((prev) => (prev !== totalQty ? totalQty : prev));
+    } catch (e) {
+      console.error('Error fetching cart count:', e);
+    }
+  }, []);
+
+  const syncSessionAndData = useCallback(async () => {
+    if (pathname === '/login' || pathname === '/' || pathname === '') {
+      return;
+    }
+
+    const userid = await AsyncStorage.getItem('userid');
+    if (!userid) return;
+
+    // 1. Sync live user coins & profile details to local storage (with 3.5s timeout)
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+      const userRes = await fetch(`${API_URL}/user/${userid}`, {
+        signal: controller ? controller.signal : undefined,
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+
+      const userData = await userRes.json();
+      if (userRes.status === 403 || userData.isBlocked) {
+        console.warn('[Layout] User is blocked by admin. Logging out user...');
         await AsyncStorage.clear();
+        Alert.alert(
+          'Account Blocked',
+          userData.message || 'Your account has been blocked by admin. Please contact support.'
+        );
         router.replace('/login');
         return;
       }
 
-      // 1. Sync live user coins & profile details to local storage
-      try {
-        const userRes = await fetch(`${API_URL}/user/${userid}`);
-        const userData = await userRes.json();
-        if (userRes.ok && userData.success && userData.user) {
-          const liveUser = userData.user;
-          if (liveUser.coins !== undefined && liveUser.coins !== null) {
-            await AsyncStorage.setItem('coins', String(liveUser.coins));
-          }
-          if (liveUser.phone && liveUser.phone !== 'N/A') {
-            await AsyncStorage.setItem('phone', liveUser.phone);
-          }
-          if (liveUser.name && liveUser.name !== 'N/A') {
-            await AsyncStorage.setItem('name', liveUser.name);
-          }
-          if (liveUser.email && liveUser.email !== 'N/A') {
-            await AsyncStorage.setItem('email', liveUser.email);
-          }
+      if (userRes.ok && userData.success && userData.user) {
+        const liveUser = userData.user;
+        if (liveUser.coins !== undefined && liveUser.coins !== null) {
+          await AsyncStorage.setItem('coins', String(liveUser.coins));
         }
-      } catch (userErr) {
-        console.warn('[Layout] User sync error:', userErr.message);
+        if (liveUser.phone && liveUser.phone !== 'N/A') {
+          await AsyncStorage.setItem('phone', liveUser.phone);
+        }
+        if (liveUser.name && liveUser.name !== 'N/A') {
+          await AsyncStorage.setItem('name', liveUser.name);
+        }
+        if (liveUser.email && liveUser.email !== 'N/A') {
+          await AsyncStorage.setItem('email', liveUser.email);
+        }
       }
+    } catch (userErr) {
+      console.warn('[Layout] User sync error:', userErr.message);
+    }
 
-      // 2. Pre-cache global feesConfig into AsyncStorage
+    // 2. Pre-cache global feesConfig into AsyncStorage (with 3.5s timeout)
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+      const feesRes = await fetch(`${API_URL}/fees-config`, {
+        signal: controller ? controller.signal : undefined,
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+
+      const feesData = await feesRes.json();
+      if (feesRes.ok && feesData.success && feesData.config) {
+        await AsyncStorage.setItem('fees_config', JSON.stringify(feesData.config));
+      }
+    } catch (feesErr) {
+      console.warn('[Layout] Fees config sync error:', feesErr.message);
+    }
+  }, []);
+
+  // Mark first launch without wiping user authentication
+  useEffect(() => {
+    const checkFreshInstall = async () => {
       try {
-        const feesRes = await fetch(`${API_URL}/fees-config`);
-        const feesData = await feesRes.json();
-        if (feesRes.ok && feesData.success && feesData.config) {
-          await AsyncStorage.setItem('fees_config', JSON.stringify(feesData.config));
+        const hasLaunched = await AsyncStorage.getItem('app_has_launched_once');
+        if (!hasLaunched) {
+          await AsyncStorage.setItem('app_has_launched_once', 'true');
         }
-      } catch (feesErr) {
-        console.warn('[Layout] Fees config sync error:', feesErr.message);
+      } catch (e) {
+        console.warn('[App] Fresh install check error:', e);
       }
     };
+    checkFreshInstall();
+  }, []);
 
+  // Global Authentication, Session Verification & Data Pre-Caching
+  useEffect(() => {
     syncSessionAndData();
-  }, [pathname, router]);
+  }, [syncSessionAndData]);
 
   // Inject CSS to hide browser-native password reveal/clear buttons on Web
   useEffect(() => {
@@ -211,6 +302,17 @@ export default function Layout() {
           } else {
             enabled = true; // Android 12 and below are granted on install
           }
+
+          // Create high priority notification channel for Android status bar heads-up banners
+          if (Notifications && Notifications.setNotificationChannelAsync) {
+            await Notifications.setNotificationChannelAsync('default', {
+              name: 'Default Notifications',
+              importance: Notifications.AndroidImportance.MAX,
+              vibrationPattern: [0, 250, 250, 250],
+              lightColor: '#FF231F7C',
+              sound: 'default',
+            });
+          }
         } else {
           const authStatus = await messaging().requestPermission();
           enabled =
@@ -232,35 +334,91 @@ export default function Layout() {
 
     initPushNotifications();
 
-    // Listen for foreground notifications
+    // Listen for foreground notifications and display device-level status bar notifications
     const unsubscribe = messaging().onMessage(async (remoteMessage) => {
       console.log('[FCM] Foreground notification received:', remoteMessage);
-      Alert.alert(
-        remoteMessage.notification?.title || 'Leevon Delivery',
-        remoteMessage.notification?.body || ''
-      );
+
+      const title =
+        remoteMessage.notification?.title ||
+        remoteMessage.data?.title ||
+        remoteMessage.data?.heading ||
+        'Leevon Delivery';
+
+      const body =
+        remoteMessage.notification?.body ||
+        remoteMessage.data?.body ||
+        remoteMessage.data?.message ||
+        '';
+
+      if (Notifications && Notifications.scheduleNotificationAsync) {
+        try {
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title,
+              body,
+              data: remoteMessage.data || {},
+              sound: 'default',
+              ...(Platform.OS === 'android'
+                ? {
+                    channelId: 'default',
+                    priority: Notifications.AndroidNotificationPriority?.MAX || 'max',
+                    color: '#2B783E',
+                  }
+                : {}),
+            },
+            trigger: null, // Display immediately in status bar
+          });
+        } catch (notifErr) {
+          console.warn('[FCM] Error scheduling status bar notification:', notifErr);
+        }
+      }
     });
 
     return unsubscribe;
   }, []);
 
-  // Poll AsyncStorage for cart updates to keep badge synced in real-time
+  // Sync active order and cart badge on initial load & run light intervals while app is ACTIVE
   useEffect(() => {
-    const updateCartCount = async () => {
-      try {
-        const cartData = await AsyncStorage.getItem('cart');
-        const items = cartData ? JSON.parse(cartData) : [];
-        const totalQty = Array.isArray(items) ? items.reduce((sum, item) => sum + (item.quantity || 0), 0) : 0;
-        setCartCount((prev) => (prev !== totalQty ? totalQty : prev));
-      } catch (e) {
-        console.error('Error fetching cart count:', e);
-      }
-    };
-
+    checkActiveOrder();
     updateCartCount();
-    const interval = setInterval(updateCartCount, 1000);
-    return () => clearInterval(interval);
-  }, []);
+
+    const orderInterval = setInterval(() => {
+      if (appStateRef.current === 'active') {
+        checkActiveOrder();
+      }
+    }, 10000);
+
+    const cartInterval = setInterval(() => {
+      if (appStateRef.current === 'active') {
+        updateCartCount();
+      }
+    }, 3000);
+
+    return () => {
+      clearInterval(orderInterval);
+      clearInterval(cartInterval);
+    };
+  }, [checkActiveOrder, updateCartCount]);
+
+  // Handle AppState changes (waking up after 3 hours / idle state)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (
+        appStateRef.current.match(/inactive|background/) &&
+        nextAppState === 'active'
+      ) {
+        console.log('[Layout] App resumed from background. Syncing active order & cart badge instantly...');
+        checkActiveOrder();
+        updateCartCount();
+        syncSessionAndData();
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [checkActiveOrder, updateCartCount, syncSessionAndData]);
 
   const showTabBar = useCallback((force = false) => {
     if (isTabBarVisible.current && !force) return;
@@ -286,25 +444,6 @@ export default function Layout() {
   useEffect(() => {
     showTabBar(true);
   }, [pathname, showTabBar]);
-
-  useEffect(() => {
-    let activeIndex = 0;
-    if (pathname.startsWith('/restaurentlist')) activeIndex = 0;
-    else if (pathname.startsWith('/orderstatus')) activeIndex = 1;
-    else if (pathname.startsWith('/cart')) activeIndex = 2;
-    else if (pathname.startsWith('/profile')) activeIndex = 3;
-
-    const tabWidth = tabBarWidth / 4;
-    const circleWidth = 60; // width of activeTabCircle
-    const targetValue = activeIndex * tabWidth + (tabWidth - circleWidth) / 2;
-
-    Animated.spring(translateX, {
-      toValue: targetValue,
-      tension: 60,
-      friction: 9,
-      useNativeDriver: true,
-    }).start();
-  }, [pathname, tabBarWidth, translateX]);
 
   return (
     <Provider store={store}>
@@ -340,9 +479,8 @@ function MainLayoutContent({
   cartCount,
   hasActiveOrder,
 }) {
-  const locationStatus = useSelector((state) => state.location?.locationStatus);
-  // Hide bottom tab bar only on login page or on restaurant list screen when initial location decision is pending
-  const shouldShowTabBar = !isLoginPage && (pathname !== '/restaurentlist' || locationStatus !== 'idle' || hasActiveOrder);
+  // Hide bottom tab bar only on login page
+  const shouldShowTabBar = !isLoginPage;
 
   // Poll confirmPayButton + maintenanceMode from MongoDB every 5 seconds (inside Provider)
   const dispatch = useDispatch();
@@ -427,13 +565,54 @@ function FloatingTabBar({
   hasActiveOrder,
 }) {
   const insets = useSafeAreaInsets();
-  
-  // Calculate dynamic bottom position:
-  // On Android with 3-button navigation, insets.bottom is ~48px+.
-  // On gesture navigation, insets.bottom is ~16-20px.
-  // On iOS, insets.bottom is ~34px.
-  // We add insets.bottom + 12 (min 24) to guarantee clearance above system navigation buttons.
   const dynamicBottom = Math.max(insets.bottom + 12, Platform.OS === 'ios' ? 34 : 24);
+
+  // Optimistic active route state for instant visual feedback on tab touch
+  const [activeRoute, setActiveRoute] = useState(pathname);
+
+  // Keep activeRoute in sync when pathname changes externally
+  useEffect(() => {
+    setActiveRoute(pathname);
+  }, [pathname]);
+
+  // Animate tab indicator circle immediately when activeRoute or tabBarWidth changes
+  useEffect(() => {
+    let activeIndex = 0;
+    if (activeRoute.startsWith('/restaurentlist')) activeIndex = 0;
+    else if (activeRoute.startsWith('/orderstatus')) activeIndex = 1;
+    else if (activeRoute.startsWith('/cart')) activeIndex = 2;
+    else if (activeRoute.startsWith('/profile')) activeIndex = 3;
+
+    if (tabBarWidth > 0) {
+      const tabWidth = tabBarWidth / 4;
+      const circleWidth = 60;
+      const targetValue = activeIndex * tabWidth + (tabWidth - circleWidth) / 2;
+
+      Animated.spring(translateX, {
+        toValue: targetValue,
+        tension: 140, // responsive, immediate feel
+        friction: 12,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [activeRoute, tabBarWidth, translateX]);
+
+  const handleTabPress = useCallback(
+    (tabRoute) => {
+      const cleanCurrent = (activeRoute || '').replace(/\/index$/, '').replace(/\/$/, '');
+      const cleanTarget = (tabRoute || '').replace(/\/index$/, '').replace(/\/$/, '');
+      const isAlreadyOnTab = cleanCurrent === cleanTarget;
+
+      if (isAlreadyOnTab) return;
+
+      // 1. Instant 0ms latency UI update: move white circle & highlight tab icon immediately
+      setActiveRoute(tabRoute);
+
+      // 2. Immediate route navigation
+      router.replace(tabRoute);
+    },
+    [activeRoute, router]
+  );
 
   return (
     <Animated.View
@@ -454,7 +633,7 @@ function FloatingTabBar({
     >
       {/* Soft Background circles for all tabs */}
       {tabs.map((tab, idx) => {
-        const isActive = pathname.startsWith(tab.route);
+        const isActive = activeRoute.startsWith(tab.route);
         return (
           <View
             key={`bg-circle-${tab.route}`}
@@ -484,18 +663,15 @@ function FloatingTabBar({
 
       {/* Transparent Interactive Tab Items */}
       {tabs.map((tab) => {
-        const isActive = pathname.startsWith(tab.route);
+        const isActive = activeRoute.startsWith(tab.route);
         const isCartTab = tab.route === '/cart';
         const isOrderStatusTab = tab.route === '/orderstatus';
 
         return (
           <TouchableOpacity
             key={tab.route}
-            onPress={() => {
-              if (pathname === tab.route) return;
-              router.replace(tab.route);
-            }}
-            activeOpacity={0.9}
+            onPress={() => handleTabPress(tab.route)}
+            activeOpacity={0.8}
             style={styles.tabTouchArea}
           >
             <View style={[isActive ? { transform: [{ translateY: -15 }] } : null, { position: 'relative' }]}>

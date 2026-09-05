@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   Text,
   View,
@@ -9,9 +9,10 @@ import {
   Linking,
   Animated,
   Platform,
+  BackHandler,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Feather, FontAwesome, FontAwesome5 } from '@expo/vector-icons';
 import { useDispatch, useSelector } from 'react-redux';
 
@@ -47,9 +48,9 @@ export default function ProfileScreen() {
   const profileLoaded = useSelector((state) => state.restaurants.profileLoaded);
 
   const [user, setUser] = useState({
-    name: 'Gsvinith',
-    phone: '6300733511',
-    coins: '1890',
+    name: '',
+    phone: '',
+    coins: '0',
     dateOfBirth: '',
   });
   const [loading, setLoading] = useState(true);
@@ -58,6 +59,104 @@ export default function ProfileScreen() {
   const [isCoinsActive, setIsCoinsActive] = useState(true);
 
   const [shineValue] = useState(() => new Animated.Value(-180));
+
+  const fetchUserData = useCallback(async () => {
+    try {
+      const cachedName = await AsyncStorage.getItem('name');
+      const cachedPhone = await AsyncStorage.getItem('phone');
+      const cachedCoins = await AsyncStorage.getItem('coins');
+      const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
+      const userid = await AsyncStorage.getItem('userid');
+
+      const isTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
+      setUser({
+        name: cachedName && cachedName.toLowerCase() !== 'n/a' ? cachedName : 'Customer',
+        phone: cachedPhone && cachedPhone.toLowerCase() !== 'n/a' && !isTemp ? cachedPhone : '',
+        coins: cachedCoins !== null && cachedCoins.toLowerCase() !== 'n/a' ? cachedCoins : '0',
+        dateOfBirth: cachedDateOfBirth && cachedDateOfBirth.toLowerCase() !== 'n/a' ? cachedDateOfBirth : '',
+      });
+      setLoading(false);
+
+      if (!userid) {
+        if (router.canDismiss()) {
+          router.dismissAll();
+        }
+        router.replace('/login');
+        return;
+      }
+
+      // Fetch global toggle status for coins
+        try {
+          const feesRes = await fetch(`${API_URL}/fees-config`);
+          const feesData = await feesRes.json();
+          if (feesRes.ok && feesData.success && feesData.config) {
+            setIsCoinsActive(feesData.config.isCoinsActive !== false);
+          }
+        } catch (feesErr) {
+          console.warn('[Profile] Error loading fees configuration:', feesErr);
+        }
+
+        // Fetch live user coins balance
+        try {
+          const userRes = await fetch(`${API_URL}/user/${userid}`);
+          const userData = await userRes.json();
+          if (userRes.ok && userData.success && userData.user) {
+            const liveCoins = String(userData.user.coins ?? 0);
+            const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
+            const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
+            const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
+            const livePhone = userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp ? userData.user.phone : (cachedPhone && !isCachedTemp ? cachedPhone : '');
+
+            await AsyncStorage.setItem('coins', liveCoins);
+            if (userData.user.name && userData.user.name !== 'N/A') {
+              await AsyncStorage.setItem('name', userData.user.name);
+            }
+            if (userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp) {
+              await AsyncStorage.setItem('phone', userData.user.phone);
+            } else if (isLiveTemp) {
+              await AsyncStorage.setItem('phone', '');
+            }
+            if (userData.user.email && userData.user.email !== 'N/A') {
+              await AsyncStorage.setItem('email', userData.user.email);
+            }
+            if (userData.user.isPhoneVerified !== undefined) {
+              await AsyncStorage.setItem('isPhoneVerified', String(userData.user.isPhoneVerified));
+            }
+
+            setUser(prev => ({
+              ...prev,
+              coins: liveCoins,
+              name: liveName,
+              phone: livePhone
+            }));
+          }
+        } catch (profileErr) {
+          console.warn('[Profile] Error syncing live profile details:', profileErr);
+        }
+
+        if (userid && !profileLoaded) {
+          dispatch(fetchProfileData(userid));
+        }
+    } catch (e) {
+      console.error('Error fetching user data:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, [dispatch, profileLoaded]);
+
+  useFocusEffect(
+    useCallback(() => {
+      showTabBar(true);
+      fetchUserData();
+      const onBackPress = () => {
+        router.replace('/restaurentlist');
+        return true; // Prevents app exit and redirects to home page
+      };
+
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [router, showTabBar, fetchUserData])
+  );
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -87,103 +186,34 @@ export default function ProfileScreen() {
   }, [shineValue]);
 
   useEffect(() => {
-    const fetchUserData = async () => {
-      try {
-        const cachedName = await AsyncStorage.getItem('name');
-        const cachedPhone = await AsyncStorage.getItem('phone');
-        const cachedCoins = await AsyncStorage.getItem('coins');
-        const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
-        const userid = await AsyncStorage.getItem('userid');
-
-        const isTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
-        setUser({
-          name: cachedName && cachedName.toLowerCase() !== 'n/a' ? cachedName : 'Customer',
-          phone: cachedPhone && cachedPhone.toLowerCase() !== 'n/a' && !isTemp ? cachedPhone : '',
-          coins: cachedCoins !== null && cachedCoins.toLowerCase() !== 'n/a' ? cachedCoins : '0',
-          dateOfBirth: cachedDateOfBirth && cachedDateOfBirth.toLowerCase() !== 'n/a' ? cachedDateOfBirth : '',
-        });
-        setLoading(false);
-
-        if (userid) {
-          // Fetch global toggle status for coins
-          try {
-            const feesRes = await fetch(`${API_URL}/fees-config`);
-            const feesData = await feesRes.json();
-            if (feesRes.ok && feesData.success && feesData.config) {
-              setIsCoinsActive(feesData.config.isCoinsActive !== false);
-            }
-          } catch (feesErr) {
-            console.warn('[Profile] Error loading fees configuration:', feesErr);
-          }
-
-          // Fetch live user coins balance
-          try {
-            const userRes = await fetch(`${API_URL}/user/${userid}`);
-            const userData = await userRes.json();
-            if (userRes.ok && userData.success && userData.user) {
-              const liveCoins = String(userData.user.coins ?? 0);
-              const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
-              const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
-              const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
-              const livePhone = userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp ? userData.user.phone : (cachedPhone && !isCachedTemp ? cachedPhone : '');
-
-              await AsyncStorage.setItem('coins', liveCoins);
-              if (userData.user.name && userData.user.name !== 'N/A') {
-                await AsyncStorage.setItem('name', userData.user.name);
-              }
-              if (userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp) {
-                await AsyncStorage.setItem('phone', userData.user.phone);
-              } else if (isLiveTemp) {
-                await AsyncStorage.setItem('phone', '');
-              }
-              if (userData.user.isPhoneVerified !== undefined) {
-                await AsyncStorage.setItem('isPhoneVerified', String(userData.user.isPhoneVerified));
-              }
-
-              setUser(prev => ({
-                ...prev,
-                coins: liveCoins,
-                name: liveName,
-                phone: livePhone
-              }));
-            }
-          } catch (profileErr) {
-            console.warn('[Profile] Error syncing live profile details:', profileErr);
-          }
-
-          if (!profileLoaded) {
-            dispatch(fetchProfileData(userid));
-          }
-        }
-      } catch (e) {
-        console.error('Error fetching user data:', e);
-        setLoading(false);
-      }
-    };
     fetchUserData();
-  }, [dispatch, profileLoaded]);
+  }, [fetchUserData]);
 
   const handleLogout = async () => {
     try {
-      // Sign out from Firebase
-      if (auth().currentUser) {
+      if (typeof auth === 'function' && auth() && auth().currentUser) {
         await auth().signOut();
       }
     } catch (e) {
-      console.log('Firebase signout error:', e.message);
+      console.log('Firebase signout error:', e?.message || e);
     }
 
     try {
-      // Sign out from Google (clears cached Google account selection)
-      await GoogleSignin.signOut();
+      if (GoogleSignin && typeof GoogleSignin.signOut === 'function') {
+        await GoogleSignin.signOut();
+      }
     } catch (e) {
-      console.log('Google signout error:', e.message);
+      console.log('Google signout error:', e?.message || e);
     }
 
     try {
       await AsyncStorage.clear();
       dispatch(resetLocationState());
       dispatch(resetProfile());
+      setShowLogoutModal(false);
+      if (router.canDismiss()) {
+        router.dismissAll();
+      }
       router.replace('/login');
     } catch (error) {
       console.error('Logout error:', error);
@@ -307,11 +337,32 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.userTextContainer}>
             <Text style={[styles.userName, !isPhoneAvailable && { marginBottom: 0 }]}>{user.name}</Text>
-            {isPhoneAvailable && (
+            {isPhoneAvailable ? (
               <View style={styles.phoneRow}>
                 <FontAwesome name="phone" size={14} color="#C2932E" />
                 <Text style={styles.phoneText}>{user.phone}</Text>
               </View>
+            ) : (
+              <TouchableOpacity
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                  marginTop: 6,
+                  backgroundColor: '#FFF3E0',
+                  paddingVertical: 5,
+                  paddingHorizontal: 12,
+                  borderRadius: 14,
+                  alignSelf: 'flex-start',
+                  borderWidth: 1,
+                  borderColor: '#FFE0B2',
+                }}
+                onPress={() => router.push('/profile/mydetails')}
+                activeOpacity={0.8}
+              >
+                <Feather name="alert-circle" size={13} color="#E65100" />
+                <Text style={{ color: '#E65100', fontSize: 12, fontWeight: '700' }}>Add & Verify Mobile</Text>
+              </TouchableOpacity>
             )}
           </View>
         </View>

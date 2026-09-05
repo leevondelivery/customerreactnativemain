@@ -1,10 +1,11 @@
-import { Feather, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
+import { Feather, FontAwesome, FontAwesome5, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  AppState,
   Dimensions,
   FlatList,
   Linking,
@@ -16,6 +17,8 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  BackHandler,
+  ToastAndroid,
 } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,14 +27,33 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
-import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, skipLocation } from '../../store/locationSlice';
-import { fetchRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
+import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, setSavedAddressesRedux, skipLocation } from '../../store/locationSlice';
+import { fetchAllRestaurantMenus, fetchRestaurants, loadCachedRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/restaurentlist.styles';
 import { useTabBar } from '../_layout';
 
 
 const { width: screenWidth } = Dimensions.get('window');
 const CAROUSEL_WIDTH = Math.min(screenWidth, 500) - 32;
+
+// Precise search query matcher (matches word prefixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
+const isTextMatchingQuery = (text, query) => {
+  if (!text || !query) return false;
+  const t = String(text).toLowerCase().trim();
+  const q = String(query).toLowerCase().trim();
+  if (!q) return false;
+
+  const words = t.split(/[\s,/\-\(\)]+/).filter(Boolean);
+  const queryWords = q.split(/[\s,/\-\(\)]+/).filter(Boolean);
+
+  if (queryWords.length === 0) return false;
+
+  return queryWords.every((qWord) => {
+    // Singular variant if query word ends with 's' and length > 3 (e.g. 'fries' -> 'frie')
+    const sWord = (qWord.length > 3 && qWord.endsWith('s')) ? qWord.slice(0, -1) : null;
+    return words.some((w) => w.startsWith(qWord) || (sWord && w.startsWith(sWord)));
+  });
+};
 
 // A cross-platform image component to bypass React Native Web's CORS checks on web
 function CarouselImage({ uri, style }) {
@@ -136,6 +158,9 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
   return null;
 };
 
+// Track location modal display per app session to avoid re-opening when navigating back
+let globalHasShownDeliverToModal = false;
+
 export default function RestaurantListScreen() {
   const [nowTime, setNowTime] = useState(new Date());
 
@@ -154,6 +179,7 @@ export default function RestaurantListScreen() {
 
   const dispatch = useDispatch();
   const restaurants = useSelector((state) => state.restaurants.list);
+  const menus = useSelector((state) => state.restaurants.menus || {});
   const carouselItems = useSelector((state) => state.restaurants.carousel || []);
   const categories = useSelector((state) => state.restaurants.categories || []);
   const initialLoaded = useSelector((state) => state.restaurants.initialLoaded);
@@ -169,6 +195,7 @@ export default function RestaurantListScreen() {
     showOutOfZoneModal,
     locationError,
     selectedSavedAddressId,
+    savedAddresses: reduxSavedAddresses = [],
   } = useSelector((state) => state.location);
 
   const handleEnableLocation = async () => {
@@ -193,99 +220,144 @@ export default function RestaurantListScreen() {
   };
 
   const [userid, setUserid] = useState(null);
-  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [savedAddresses, setSavedAddresses] = useState(reduxSavedAddresses);
+
+  useEffect(() => {
+    if (reduxSavedAddresses && reduxSavedAddresses.length > 0) {
+      setSavedAddresses(reduxSavedAddresses);
+    }
+  }, [reduxSavedAddresses]);
+
   const [showDeliverToModal, setShowDeliverToModal] = useState(false);
   const hasInitialLocationChecked = useRef(false);
 
   useEffect(() => {
     const initLocationFlow = async () => {
-      if (restaurants.length === 0 || hasInitialLocationChecked.current) return;
+      if (hasInitialLocationChecked.current || globalHasShownDeliverToModal) return;
       hasInitialLocationChecked.current = true;
 
       const uid = await AsyncStorage.getItem('userid');
       setUserid(uid);
 
-      // If user has an active order, skip location prompts entirely
+      const savedAddrId = await AsyncStorage.getItem('selected_saved_address_id');
+      const userChoice = await AsyncStorage.getItem('user_location_choice');
+
+      let hasActiveOrder = false;
+
       if (uid) {
         try {
-          const response = await fetch(`${API_URL}/orderstatus/user/${uid}`);
-          const data = await response.json();
-          if (response.ok && data.success && data.orderStatus) {
-            console.log('[RestaurantList] Active order exists, skipping location checking.');
-            dispatch(skipLocation());
-            return;
+          const cachedAddr = await AsyncStorage.getItem(`saved_addresses_${uid}`);
+          if (cachedAddr) {
+            const parsed = JSON.parse(cachedAddr) || [];
+            setSavedAddresses(parsed);
+            dispatch(setSavedAddressesRedux(parsed));
           }
-        } catch (err) {
-          console.warn('[RestaurantList] Error checking active order status:', err);
-        }
+
+          const cachedActiveOrder = await AsyncStorage.getItem(`has_active_order_${uid}`);
+          if (cachedActiveOrder === 'true') {
+            hasActiveOrder = true;
+          }
+        } catch (e) {}
       }
 
-      if (locationStatus === 'idle') {
-        if (uid) {
-          try {
-            // Load cached addresses first
-            const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
-            if (cached) {
-              const addresses = JSON.parse(cached);
-              setSavedAddresses(addresses || []);
-            }
-            // Refresh background cache
-            fetch(`${API_URL}/user/${uid}/addresses`)
-              .then(res => res.json())
-              .then(async (data) => {
-                if (data.success && data.addresses) {
-                  setSavedAddresses(data.addresses);
-                  await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
-                }
-              })
-              .catch(e => console.warn(e));
-          } catch (err) {
-            console.warn('[RestaurantList] Error loading addresses on startup:', err);
-          }
-        }
-        // Force the customer to make a location decision (Current Location, Saved Address, or Skip & Browse)
+      // When reopening app without an active order, show deliver-to location modal ONCE on launch
+      if (!hasActiveOrder) {
+        globalHasShownDeliverToModal = true;
         setShowDeliverToModal(true);
-      } else if (uid) {
-        // Try cached first, then background update
+      } else {
+        globalHasShownDeliverToModal = true;
+        setShowDeliverToModal(false);
+      }
+
+      // Asynchronously verify addresses & active order status in background without delaying UI
+      if (uid) {
+        fetch(`${API_URL}/user/${uid}/addresses`)
+          .then(res => res.json())
+          .then(async (data) => {
+            if (data.success && data.addresses) {
+              setSavedAddresses(data.addresses);
+              dispatch(setSavedAddressesRedux(data.addresses));
+              await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+            }
+          })
+          .catch(() => {});
+
         try {
-          const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
-          if (cached) {
-            setSavedAddresses(JSON.parse(cached));
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 1500) : null;
+          const orderRes = await fetch(`${API_URL}/orderstatus/user/${uid}`, {
+            signal: controller ? controller.signal : undefined
+          });
+          if (timeoutId) clearTimeout(timeoutId);
+          if (orderRes.ok) {
+            const orderData = await orderRes.json();
+            const isActive = !!(orderData.success && orderData.orderStatus);
+            await AsyncStorage.setItem(`has_active_order_${uid}`, isActive ? 'true' : 'false');
+            if (isActive) {
+              globalHasShownDeliverToModal = true;
+              setShowDeliverToModal(false);
+            }
           }
-          fetch(`${API_URL}/user/${uid}/addresses`)
-            .then(res => res.json())
-            .then(async (data) => {
-              if (data.success && data.addresses) {
-                setSavedAddresses(data.addresses);
-                await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
-              }
-            })
-            .catch(e => console.warn(e));
-        } catch (err) {
-          console.warn('[RestaurantList] Error loading cached addresses:', err);
+        } catch (orderErr) {
+          console.warn('[RestaurantList] Background order check error:', orderErr.message);
         }
       }
     };
 
     initLocationFlow();
-  }, [restaurants, locationStatus, dispatch]);
+  }, [dispatch]);
+
+  const lastBackPressTime = useRef(0);
 
   useFocusEffect(
     useCallback(() => {
-      const loadAddresses = async () => {
+      showTabBar(true);
+      let isMounted = true;
+
+      const onBackPress = () => {
+        const now = Date.now();
+        if (lastBackPressTime.current && now - lastBackPressTime.current < 2000) {
+          BackHandler.exitApp();
+          return true;
+        }
+
+        lastBackPressTime.current = now;
+        if (Platform.OS === 'android') {
+          ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+        }
+        triggerToast('PRESS BACK AGAIN TO EXIT APP', 'warning');
+        return true;
+      };
+
+      const backSubscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+
+      const syncFocusLocation = async () => {
         const uid = await AsyncStorage.getItem('userid');
         if (uid) {
           try {
-            // Load cached addresses first
+            const cachedActiveOrder = await AsyncStorage.getItem(`has_active_order_${uid}`);
+            if (cachedActiveOrder === 'true' && isMounted) {
+              setShowDeliverToModal(false);
+              globalHasShownDeliverToModal = true;
+            }
+
+            const savedAddrId = await AsyncStorage.getItem('selected_saved_address_id');
+            if (savedAddrId) {
+              dispatch(setSelectedSavedAddressId(savedAddrId));
+            }
+
             const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
-            if (cached) {
-              setSavedAddresses(JSON.parse(cached));
+            if (cached && isMounted) {
+              const parsed = JSON.parse(cached) || [];
+              setSavedAddresses(parsed);
+              dispatch(setSavedAddressesRedux(parsed));
             }
 
             const response = await fetch(`${API_URL}/user/${uid}/addresses`);
             const data = await response.json();
-            if (data.success && data.addresses) {
+            if (data.success && data.addresses && isMounted) {
               setSavedAddresses(data.addresses);
+              dispatch(setSavedAddressesRedux(data.addresses));
               await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
             }
           } catch (err) {
@@ -293,8 +365,14 @@ export default function RestaurantListScreen() {
           }
         }
       };
-      loadAddresses();
-    }, [])
+
+      syncFocusLocation();
+
+      return () => {
+        isMounted = false;
+        backSubscription.remove();
+      };
+    }, [dispatch, showTabBar])
   );
 
   const formatTimeAMPM = (timeStr) => {
@@ -346,6 +424,16 @@ export default function RestaurantListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [activeType, setActiveType] = useState('All'); // 'All', 'Veg', 'Non-Veg'
   const [selectedCategory, setSelectedCategory] = useState(null);
+
+  // Progressive rendering for instant screen mount (render first 4 visible cards on frame 1, then expand)
+  const [displayLimit, setDisplayLimit] = useState(4);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDisplayLimit(999);
+    }, 40);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Toast state and animated values
   const [toastConfig, setToastConfig] = useState({ visible: false, message: '', type: 'success' });
@@ -423,25 +511,43 @@ export default function RestaurantListScreen() {
     }
   };
 
-  // Fetch initial data on mount
+  // Fetch initial data on mount (load cache first, then fetch live updates)
   useEffect(() => {
     console.log(`[RestaurantList] Screen focused/mounted. initialLoaded: ${initialLoaded}, reduxLoading: ${reduxLoading}`);
     if (!initialLoaded && !reduxLoading) {
-      console.log('[RestaurantList] initialLoaded is false and not loading, dispatching fetchRestaurants.');
-      dispatch(fetchRestaurants());
+      console.log('[RestaurantList] Loading cached data and fetching fresh restaurants...');
+      dispatch(loadCachedRestaurants()).then(() => {
+        dispatch(fetchRestaurants());
+      });
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Instant Focus Effect: Re-fetch fresh restaurant statuses immediately when returning to Home screen
+  // Background Menu Prefetching for Instant Item Search (deferred to prevent screen transition lag)
+  useEffect(() => {
+    if (restaurants && restaurants.length > 0) {
+      const timer = setTimeout(() => {
+        dispatch(fetchAllRestaurantMenus(restaurants));
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [dispatch, restaurants]);
+
+  // Focus Effect: Re-fetch fresh restaurant statuses silently after transition completes
   useFocusEffect(
     useCallback(() => {
       let isMounted = true;
-      const fetchFreshStatuses = async () => {
+      const timer = setTimeout(async () => {
         try {
           console.log('[RestaurantList] Home screen focused. Re-fetching fresh restaurant statuses from DB...');
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+
           const restRes = await fetch(`${API_URL}/restaurants?t=${Date.now()}`, {
-            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+            signal: controller ? controller.signal : undefined,
           });
+          if (timeoutId) clearTimeout(timeoutId);
+
           if (restRes.ok) {
             const restData = await restRes.json();
             const freshList = restData.restaurants || [];
@@ -452,29 +558,52 @@ export default function RestaurantListScreen() {
         } catch (error) {
           console.warn('[RestaurantList] Error updating status on focus:', error);
         }
+      }, 400);
+
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
       };
-      fetchFreshStatuses();
-      return () => { isMounted = false; };
     }, [dispatch])
   );
 
-  // Background Polling for Restaurant active status updates (every 15 seconds with no-cache)
+  // Background Polling for Restaurant active status updates (every 15 seconds with timeout & AppState awareness)
   useEffect(() => {
-    const interval = setInterval(async () => {
+    const fetchStatusesSilently = async () => {
+      if (AppState.currentState !== 'active') return;
       try {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+
         const restRes = await fetch(`${API_URL}/restaurants?t=${Date.now()}`, {
-          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' },
+          signal: controller ? controller.signal : undefined,
         });
+        if (timeoutId) clearTimeout(timeoutId);
+
         const restData = await restRes.json();
         if (restRes.ok && (restData.success || restData.restaurants)) {
           dispatch(updateRestaurantStatuses(restData.restaurants || []));
         }
       } catch (error) {
-        console.error('[RestaurantList] Background polling error:', error);
+        console.warn('[RestaurantList] Background polling error:', error.message);
       }
-    }, 15000);
+    };
 
-    return () => clearInterval(interval);
+    const interval = setInterval(fetchStatusesSilently, 15000);
+
+    // Also listen to AppState changes (e.g. app resuming after 3 hours)
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        console.log('[RestaurantList] App resumed. Fetching fresh restaurant statuses...');
+        fetchStatusesSilently();
+      }
+    });
+
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
   }, [dispatch]);
 
   const handleRefresh = async () => {
@@ -488,11 +617,12 @@ export default function RestaurantListScreen() {
     }
   };
 
-  // Carousel Auto-Scroll Logic
+  // Carousel Auto-Scroll Logic (runs only when app is active)
   useEffect(() => {
     if (carouselItems.length === 0) return;
 
     const interval = setInterval(() => {
+      if (AppState.currentState !== 'active') return;
       setActiveCarouselIndex((prevIndex) => {
         let nextIndex = prevIndex + 1;
         if (nextIndex >= carouselItems.length) {
@@ -515,7 +645,125 @@ export default function RestaurantListScreen() {
     setActiveCarouselIndex(index);
   };
 
-  if (loading) {
+  const [initialLoadingTimeout, setInitialLoadingTimeout] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setInitialLoadingTimeout(false);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Memoized filter and search calculations to prevent heavy re-computations on every render tick
+  const { filteredList, matchingItemsMap } = useMemo(() => {
+    const matchingMap = {};
+    const list = (Array.isArray(restaurants) ? restaurants : [])
+      .filter((item) => {
+        // Filter by search query (Matches Restaurant Name, Address, Categories, or Menu Items)
+        if (searchQuery && searchQuery.trim()) {
+          const q = searchQuery.trim().toLowerCase();
+
+          const nameField = item.name || item.email || '';
+          const addressField = item.address || '';
+
+          const matchesName = isTextMatchingQuery(nameField, q);
+          const matchesAddress = q.length >= 3 && addressField.toLowerCase().includes(q);
+
+          const hasCategoryMatch = item.categories && item.categories.some(c => {
+            if (!c || typeof c !== 'string') return false;
+            return isTextMatchingQuery(c, q);
+          });
+
+          // Check menu items for this restaurant
+          const restIdKey = item._id || item.restId;
+          const restMenu = menus[restIdKey] || menus[item.restId] || menus[item._id] || [];
+
+          const matchingItems = restMenu.filter(mItem => {
+            if (!mItem) return false;
+            const isAvail = mItem.itemStatus !== false && mItem.itemStatus !== 'false' && mItem.itemStatus !== 0 &&
+                            mItem.itemtodisplayintherestuarentapp !== false && mItem.itemtodisplayintherestuarentapp !== 'false' && mItem.itemtodisplayintherestuarentapp !== 0 &&
+                            mItem.status !== 'unavailable' && mItem.status !== 'OUT_OF_STOCK' && mItem.status !== 'inactive' && mItem.status !== false && mItem.status !== 0 &&
+                            mItem.available !== false && mItem.available !== 'false' && mItem.available !== 0 &&
+                            mItem.isAvailable !== false && mItem.isAvailable !== 'false' && mItem.isAvailable !== 0;
+            if (!isAvail) return false;
+
+            const itemName = mItem.itemName || mItem.name || '';
+            const itemCat = mItem.category || '';
+            const itemDesc = mItem.description || '';
+
+            return isTextMatchingQuery(itemName, q) ||
+                   isTextMatchingQuery(itemCat, q) ||
+                   isTextMatchingQuery(itemDesc, q);
+          });
+
+          const hasItemMatch = matchingItems.length > 0;
+          const matchesSearch = matchesName || matchesAddress || hasCategoryMatch || hasItemMatch;
+          if (!matchesSearch) return false;
+
+          if (hasItemMatch) {
+            matchingMap[item._id || item.restId] = matchingItems;
+          }
+        }
+
+        // Filter by Veg/Non-Veg (Veg shows only Veg, Non-Veg shows Non-Veg and Both)
+        const restType = item.vegOrNonVeg || 'Both';
+        if (activeType === 'Veg') {
+          if (restType !== 'Veg') return false;
+        }
+        if (activeType === 'Non-Veg') {
+          if (restType !== 'Non-Veg' && restType !== 'Both') return false;
+        }
+
+        // Filter by selected category (case-insensitive and plural/singular tolerant checks)
+        if (selectedCategory) {
+          const normalSelected = selectedCategory.toLowerCase().trim();
+          const singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
+
+          const hasCategory = item.categories && item.categories.some(
+            c => {
+              if (!c || typeof c !== 'string') return false;
+              const normalC = c.toLowerCase().trim();
+              const singularC = normalC.endsWith('s') ? normalC.slice(0, -1) : normalC;
+
+              return (
+                normalC.includes(normalSelected) ||
+                normalSelected.includes(normalC) ||
+                normalC.includes(singularSelected) ||
+                normalSelected.includes(singularC) ||
+                singularC.includes(singularSelected) ||
+                singularSelected.includes(singularC)
+              );
+            }
+          );
+          if (!hasCategory) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const aActive = isRestActive(a);
+        const bActive = isRestActive(b);
+        if (aActive && !bActive) return -1;
+        if (!aActive && bActive) return 1;
+
+        const parsePos = (val) => {
+          if (val === undefined || val === null || val === '') return 999999;
+          const num = Number(val);
+          return isNaN(num) ? 999999 : num;
+        };
+
+        const posA = parsePos(a.position ?? a.pos);
+        const posB = parsePos(b.position ?? b.pos);
+
+        if (posA !== posB) return posA - posB;
+
+        return 0;
+      });
+
+    return { filteredList: list, matchingItemsMap: matchingMap };
+  }, [restaurants, searchQuery, activeType, selectedCategory, menus]);
+
+  if (initialLoadingTimeout && !initialLoaded && reduxLoading) {
     return <LoadingView />;
   }
 
@@ -561,12 +809,16 @@ export default function RestaurantListScreen() {
             <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
               {(() => {
                 if (selectedSavedAddressId) {
-                  const selectedAddr = savedAddresses.find(
-                    (a) => (a.id || a._id) === selectedSavedAddressId
+                  const addrList = (savedAddresses && savedAddresses.length > 0) ? savedAddresses : reduxSavedAddresses;
+                  const selectedAddr = addrList.find(
+                    (a) => String(a.id || a._id) === String(selectedSavedAddressId)
                   );
                   if (selectedAddr) {
-                    return `${selectedAddr.tag || selectedAddr.label || 'Saved Address'} - ${selectedAddr.flatNo || ''}, ${selectedAddr.street || ''}`;
+                    const tagLabel = selectedAddr.tag || selectedAddr.label || 'Saved Address';
+                    const detailStr = [selectedAddr.flatNo, selectedAddr.street].filter(Boolean).join(', ');
+                    return detailStr ? `${tagLabel} - ${detailStr}` : tagLabel;
                   }
+                  return 'Saved Address';
                 }
                 if (locationStatus === 'inside') {
                   return 'Current Location (GPS)';
@@ -633,11 +885,15 @@ export default function RestaurantListScreen() {
             <Feather name="search" size={20} color="#1E3545" />
             <TextInput
               style={styles.searchPlaceholderText}
-              placeholder="Search for restaur"
+              placeholder="Search restaurants or dishes..."
               placeholderTextColor="#808C94"
               value={searchQuery}
               onChangeText={setSearchQuery}
               autoCorrect={false}
+              numberOfLines={1}
+              multiline={false}
+              textAlignVertical="center"
+              scrollEnabled={false}
             />
 
           </View>
@@ -645,32 +901,32 @@ export default function RestaurantListScreen() {
           <View style={styles.filterPillContainer}>
             {/* All segment */}
             <TouchableOpacity
-              style={activeType === 'All' ? styles.allButtonActive : styles.filterIconWrapper}
+              style={[styles.filterButton, activeType === 'All' && styles.filterButtonActive]}
               activeOpacity={0.7}
               onPress={() => setActiveType('All')}
             >
               <Text style={[
                 styles.allButtonText,
-                activeType !== 'All' && { color: '#808C94' }
+                activeType !== 'All' && { color: '#666666' }
               ]}>All</Text>
             </TouchableOpacity>
 
             {/* Veg leaf segment */}
             <TouchableOpacity
-              style={activeType === 'Veg' ? styles.allButtonActive : styles.filterIconWrapper}
+              style={[styles.filterButton, activeType === 'Veg' && styles.filterButtonActive]}
               activeOpacity={0.7}
               onPress={() => setActiveType('Veg')}
             >
-              <FontAwesome5 name="leaf" size={16} color="#5EC48D" solid />
+              <FontAwesome5 name="leaf" size={20} color={activeType === 'Veg' ? "#2B783E" : "#5EC48D"} solid />
             </TouchableOpacity>
 
             {/* Non-veg segment */}
             <TouchableOpacity
-              style={activeType === 'Non-Veg' ? styles.allButtonActive : styles.filterIconWrapper}
+              style={[styles.filterButton, activeType === 'Non-Veg' && styles.filterButtonActive]}
               activeOpacity={0.7}
               onPress={() => setActiveType('Non-Veg')}
             >
-              <FontAwesome5 name="drumstick-bite" size={15} color="#FA4D56" />
+              <FontAwesome5 name="drumstick-bite" size={19} color={activeType === 'Non-Veg' ? "#D9383A" : "#FA4D56"} />
             </TouchableOpacity>
           </View>
         </View>
@@ -719,200 +975,169 @@ export default function RestaurantListScreen() {
         )}
 
         {/* Restaurant Cards */}
-        {(() => {
-          const filteredList = (Array.isArray(restaurants) ? restaurants : [])
-            .filter((item) => {
-              // Filter by search query
-              const nameField = (item.name || item.email || '').toLowerCase();
-              const query = searchQuery.trim().toLowerCase();
-              const matchesSearch = nameField.startsWith(query);
-              if (!matchesSearch) return false;
+        {filteredList.slice(0, searchQuery ? 999 : displayLimit).map((item) => {
+          const matchingDishes = matchingItemsMap[item._id || item.restId];
+          // Retrieve isactive/isActive status
+          const isActive = isRestActive(item);
 
-              // Filter by Veg/Non-Veg (Veg shows only Veg, Non-Veg shows Non-Veg and Both)
-              const restType = item.vegOrNonVeg || 'Both';
-              if (activeType === 'Veg') {
-                if (restType !== 'Veg') return false;
-              }
-              if (activeType === 'Non-Veg') {
-                if (restType !== 'Non-Veg' && restType !== 'Both') return false;
-              }
+          // Default fallback image if logoUrl is not present
+          const baseUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
 
-              // Filter by selected category (case-insensitive and plural/singular tolerant checks)
-              if (selectedCategory) {
-                const normalSelected = selectedCategory.toLowerCase().trim();
-                const singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
+          // Apply true CDN-level grayscale desaturation for native Android/iOS bundles if inactive
+          const imageUri = isActive
+            ? baseUri
+            : `https://wsrv.nl/?url=${encodeURIComponent(baseUri)}&filt=greyscale`;
 
-                const hasCategory = item.categories && item.categories.some(
-                  c => {
-                    if (!c || typeof c !== 'string') return false;
-                    const normalC = c.toLowerCase().trim();
-                    const singularC = normalC.endsWith('s') ? normalC.slice(0, -1) : normalC;
+          // Display name if available, otherwise fallback to capitalized email
+          const rawName = item.name || item.email || 'Restaurant';
+          const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
-                    return (
-                      normalC.includes(normalSelected) ||
-                      normalSelected.includes(normalC) ||
-                      normalC.includes(singularSelected) ||
-                      normalSelected.includes(singularC) ||
-                      singularC.includes(singularSelected) ||
-                      singularSelected.includes(singularC)
-                    );
-                  }
-                );
-                if (!hasCategory) return false;
-              }
+          return (
+            <TouchableOpacity
+              key={item._id || item.restId}
+              style={[
+                styles.restaurantCard,
+                !isActive && { backgroundColor: '#E4E1D8' } // slightly grayer background to look desaturated
+              ]}
+              activeOpacity={isActive ? 0.85 : 1}
+              onPress={() => handlePressRestaurant(item, displayName)}
+            >
+              <View style={styles.restaurantImageContainer}>
+                <Image
+                  source={{ uri: imageUri }}
+                  style={[
+                    styles.restaurantImage,
+                    !isActive && Platform.OS === 'web' && { filter: 'grayscale(100%)' }
+                  ]}
+                  contentFit="cover"
+                />
 
-              return true;
-            })
-            .sort((a, b) => {
-              const aActive = isRestActive(a);
-              const bActive = isRestActive(b);
-              if (aActive && !bActive) return -1;
-              if (!aActive && bActive) return 1;
-
-              const parsePos = (val) => {
-                if (val === undefined || val === null || val === '') return 999999;
-                const num = Number(val);
-                return isNaN(num) ? 999999 : num;
-              };
-
-              const posA = parsePos(a.position ?? a.pos);
-              const posB = parsePos(b.position ?? b.pos);
-
-              if (posA !== posB) return posA - posB;
-
-              return 0;
-            });
-
-          console.log(`[RestaurantList Filter] selectedCategory: "${selectedCategory}", activeType: "${activeType}", total restaurants: ${restaurants?.length}, filtered: ${filteredList.length}`);
-
-          return filteredList.map((item) => {
-            // Retrieve isactive/isActive status
-            const isActive = isRestActive(item);
-
-            // Default fallback image if logoUrl is not present
-            const baseUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
-
-            // Apply true CDN-level grayscale desaturation for native Android/iOS bundles if inactive
-            const imageUri = isActive
-              ? baseUri
-              : `https://wsrv.nl/?url=${encodeURIComponent(baseUri)}&filt=greyscale`;
-
-            // Display name if available, otherwise fallback to capitalized email
-            const rawName = item.name || item.email || 'Restaurant';
-            const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
-
-            return (
-              <TouchableOpacity
-                key={item._id || item.restId}
-                style={[
-                  styles.restaurantCard,
-                  !isActive && { backgroundColor: '#E4E1D8' } // slightly grayer background to look desaturated
-                ]}
-                activeOpacity={isActive ? 0.85 : 1}
-                onPress={() => handlePressRestaurant(item, displayName)}
-              >
-                <View style={styles.restaurantImageContainer}>
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={[
-                      styles.restaurantImage,
-                      !isActive && Platform.OS === 'web' && { filter: 'grayscale(100%)' }
-                    ]}
-                    contentFit="cover"
-                  />
-
-                  {/* Rating badge overlay */}
-                  <View style={[styles.ratingBadge, { backgroundColor: isActive ? '#2B783E' : '#707070' }]}>
-                    <FontAwesome name="star" size={10} color="#FFD200" />
-                    <Text style={styles.ratingText}>
-                      {((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
-                    </Text>
-                  </View>
+                {/* Rating badge overlay */}
+                <View style={[styles.ratingBadge, { backgroundColor: isActive ? '#2B783E' : '#707070' }]}>
+                  <FontAwesome name="star" size={10} color="#FFD200" />
+                  <Text style={styles.ratingText}>
+                    {((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
+                  </Text>
                 </View>
+              </View>
 
-                <View style={styles.restaurantInfo}>
-                  {/* Restaurant Name / Email & Offer Badge (aligned to right side) */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {(() => {
-                        if (!isActive) {
-                          return (
-                            <View style={{
-                              backgroundColor: '#DC2626',
-                              paddingHorizontal: 8,
-                              paddingVertical: 3,
-                              borderRadius: 8,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              gap: 4
-                            }}>
-                              <Feather name="clock" size={11} color="#FFF" />
-                              <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>
-                                {item.openTime ? `Opens at ${formatTimeAMPM(item.openTime)}` : 'Closed'}
-                              </Text>
-                            </View>
-                          );
-                        }
-                        const closingSoonText = getClosingSoonStatus(item.closeTime, nowTime);
-                        if (!closingSoonText) return null;
+              <View style={styles.restaurantInfo}>
+                {/* Restaurant Name / Email & Offer Badge (aligned to right side) */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    {(() => {
+                      if (!isActive) {
                         return (
                           <View style={{
-                            backgroundColor: '#D9534F',
+                            backgroundColor: '#DC2626',
                             paddingHorizontal: 8,
                             paddingVertical: 3,
                             borderRadius: 8,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 4
                           }}>
-                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
-                              {closingSoonText}
+                            <Feather name="clock" size={11} color="#FFF" />
+                            <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>
+                              {item.openTime ? `Opens at ${formatTimeAMPM(item.openTime)}` : 'Closed'}
                             </Text>
                           </View>
                         );
-                      })()}
-                      {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
+                      }
+                      const closingSoonText = getClosingSoonStatus(item.closeTime, nowTime);
+                      if (!closingSoonText) return null;
+                      return (
                         <View style={{
-                          backgroundColor: '#FF6F00',
-                          flexDirection: 'row',
-                          alignItems: 'center',
+                          backgroundColor: '#D9534F',
                           paddingHorizontal: 8,
                           paddingVertical: 3,
                           borderRadius: 8,
                         }}>
-                          <Text style={{
-                            color: '#FFF',
-                            fontSize: 11,
-                            fontWeight: 'bold',
-                          }}>
-                            {item.offerTitle}
+                          <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
+                            {closingSoonText}
                           </Text>
                         </View>
-                      ) : null}
-                    </View>
-                  </View>
-
-                  {/* Address Location & Distance */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-                    {item.address ? (
-                      <View style={[styles.locationContainer, { flex: 1, marginRight: 8, marginBottom: 0 }]}>
-                        <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
-                        <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
-                      </View>
-                    ) : null}
-
-                    {roadDistances[item._id || item.restId] ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
-                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
-                          {roadDistances[item._id || item.restId]}
+                      );
+                    })()}
+                    {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
+                      <View style={{
+                        backgroundColor: '#FF6F00',
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 8,
+                      }}>
+                        <Text style={{
+                          color: '#FFF',
+                          fontSize: 11,
+                          fontWeight: 'bold',
+                        }}>
+                          {item.offerTitle}
                         </Text>
                       </View>
                     ) : null}
                   </View>
                 </View>
-              </TouchableOpacity>
-            );
-          })
-        })()}
+
+                {/* Address Location & Distance */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                  {item.address ? (
+                    <View style={[styles.locationContainer, { flex: 1, marginRight: 8, marginBottom: 0 }]}>
+                      <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
+                      <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
+                    </View>
+                  ) : null}
+
+                  {roadDistances[item._id || item.restId] ? (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
+                      <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
+                        {roadDistances[item._id || item.restId]}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* Matching Dishes Preview when searching (single line horizontal scroll) */}
+                {searchQuery && searchQuery.trim() && matchingDishes && matchingDishes.length > 0 ? (
+                  <View style={{
+                    marginTop: 8,
+                    paddingTop: 6,
+                    borderTopWidth: 1,
+                    borderTopColor: 'rgba(0, 0, 0, 0.08)',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6
+                  }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E3545', flexShrink: 0 }}>
+                      Dishes:
+                    </Text>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                    >
+                      {matchingDishes.map((dish, idx) => (
+                        <View key={idx} style={{
+                          backgroundColor: 'rgba(43, 120, 62, 0.12)',
+                          paddingHorizontal: 7,
+                          paddingVertical: 2,
+                          borderRadius: 6,
+                        }}>
+                          <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
+                            {dish.itemName || dish.name} {dish.price ? `(₹${dish.price})` : ''}
+                          </Text>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ) : null}
+              </View>
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
 
       {/* Toast Notification Banner */}
@@ -948,42 +1173,36 @@ export default function RestaurantListScreen() {
         </View>
       </Modal>
 
-      {/* GPS Off / Permission Denied Modal */}
-      <Modal transparent visible={showLocationModal && !showDeliverToModal} animationType="slide" onRequestClose={() => {}}>
-        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
-          <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
-            <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>
-              <FontAwesome name="map-marker" size={30} color="#E05A47" />
-            </View>
-            <Text style={styles.modalTitle}>Location Access Required</Text>
-            <Text style={styles.modalSub}>
-              {locationError || "Please turn on your device's location/GPS and allow permission to calculate delivery distance."}
-            </Text>
-
-            <TouchableOpacity style={styles.primaryButton} onPress={handleEnableLocation}>
-              <Text style={styles.primaryButtonText}>Enable Location</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.secondaryButton} onPress={handleOpenSettings}>
-              <Text style={styles.secondaryButtonText}>Open Settings</Text>
-            </TouchableOpacity>
-
-
-
-            <TouchableOpacity
-              style={[styles.secondaryButton, { marginTop: 10, backgroundColor: 'transparent', borderWidth: 0 }]}
-              onPress={() => dispatch(skipLocation())}
-            >
-              <Text style={[styles.secondaryButtonText, { color: '#000000', textDecorationLine: 'underline' }]}>Skip & Browse</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* GPS Off / Permission Denied Modal (Hidden — only 1 delivery location selector modal is shown) */}
 
       {/* Deliver To Selector Modal */}
       <Modal transparent visible={showDeliverToModal} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
-          <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)' }]}>
+          <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', position: 'relative' }]}>
+            {/* Top-Right X Close Symbol */}
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                backgroundColor: 'rgba(0, 0, 0, 0.08)',
+                justifyContent: 'center',
+                alignItems: 'center',
+                zIndex: 10
+              }}
+              activeOpacity={0.7}
+              onPress={() => {
+                setShowDeliverToModal(false);
+                dispatch(skipLocation());
+                showTabBar(true);
+              }}
+            >
+              <Feather name="x" size={20} color="#1E3545" />
+            </TouchableOpacity>
+
             <View style={[styles.modalIconContainer, { backgroundColor: '#F0F6F0' }]}>
               <Feather name="map-pin" size={30} color="#2B783E" />
             </View>
@@ -1010,10 +1229,22 @@ export default function RestaurantListScreen() {
                       gap: 12
                     }}
                     activeOpacity={0.8}
-                    onPress={() => {
+                    onPress={async () => {
                       setShowDeliverToModal(false);
                       dispatch(setSelectedSavedAddressId(null));
-                      dispatch(checkLocationAndCalculateDistances(restaurants));
+                      try {
+                        if (Platform.OS === 'android') {
+                          try {
+                            await Location.enableNetworkProviderAsync();
+                          } catch (e) {
+                            console.warn('Network provider enable failed:', e);
+                          }
+                        }
+                        await dispatch(checkLocationAndCalculateDistances(restaurants)).unwrap();
+                      } catch (err) {
+                        console.warn('[Location UI] Current location check skipped/failed:', err);
+                        dispatch(skipLocation());
+                      }
                     }}
                   >
                     <Feather name="navigation" size={20} color={isCurrentSelected ? "#2B783E" : "#1E3545"} />
@@ -1061,8 +1292,11 @@ export default function RestaurantListScreen() {
                               customCoords: { latitude: Number(addrLat), longitude: Number(addrLng) }
                             }));
                           } else {
-                            // Backup: if saved address has no coordinates, query GPS
-                            dispatch(checkLocationAndCalculateDistances(restaurants));
+                            // Backup: use Kurnool center default coordinates
+                            dispatch(checkLocationAndCalculateDistances({
+                              restaurantsList: restaurants,
+                              customCoords: { latitude: 15.8281, longitude: 78.0373 }
+                            }));
                           }
                         }}
                       >

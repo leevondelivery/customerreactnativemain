@@ -9,4 +9,9 @@ export const store = configureStore({
     location: locationReducer,
     controls: controlsReducer,
   },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: false,
+      immutableCheck: false,
+    }),
 });
