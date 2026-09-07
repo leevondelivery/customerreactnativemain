@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   BackHandler,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Modal,
@@ -86,6 +87,15 @@ export default function LoginScreen() {
     };
   }, [showSignupOtpModal, signupResendTimer]);
 
+  useEffect(() => {
+    if (showSignupOtpModal) {
+      const timer = setTimeout(() => {
+        otpInputRef.current?.focus();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [showSignupOtpModal]);
+
   const handleResendSignupOTP = async () => {
     if (signupResendTimer > 0) return;
     setSignupOtpError('');
@@ -115,12 +125,19 @@ export default function LoginScreen() {
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
     try {
-      if (GoogleSignin) {
+      if (!GoogleSignin) {
+        throw new Error('Google Sign-in native module is not available on this device or build.');
+      }
+
+      try {
         GoogleSignin.configure({
           webClientId: '549037342596-kkd837btqfu8dfprgtupmpprmiarc5e7.apps.googleusercontent.com',
           offlineAccess: true,
         });
+      } catch (configErr) {
+        console.warn('[Google Login] Configure warning:', configErr);
       }
+
       console.log('[Google Login] Checking play services...');
       await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
 
@@ -133,22 +150,34 @@ export default function LoginScreen() {
       }
 
       const signInResponse = await GoogleSignin.signIn();
-      console.log('[Google Login] Sign in response received.');
+      console.log('[Google Login] Sign in response received:', signInResponse);
 
-      console.log('[Google Login] Fetching tokens from Google Play Services...');
-      const tokens = await GoogleSignin.getTokens();
-      const idToken = tokens.idToken || signInResponse?.data?.idToken || signInResponse?.idToken;
-      const accessToken = tokens.accessToken || signInResponse?.data?.accessToken || signInResponse?.accessToken;
+      let idToken = signInResponse?.data?.idToken || signInResponse?.idToken;
+      let accessToken = signInResponse?.data?.accessToken || signInResponse?.accessToken;
+
+      if (!idToken || !accessToken) {
+        try {
+          console.log('[Google Login] Fetching tokens from Google Play Services...');
+          const tokens = await GoogleSignin.getTokens();
+          idToken = idToken || tokens?.idToken;
+          accessToken = accessToken || tokens?.accessToken;
+        } catch (tokenErr) {
+          console.warn('[Google Login] Error fetching tokens via getTokens():', tokenErr);
+        }
+      }
 
       if (!idToken) {
         throw new Error('Google ID token is missing. Please try again.');
       }
-      if (!accessToken) {
-        throw new Error('Google Access token is missing. Please try again.');
-      }
 
       console.log('[Google Login] Firebase authenticating credential...');
-      const googleCredential = GoogleAuthProvider.credential(idToken, accessToken);
+      if (!GoogleAuthProvider || typeof auth !== 'function') {
+        throw new Error('Firebase Auth service is not available on this device.');
+      }
+
+      const googleCredential = accessToken 
+        ? GoogleAuthProvider.credential(idToken, accessToken)
+        : GoogleAuthProvider.credential(idToken);
       const userCredential = await auth().signInWithCredential(googleCredential);
 
       console.log('[Google Login] Fetching Firebase ID token...');
@@ -163,31 +192,43 @@ export default function LoginScreen() {
         body: JSON.stringify({ idToken: firebaseIdToken }),
       });
 
-      const data = await response.json();
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (parseErr) {
+        throw new Error('Server returned an invalid response. Please try again later.');
+      }
+
       console.log('[Google Login] Backend response:', data);
 
-      if (response.ok && data.success) {
+      if (response.ok && data.success && data.user) {
         const user = data.user;
         const logintime = String(Date.now());
 
         const rawUserId = user._id || user.id || user.userId || '';
         await AsyncStorage.setItem('userid', String(rawUserId));
-        await AsyncStorage.setItem('phone', String(user.phone || 'N/A'));
+        await AsyncStorage.setItem('phone', String(user.phone ?? 'N/A'));
         await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
 
         // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
-        const displayName = user.name && user.name.toLowerCase() !== 'n/a'
-          ? user.name
-          : (userCredential.user.displayName && userCredential.user.displayName.toLowerCase() !== 'n/a'
-            ? userCredential.user.displayName
+        const rawBackendName = typeof user.name === 'string' ? user.name : String(user.name || '');
+        const rawFirebaseName = userCredential.user?.displayName ? String(userCredential.user.displayName) : '';
+
+        const displayName = rawBackendName && rawBackendName.toLowerCase() !== 'n/a'
+          ? rawBackendName
+          : (rawFirebaseName && rawFirebaseName.toLowerCase() !== 'n/a'
+            ? rawFirebaseName
             : 'N/A');
         await AsyncStorage.setItem('name', String(displayName));
 
         // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
-        const displayEmail = user.email && user.email.toLowerCase() !== 'n/a'
-          ? user.email
-          : (userCredential.user.email && userCredential.user.email.toLowerCase() !== 'n/a'
-            ? userCredential.user.email
+        const rawBackendEmail = typeof user.email === 'string' ? user.email : String(user.email || '');
+        const rawFirebaseEmail = userCredential.user?.email ? String(userCredential.user.email) : '';
+
+        const displayEmail = rawBackendEmail && rawBackendEmail.toLowerCase() !== 'n/a'
+          ? rawBackendEmail
+          : (rawFirebaseEmail && rawFirebaseEmail.toLowerCase() !== 'n/a'
+            ? rawFirebaseEmail
             : 'N/A');
         await AsyncStorage.setItem('email', String(displayEmail));
         await AsyncStorage.setItem('logintime', logintime);
@@ -202,8 +243,15 @@ export default function LoginScreen() {
             if (orderRes.ok) {
               const orderData = await orderRes.json();
               if (orderData.success && orderData.orderStatus) {
-                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
-                await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+                const sStr = (orderData.orderStatus.status || orderData.orderStatus.orderStatus || '').toLowerCase().trim();
+                const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+                if (!isRej) {
+                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
+                  await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+                } else {
+                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+                  await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+                }
               } else {
                 await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
                 await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
@@ -275,6 +323,23 @@ export default function LoginScreen() {
 
         const userid = await AsyncStorage.getItem('userid');
         if (userid) {
+          try {
+            const userRes = await fetch(`${API_URL}/user/${userid}`);
+            const userData = await userRes.json();
+            if (
+              userRes.status === 403 ||
+              userData.isBlocked ||
+              (userData.user && (userData.user.isBlocked || userData.user.blickstatus === false || userData.user.status === 'blocked'))
+            ) {
+              console.warn('[Login] Stored session user is blocked by admin. Clearing credentials.');
+              await AsyncStorage.clear();
+              setErrorMessage(userData.message || 'Your account has been blocked by admin. Please contact support.');
+              setShowErrorModal(true);
+              return;
+            }
+          } catch (e) {
+            console.warn('[Login] Check user status on startup error:', e.message);
+          }
           router.replace('/restaurentlist');
         }
       } catch (error) {
@@ -330,8 +395,15 @@ export default function LoginScreen() {
             if (orderRes.ok) {
               const orderData = await orderRes.json();
               if (orderData.success && orderData.orderStatus) {
-                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
-                await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+                const sStr = (orderData.orderStatus.status || orderData.orderStatus.orderStatus || '').toLowerCase().trim();
+                const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+                if (!isRej) {
+                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
+                  await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+                } else {
+                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+                  await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+                }
               } else {
                 await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
                 await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
@@ -616,7 +688,16 @@ export default function LoginScreen() {
     }
   };
 
-  const handleCloseForgotPasswordModal = () => {
+  const handleCloseSignupOtpModal = useCallback(() => {
+    Keyboard.dismiss();
+    otpInputRef.current?.blur();
+    setShowSignupOtpModal(false);
+    setSignupOtp('');
+    setSignupOtpError('');
+  }, []);
+
+  const handleCloseForgotPasswordModal = useCallback(() => {
+    Keyboard.dismiss();
     setShowForgotPasswordModal(false);
     setForgotPasswordPhone('');
     setForgotPasswordOtp('');
@@ -625,15 +706,13 @@ export default function LoginScreen() {
     setForgotPasswordConfirmPassword('');
     setForgotPasswordStep(1);
     setForgotPasswordError('');
-  };
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
       const onBackPress = () => {
         if (showSignupOtpModal) {
-          setShowSignupOtpModal(false);
-          setSignupOtp('');
-          setSignupOtpError('');
+          handleCloseSignupOtpModal();
           return true;
         }
         if (showForgotPasswordModal) {
@@ -641,14 +720,17 @@ export default function LoginScreen() {
           return true;
         }
         if (showSupportModal) {
+          Keyboard.dismiss();
           setShowSupportModal(false);
           return true;
         }
         if (showErrorModal) {
+          Keyboard.dismiss();
           setShowErrorModal(false);
           return true;
         }
         if (isSignUp) {
+          Keyboard.dismiss();
           setIsSignUp(false);
           return true;
         }
@@ -664,6 +746,8 @@ export default function LoginScreen() {
       showSupportModal,
       showErrorModal,
       isSignUp,
+      handleCloseSignupOtpModal,
+      handleCloseForgotPasswordModal,
     ])
   );
 
@@ -682,10 +766,15 @@ export default function LoginScreen() {
         animationType="fade"
         transparent={true}
         visible={showSignupOtpModal}
-        onRequestClose={() => setShowSignupOtpModal(false)}
+        onRequestClose={handleCloseSignupOtpModal}
+        onShow={() => {
+          setTimeout(() => {
+            otpInputRef.current?.focus();
+          }, 150);
+        }}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalBackdrop}
         >
           <View style={styles.otpModalCard}>
@@ -713,30 +802,34 @@ export default function LoginScreen() {
             </Text>
 
             {/* 6 Digit Visual OTP Boxes */}
-            <Pressable
-              style={styles.otpBoxesContainer}
-              onPress={() => otpInputRef.current?.focus()}
-            >
-              {[0, 1, 2, 3, 4, 5].map((idx) => {
-                const char = (signupOtp || '')[idx] || '';
-                const isCurrent = (signupOtp || '').length === idx;
-                return (
-                  <View
-                    key={idx}
-                    style={[
-                      styles.otpBox,
-                      char ? styles.otpBoxFilled : null,
-                      isCurrent ? styles.otpBoxActive : null,
-                    ]}
-                  >
-                    <Text style={styles.otpBoxChar}>{char}</Text>
-                  </View>
-                );
-              })}
+            <View style={styles.otpWrapper}>
+              <View
+                style={styles.otpBoxesContainer}
+                pointerEvents="none"
+              >
+                {[0, 1, 2, 3, 4, 5].map((idx) => {
+                  const char = (signupOtp || '')[idx] || '';
+                  const isCurrent = (signupOtp || '').length === idx;
+                  return (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.otpBox,
+                        char ? styles.otpBoxFilled : null,
+                        isCurrent ? styles.otpBoxActive : null,
+                      ]}
+                    >
+                      <Text style={styles.otpBoxChar}>{char}</Text>
+                    </View>
+                  );
+                })}
+              </View>
               <TextInput
                 ref={otpInputRef}
                 style={styles.otpInvisibleInput}
                 keyboardType="number-pad"
+                textContentType="oneTimeCode"
+                autoComplete="one-time-code"
                 value={signupOtp}
                 onChangeText={(text) => {
                   setSignupOtp(text.replace(/[^0-9]/g, '').slice(0, 6));
@@ -745,8 +838,10 @@ export default function LoginScreen() {
                 maxLength={6}
                 autoFocus={true}
                 caretHidden={true}
+                cursorColor="transparent"
+                selectionColor="transparent"
               />
-            </Pressable>
+            </View>
 
             {/* Error Message */}
             {signupOtpError ? (
@@ -776,7 +871,7 @@ export default function LoginScreen() {
 
             {/* Resend OTP Row */}
             <View style={styles.otpResendRow}>
-              <Text style={styles.otpResendLabel}>Didn't receive code? </Text>
+              <Text style={styles.otpResendLabel}>{"Didn't receive code? "}</Text>
               <TouchableOpacity
                 onPress={handleResendSignupOTP}
                 disabled={signupResendTimer > 0 || signupOtpLoading}
@@ -1068,7 +1163,7 @@ export default function LoginScreen() {
       </Modal>
 
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.overlayContainer}
       >
         <ScrollView

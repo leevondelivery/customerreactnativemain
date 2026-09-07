@@ -117,36 +117,35 @@ export default function Layout() {
 
       const data = await response.json();
       if (response.ok && data.success && data.orderStatus) {
-        setHasActiveOrder(true);
-        prevHasActiveOrder.current = true;
-        lastActiveOrderRef.current = data.orderStatus;
-        AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
-        AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});
+        const sStr = (data.orderStatus.status || data.orderStatus.orderStatus || '').toLowerCase().trim();
+        const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+
+        if (isRej) {
+          setHasActiveOrder(false);
+          prevHasActiveOrder.current = false;
+          lastActiveOrderRef.current = null;
+          AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+          AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+          const rejData = {
+            orderId: data.orderStatus.orderId || data.orderStatus.orderID || data.orderStatus.order_id || data.orderStatus._id || '',
+            restaurantName: data.orderStatus.restaurantName || data.orderStatus.restaurant_name || data.orderStatus.restName || 'Restaurant',
+            timestamp: Date.now(),
+          };
+          AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
+        } else {
+          setHasActiveOrder(true);
+          prevHasActiveOrder.current = true;
+          lastActiveOrderRef.current = data.orderStatus;
+          AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
+          AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});
+          AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
+        }
       } else {
         AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
         AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
-        if (prevHasActiveOrder.current) {
-          prevHasActiveOrder.current = false;
-          setHasActiveOrder(false);
-          
-          const prevOrder = lastActiveOrderRef.current;
-          const prevStatus = (prevOrder?.status || prevOrder?.orderStatus || '').toLowerCase().trim();
-          const isDelivered = prevStatus.includes('delivered') || prevStatus.includes('completed');
-
-          if (!isDelivered) {
-            const rejData = {
-              orderId: prevOrder?.orderId || prevOrder?.orderID || prevOrder?.order_id || prevOrder?._id || '',
-              restaurantName: prevOrder?.restaurantName || prevOrder?.restaurant_name || prevOrder?.restName || 'Restaurant',
-              timestamp: Date.now(),
-            };
-            AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
-            console.log('[Layout] Order was rejected/cancelled before delivery.');
-          } else {
-            console.log('[Layout] Order delivered successfully. Orderstatus page will show the review modal.');
-          }
-          return;
-        }
         setHasActiveOrder(false);
+        prevHasActiveOrder.current = false;
+        lastActiveOrderRef.current = null;
       }
     } catch (e) {
       console.warn('Error checking active order in layout:', e.message);
@@ -170,6 +169,9 @@ export default function Layout() {
     initActiveOrderState();
   }, []);
 
+  const [showBlockedModal, setShowBlockedModal] = useState(false);
+  const [blockedModalMessage, setBlockedModalMessage] = useState('');
+
   const updateCartCount = useCallback(async () => {
     try {
       const cartData = await AsyncStorage.getItem('cart');
@@ -182,10 +184,6 @@ export default function Layout() {
   }, []);
 
   const syncSessionAndData = useCallback(async () => {
-    if (pathname === '/login' || pathname === '/' || pathname === '') {
-      return;
-    }
-
     const userid = await AsyncStorage.getItem('userid');
     if (!userid) return;
 
@@ -199,13 +197,18 @@ export default function Layout() {
       if (timeoutId) clearTimeout(timeoutId);
 
       const userData = await userRes.json();
-      if (userRes.status === 403 || userData.isBlocked) {
+      const isBlockedUser =
+        userRes.status === 403 ||
+        userData.isBlocked ||
+        (userData.user && (userData.user.isBlocked || userData.user.blickstatus === false || userData.user.status === 'blocked'));
+
+      if (isBlockedUser) {
         console.warn('[Layout] User is blocked by admin. Logging out user...');
         await AsyncStorage.clear();
-        Alert.alert(
-          'Account Blocked',
+        setBlockedModalMessage(
           userData.message || 'Your account has been blocked by admin. Please contact support.'
         );
+        setShowBlockedModal(true);
         router.replace('/login');
         return;
       }
@@ -245,7 +248,7 @@ export default function Layout() {
     } catch (feesErr) {
       console.warn('[Layout] Fees config sync error:', feesErr.message);
     }
-  }, []);
+  }, [router]);
 
   // Mark first launch without wiping user authentication
   useEffect(() => {
@@ -262,9 +265,25 @@ export default function Layout() {
     checkFreshInstall();
   }, []);
 
-  // Global Authentication, Session Verification & Data Pre-Caching
+  // Global Authentication, Session Verification & Data Pre-Caching (Real-time polling every 4s & AppState focus)
   useEffect(() => {
     syncSessionAndData();
+
+    const intervalId = setInterval(() => {
+      syncSessionAndData();
+    }, 4000);
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        syncSessionAndData();
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      subscription.remove();
+    };
   }, [syncSessionAndData]);
 
   // Inject CSS to hide browser-native password reveal/clear buttons on Web
@@ -460,6 +479,9 @@ export default function Layout() {
             translateY={translateY}
             cartCount={cartCount}
             hasActiveOrder={hasActiveOrder}
+            showBlockedModal={showBlockedModal}
+            setShowBlockedModal={setShowBlockedModal}
+            blockedModalMessage={blockedModalMessage}
           />
         </TabBarContext.Provider>
       </SafeAreaProvider>
@@ -478,6 +500,9 @@ function MainLayoutContent({
   translateY,
   cartCount,
   hasActiveOrder,
+  showBlockedModal,
+  setShowBlockedModal,
+  blockedModalMessage,
 }) {
   // Hide bottom tab bar only on login page
   const shouldShowTabBar = !isLoginPage;
@@ -546,6 +571,39 @@ function MainLayoutContent({
             <View style={[styles.maintenanceDot, { opacity: 1 }]} />
             <View style={[styles.maintenanceDot, { opacity: 0.5 }]} />
             <View style={[styles.maintenanceDot, { opacity: 0.2 }]} />
+          </View>
+        </View>
+      </Modal>
+
+      {/* Account Blocked Custom Modal Popup */}
+      <Modal
+        visible={showBlockedModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setShowBlockedModal(false);
+          router.replace('/login');
+        }}
+      >
+        <View style={blockedStyles.modalBackdrop}>
+          <View style={blockedStyles.modalCard}>
+            <View style={blockedStyles.modalIconContainer}>
+              <FontAwesome name="ban" size={38} color="#FFFFFF" />
+            </View>
+            <Text style={blockedStyles.modalTitle}>Account Blocked</Text>
+            <Text style={blockedStyles.modalText}>
+              {blockedModalMessage || 'Your account has been blocked by admin. Please contact support.'}
+            </Text>
+            <TouchableOpacity
+              style={blockedStyles.modalButton}
+              activeOpacity={0.8}
+              onPress={() => {
+                setShowBlockedModal(false);
+                router.replace('/login');
+              }}
+            >
+              <Text style={blockedStyles.modalButtonText}>OK</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -856,5 +914,113 @@ const styles = StyleSheet.create({
     height: 10,
     borderWidth: 1.5,
     borderColor: '#FFFFFF', // White outline separation
+  },
+});
+
+const blockedStyles = StyleSheet.create({
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    backgroundColor: '#F9F8F3', // creamy soft off-white/beige background
+    borderRadius: 36,
+    width: '85%',
+    maxWidth: 320,
+    paddingTop: 36,
+    paddingBottom: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.2,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 10,
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.2,
+        shadowRadius: 20,
+      },
+    }),
+  },
+  modalIconContainer: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F34D4D', // bright red badge
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#F34D4D',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.35,
+        shadowRadius: 10,
+      },
+      android: {
+        elevation: 6,
+      },
+      default: {
+        shadowColor: '#F34D4D',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.35,
+        shadowRadius: 10,
+      },
+    }),
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#1A1A1A',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  modalText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#555555',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 28,
+  },
+  modalButton: {
+    backgroundColor: '#000000',
+    borderRadius: 9999,
+    paddingVertical: 14,
+    width: '90%',
+    maxWidth: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+      },
+      android: {
+        elevation: 4,
+      },
+      default: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+      },
+    }),
+  },
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });

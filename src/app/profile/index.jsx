@@ -62,11 +62,16 @@ export default function ProfileScreen() {
 
   const fetchUserData = useCallback(async () => {
     try {
-      const cachedName = await AsyncStorage.getItem('name');
-      const cachedPhone = await AsyncStorage.getItem('phone');
-      const cachedCoins = await AsyncStorage.getItem('coins');
-      const cachedDateOfBirth = await AsyncStorage.getItem('dateOfBirth');
+      const rawName = await AsyncStorage.getItem('name');
+      const rawPhone = await AsyncStorage.getItem('phone');
+      const rawCoins = await AsyncStorage.getItem('coins');
+      const rawDob = await AsyncStorage.getItem('dateOfBirth');
       const userid = await AsyncStorage.getItem('userid');
+
+      const cachedName = rawName !== null ? String(rawName) : '';
+      const cachedPhone = rawPhone !== null ? String(rawPhone) : '';
+      const cachedCoins = rawCoins !== null ? String(rawCoins) : '0';
+      const cachedDateOfBirth = rawDob !== null ? String(rawDob) : '';
 
       const isTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
       setUser({
@@ -86,41 +91,49 @@ export default function ProfileScreen() {
       }
 
       // Fetch global toggle status for coins
-        try {
-          const feesRes = await fetch(`${API_URL}/fees-config`);
+      try {
+        const feesRes = await fetch(`${API_URL}/fees-config`);
+        if (feesRes.ok) {
           const feesData = await feesRes.json();
-          if (feesRes.ok && feesData.success && feesData.config) {
+          if (feesData.success && feesData.config) {
             setIsCoinsActive(feesData.config.isCoinsActive !== false);
           }
-        } catch (feesErr) {
-          console.warn('[Profile] Error loading fees configuration:', feesErr);
         }
+      } catch (feesErr) {
+        console.warn('[Profile] Error loading fees configuration:', feesErr);
+      }
 
-        // Fetch live user coins balance
-        try {
-          const userRes = await fetch(`${API_URL}/user/${userid}`);
+      // Fetch live user coins balance
+      try {
+        const userRes = await fetch(`${API_URL}/user/${userid}`);
+        if (userRes.ok) {
           const userData = await userRes.json();
-          if (userRes.ok && userData.success && userData.user) {
-            const liveCoins = String(userData.user.coins ?? 0);
-            const liveName = userData.user.name && userData.user.name !== 'N/A' ? userData.user.name : cachedName;
-            const isLiveTemp = userData.user.phone && (userData.user.phone.startsWith('google_temp_') || userData.user.phone.startsWith('temp_google_'));
+          if (userData.success && userData.user) {
+            const dbUser = userData.user;
+            const dbPhoneStr = dbUser.phone !== undefined && dbUser.phone !== null ? String(dbUser.phone) : '';
+            const dbNameStr = dbUser.name !== undefined && dbUser.name !== null ? String(dbUser.name) : '';
+            const dbEmailStr = dbUser.email !== undefined && dbUser.email !== null ? String(dbUser.email) : '';
+
+            const liveCoins = String(dbUser.coins ?? 0);
+            const liveName = dbNameStr && dbNameStr.toLowerCase() !== 'n/a' ? dbNameStr : cachedName;
+            const isLiveTemp = dbPhoneStr && (dbPhoneStr.startsWith('google_temp_') || dbPhoneStr.startsWith('temp_google_'));
             const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
-            const livePhone = userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp ? userData.user.phone : (cachedPhone && !isCachedTemp ? cachedPhone : '');
+            const livePhone = dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp ? dbPhoneStr : (cachedPhone && !isCachedTemp ? cachedPhone : '');
 
             await AsyncStorage.setItem('coins', liveCoins);
-            if (userData.user.name && userData.user.name !== 'N/A') {
-              await AsyncStorage.setItem('name', userData.user.name);
+            if (dbNameStr && dbNameStr.toLowerCase() !== 'n/a') {
+              await AsyncStorage.setItem('name', dbNameStr);
             }
-            if (userData.user.phone && userData.user.phone !== 'N/A' && !isLiveTemp) {
-              await AsyncStorage.setItem('phone', userData.user.phone);
+            if (dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp) {
+              await AsyncStorage.setItem('phone', dbPhoneStr);
             } else if (isLiveTemp) {
               await AsyncStorage.setItem('phone', '');
             }
-            if (userData.user.email && userData.user.email !== 'N/A') {
-              await AsyncStorage.setItem('email', userData.user.email);
+            if (dbEmailStr && dbEmailStr.toLowerCase() !== 'n/a') {
+              await AsyncStorage.setItem('email', dbEmailStr);
             }
-            if (userData.user.isPhoneVerified !== undefined) {
-              await AsyncStorage.setItem('isPhoneVerified', String(userData.user.isPhoneVerified));
+            if (dbUser.isPhoneVerified !== undefined) {
+              await AsyncStorage.setItem('isPhoneVerified', String(dbUser.isPhoneVerified));
             }
 
             setUser(prev => ({
@@ -130,13 +143,14 @@ export default function ProfileScreen() {
               phone: livePhone
             }));
           }
-        } catch (profileErr) {
-          console.warn('[Profile] Error syncing live profile details:', profileErr);
         }
+      } catch (profileErr) {
+        console.warn('[Profile] Error syncing live profile details:', profileErr);
+      }
 
-        if (userid && !profileLoaded) {
-          dispatch(fetchProfileData(userid));
-        }
+      if (userid && !profileLoaded) {
+        dispatch(fetchProfileData(userid));
+      }
     } catch (e) {
       console.error('Error fetching user data:', e);
     } finally {
@@ -227,7 +241,8 @@ export default function ProfileScreen() {
   }
 
   // Get first letter of user name for the avatar
-  const avatarLetter = user.name ? user.name.charAt(0).toUpperCase() : 'G';
+  const safeName = typeof user?.name === 'string' ? user.name.trim() : String(user?.name || '').trim();
+  const avatarLetter = safeName.length > 0 ? safeName.charAt(0).toUpperCase() : 'C';
 
   // Action buttons configuration (no actions for now)
   const menuButtons = [
@@ -301,12 +316,13 @@ export default function ProfileScreen() {
     },
   ];
 
+  const safePhone = typeof user?.phone === 'string' ? user.phone : String(user?.phone || '');
   const isPhoneAvailable = Boolean(
-    user.phone &&
-    user.phone.trim() !== '' &&
-    user.phone.toLowerCase() !== 'n/a' &&
-    !user.phone.startsWith('google_temp_') &&
-    !user.phone.startsWith('temp_google_')
+    safePhone &&
+    safePhone.trim() !== '' &&
+    safePhone.toLowerCase() !== 'n/a' &&
+    !safePhone.startsWith('google_temp_') &&
+    !safePhone.startsWith('temp_google_')
   );
 
   return (

@@ -291,7 +291,12 @@ export default function RestaurantListScreen() {
           if (timeoutId) clearTimeout(timeoutId);
           if (orderRes.ok) {
             const orderData = await orderRes.json();
-            const isActive = !!(orderData.success && orderData.orderStatus);
+            let isActive = false;
+            if (orderData.success && orderData.orderStatus) {
+              const sStr = (orderData.orderStatus.status || orderData.orderStatus.orderStatus || '').toLowerCase().trim();
+              const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+              isActive = !isRej;
+            }
             await AsyncStorage.setItem(`has_active_order_${uid}`, isActive ? 'true' : 'false');
             if (isActive) {
               globalHasShownDeliverToModal = true;
@@ -308,6 +313,52 @@ export default function RestaurantListScreen() {
   }, [dispatch]);
 
   const lastBackPressTime = useRef(0);
+
+  // Toast state and animated values
+  const [toastConfig, setToastConfig] = useState({ visible: false, message: '', type: 'success' });
+  const [toastOpacity] = useState(() => new Animated.Value(0));
+  const [toastTranslateY] = useState(() => new Animated.Value(30));
+  const toastTimeoutRef = useRef(null);
+
+  const triggerToast = useCallback((message, type = 'success') => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastOpacity.setValue(0);
+    toastTranslateY.setValue(30);
+    setToastConfig({ visible: true, message, type });
+
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    toastTimeoutRef.current = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 30,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setToastConfig({ visible: false, message: '', type: 'success' });
+      });
+    }, type === 'warning' ? 3000 : 2000);
+  }, [toastOpacity, toastTranslateY]);
 
   useFocusEffect(
     useCallback(() => {
@@ -372,7 +423,7 @@ export default function RestaurantListScreen() {
         isMounted = false;
         backSubscription.remove();
       };
-    }, [dispatch, showTabBar])
+    }, [dispatch, showTabBar, triggerToast])
   );
 
   const formatTimeAMPM = (timeStr) => {
@@ -434,52 +485,6 @@ export default function RestaurantListScreen() {
     }, 40);
     return () => clearTimeout(timer);
   }, []);
-
-  // Toast state and animated values
-  const [toastConfig, setToastConfig] = useState({ visible: false, message: '', type: 'success' });
-  const [toastOpacity] = useState(() => new Animated.Value(0));
-  const [toastTranslateY] = useState(() => new Animated.Value(30));
-  const toastTimeoutRef = useRef(null);
-
-  const triggerToast = (message, type = 'success') => {
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
-
-    toastOpacity.setValue(0);
-    toastTranslateY.setValue(30);
-    setToastConfig({ visible: true, message, type });
-
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    toastTimeoutRef.current = setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 30,
-          duration: 250,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        setToastConfig({ visible: false, message: '', type: 'success' });
-      });
-    }, type === 'warning' ? 3000 : 2000);
-  };
 
   useEffect(() => {
     return () => {

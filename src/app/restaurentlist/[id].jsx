@@ -217,7 +217,9 @@ export default function RestaurantMenuScreen() {
       const response = await fetch(`${API_URL}/orderstatus/user/${userid}`);
       const data = await response.json();
       if (response.ok && data.success && data.orderStatus) {
-        setHasActiveOrder(true);
+        const sStr = (data.orderStatus.status || data.orderStatus.orderStatus || '').toLowerCase().trim();
+        const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+        setHasActiveOrder(!isRej);
       } else {
         setHasActiveOrder(false);
       }

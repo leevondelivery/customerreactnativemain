@@ -139,23 +139,28 @@ export default function MyDetailsScreen() {
           const userData = await userRes.json();
           if (userRes.ok && userData.success && userData.user) {
             const dbUser = userData.user;
-            if (dbUser.name && dbUser.name !== 'N/A') {
-              name = dbUser.name;
+            const dbNameStr = dbUser.name !== undefined && dbUser.name !== null ? String(dbUser.name) : '';
+            const dbPhoneStr = dbUser.phone !== undefined && dbUser.phone !== null ? String(dbUser.phone) : '';
+            const dbEmailStr = dbUser.email !== undefined && dbUser.email !== null ? String(dbUser.email) : '';
+            const dbDobStr = dbUser.dateOfBirth !== undefined && dbUser.dateOfBirth !== null ? String(dbUser.dateOfBirth) : '';
+
+            if (dbNameStr && dbNameStr.toLowerCase() !== 'n/a') {
+              name = dbNameStr;
               await AsyncStorage.setItem('name', name);
             }
-            if (dbUser.phone && dbUser.phone !== 'N/A') {
-              const isDbTemp = dbUser.phone.startsWith('google_temp_') || dbUser.phone.startsWith('temp_google_');
+            if (dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a') {
+              const isDbTemp = dbPhoneStr.startsWith('google_temp_') || dbPhoneStr.startsWith('temp_google_');
               if (!isDbTemp) {
-                phone = dbUser.phone;
+                phone = dbPhoneStr;
                 await AsyncStorage.setItem('phone', phone);
               }
             }
-            if (dbUser.email && dbUser.email !== 'N/A') {
-              email = dbUser.email;
+            if (dbEmailStr && dbEmailStr.toLowerCase() !== 'n/a') {
+              email = dbEmailStr;
               await AsyncStorage.setItem('email', email);
             }
-            if (dbUser.dateOfBirth && dbUser.dateOfBirth !== 'N/A') {
-              dateOfBirth = dbUser.dateOfBirth;
+            if (dbDobStr && dbDobStr.toLowerCase() !== 'n/a') {
+              dateOfBirth = dbDobStr;
               await AsyncStorage.setItem('dateOfBirth', dateOfBirth);
             }
           }
@@ -164,16 +169,22 @@ export default function MyDetailsScreen() {
         }
 
         // Extract date component (YYYY-MM-DD) from ISO format if present
+        const dobStr = dateOfBirth !== null && dateOfBirth !== undefined ? String(dateOfBirth) : '';
         let formattedDob = '2003-01-04';
-        if (dateOfBirth && dateOfBirth.toLowerCase() !== 'n/a') {
-          formattedDob = dateOfBirth.includes('T') ? dateOfBirth.split('T')[0] : dateOfBirth;
+        if (dobStr && dobStr.toLowerCase() !== 'n/a') {
+          formattedDob = dobStr.includes('T') ? dobStr.split('T')[0] : dobStr;
         }
 
-        const isTemp = phone && (phone.startsWith('google_temp_') || phone.startsWith('temp_google_'));
+        const safePhoneStr = phone !== null && phone !== undefined ? String(phone) : '';
+        const isTemp = safePhoneStr && (safePhoneStr.startsWith('google_temp_') || safePhoneStr.startsWith('temp_google_'));
+
+        const safeNameStr = name !== null && name !== undefined ? String(name) : '';
+        const safeEmailStr = email !== null && email !== undefined ? String(email) : '';
+
         setUser({
-          name: name && name.toLowerCase() !== 'n/a' ? name : 'Customer',
-          phone: phone && phone.toLowerCase() !== 'n/a' && !isTemp ? phone : '',
-          email: email && email.toLowerCase() !== 'n/a' ? email : '',
+          name: safeNameStr && safeNameStr.toLowerCase() !== 'n/a' ? safeNameStr : 'Customer',
+          phone: safePhoneStr && safePhoneStr.toLowerCase() !== 'n/a' && !isTemp ? safePhoneStr : '',
+          email: safeEmailStr && safeEmailStr.toLowerCase() !== 'n/a' ? safeEmailStr : '',
           dateOfBirth: formattedDob,
         });
       } catch (e) {
@@ -191,7 +202,8 @@ export default function MyDetailsScreen() {
     setErrorMsg('');
 
     // Parse current DOB for calendar initialization
-    const dobParts = user.dateOfBirth.split('-');
+    const userDobStr = typeof user.dateOfBirth === 'string' ? user.dateOfBirth : String(user.dateOfBirth || '');
+    const dobParts = userDobStr.split('-');
     if (dobParts.length === 3) {
       const year = parseInt(dobParts[0], 10);
       const month = parseInt(dobParts[1], 10) - 1; // 0-indexed month
@@ -544,7 +556,7 @@ export default function MyDetailsScreen() {
                   alignItems: 'center',
                 }}
                 activeOpacity={0.8}
-                onPress={handleOpenPhoneVerification}
+                onPress={handleOpenPhoneModal}
               >
                 <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' }}>Verify</Text>
               </TouchableOpacity>
@@ -836,7 +848,7 @@ export default function MyDetailsScreen() {
                     maxLength={10}
                     value={verificationPhone}
                     onChangeText={setVerificationPhone}
-                    disabled={otpLoading}
+                    editable={!otpLoading}
                   />
                 </View>
 
@@ -887,7 +899,7 @@ export default function MyDetailsScreen() {
                   maxLength={6}
                   value={otpCode}
                   onChangeText={setOtpCode}
-                  disabled={otpLoading}
+                  editable={!otpLoading}
                 />
 
                 <TouchableOpacity

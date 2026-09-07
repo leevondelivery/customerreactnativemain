@@ -458,18 +458,16 @@ export default function OrderStatusScreen() {
     const orderId = order?.orderId || order?.orderID || order?.order_id || order?._id || '';
     if (!orderId) return;
 
-    // Show review modal ONLY if order was successfully delivered or completed
+    // Skip review modal ONLY if order was rejected or cancelled
     const statusStr = (order?.status || order?.orderStatus || order?.order_status || '').toLowerCase().trim();
-    const isDelivered = statusStr.includes('delivered') || statusStr.includes('completed');
     const isRejectedOrCancelled =
       statusStr.includes('reject') ||
       statusStr.includes('cancel') ||
       statusStr.includes('declin') ||
-      statusStr.includes('failed') ||
-      !isDelivered;
+      statusStr.includes('failed');
 
-    if (isRejectedOrCancelled || !isDelivered) {
-      console.log('[OrderStatus] Order was rejected, cancelled, or not delivered yet. Skipping review modal.');
+    if (isRejectedOrCancelled) {
+      console.log('[OrderStatus] Order was rejected or cancelled. Skipping review modal.');
       return;
     }
 
@@ -643,6 +641,8 @@ export default function OrderStatusScreen() {
             restaurantName: data.orderStatus.restaurantName || data.orderStatus.restaurant_name || data.orderStatus.restName || 'Restaurant',
             timestamp: Date.now(),
           };
+          lastActiveOrderRef.current = null;
+          orderStatusRef.current = null;
           setOrderStatus(null);
           setRecentRejectedOrder(rejData);
           AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
@@ -670,33 +670,96 @@ export default function OrderStatusScreen() {
         showTabBar(true);
         dispatch(skipLocation());
 
-        AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
-        AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+        const hasActiveOrderCached = await AsyncStorage.getItem(`has_active_order_${userid}`);
+
+        if (hasActiveOrderCached !== 'true') {
+          AsyncStorage.setItem(`has_active_order_${userid}`, 'false').catch(() => {});
+          AsyncStorage.removeItem(`active_order_data_${userid}`).catch(() => {});
+        }
 
         // If an active order was rejected or completed
         if (previousActiveOrder) {
           const prevStatus = (previousActiveOrder.status || previousActiveOrder.orderStatus || '').toLowerCase().trim();
           const isPrevRej = prevStatus.includes('reject') || prevStatus.includes('cancel') || prevStatus.includes('declin') || prevStatus.includes('failed');
-          const isDelivered = prevStatus.includes('delivered') || prevStatus.includes('completed');
+          const prevId = previousActiveOrder.orderId || previousActiveOrder.orderID || previousActiveOrder.order_id || previousActiveOrder._id || previousActiveOrder.id || '';
 
-          if (isPrevRej || !isDelivered) {
-            console.log('[OrderStatus] Active order ended before delivery (rejected/cancelled). Skipping review modal.');
+          // Check if this order actually reached finalcompletedorders
+          let isActuallyCompleted = false;
+          if (prevId && !isPrevRej) {
+            try {
+              const compRes = await fetch(`${API_URL}/orders/completed/${userid}`);
+              if (compRes.ok) {
+                const compData = await compRes.json();
+                const compList = compData.orders || compData.data || [];
+                if (Array.isArray(compList)) {
+                  isActuallyCompleted = compList.some(o => {
+                    const oid = String(o.orderId || o.orderID || o.order_id || o._id || o.id || '');
+                    return oid === String(prevId);
+                  });
+                }
+              }
+            } catch (cErr) {
+              console.warn('[OrderStatus] Check completion status error:', cErr.message);
+            }
+          }
+
+          if (isPrevRej || (!isActuallyCompleted && prevId)) {
+            console.log('[OrderStatus] Active order ended with rejected/cancelled status. Displaying rejected banner.');
             const rejData = {
-              orderId: previousActiveOrder.orderId || previousActiveOrder.orderID || previousActiveOrder.order_id || previousActiveOrder._id || '',
+              orderId: prevId || previousActiveOrder.orderId || '',
               restaurantName: previousActiveOrder.restaurantName || previousActiveOrder.restaurant_name || previousActiveOrder.restName || 'Restaurant',
               timestamp: Date.now(),
             };
             setRecentRejectedOrder(rejData);
             AsyncStorage.setItem(`recent_rejected_order_${userid}`, JSON.stringify(rejData)).catch(() => {});
           } else {
-            const prevId = previousActiveOrder.orderId || previousActiveOrder.orderID || previousActiveOrder.order_id || previousActiveOrder._id || previousActiveOrder.id || '';
+            setRecentRejectedOrder(null);
+            AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
             if (prevId) {
               const reviewed = await isOrderAlreadyReviewed(prevId, previousActiveOrder);
               if (!reviewed) {
-                console.log('[OrderStatus] Active order delivered successfully! Opening review modal ONCE for order:', prevId);
+                console.log('[OrderStatus] Active order completed successfully! Opening review modal ONCE for order:', prevId);
                 await handleOpenReviewModal(previousActiveOrder);
               }
             }
+          }
+        } else {
+          try {
+            const rejStr = await AsyncStorage.getItem(`recent_rejected_order_${userid}`);
+            if (rejStr) {
+              const parsed = JSON.parse(rejStr);
+              if (parsed && parsed.timestamp && (Date.now() - Number(parsed.timestamp) < 3600000)) {
+                setRecentRejectedOrder(parsed);
+              } else {
+                setRecentRejectedOrder(null);
+                AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
+              }
+            }
+          } catch (e) {}
+          try {
+            const completedRes = await fetch(`${API_URL}/orders/completed/${userid}`);
+            if (completedRes.ok) {
+              const completedData = await completedRes.json();
+              const completedList = completedData.orders || completedData.data || [];
+              if (Array.isArray(completedList) && completedList.length > 0) {
+                const latestOrder = completedList[0];
+                const latestId = latestOrder.orderId || latestOrder.orderID || latestOrder.order_id || latestOrder._id || latestOrder.id || '';
+                if (latestId) {
+                  const reviewed = await isOrderAlreadyReviewed(latestId, latestOrder);
+                  if (!reviewed) {
+                    const orderDate = new Date(latestOrder.orderDate || latestOrder.completedAt || latestOrder.createdAt || Date.now()).getTime();
+                    if (Date.now() - orderDate < 24 * 60 * 60 * 1000) {
+                      console.log('[OrderStatus] Unreviewed recent completed order found:', latestId);
+                      setRecentRejectedOrder(null);
+                      AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
+                      await handleOpenReviewModal(latestOrder);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[OrderStatus] Check completed orders error:', e.message);
           }
         }
       }
@@ -717,17 +780,26 @@ export default function OrderStatusScreen() {
       // Load active order data & recent rejected order on focus
       AsyncStorage.getItem('userid').then((uid) => {
         if (uid) {
-          AsyncStorage.getItem(`recent_rejected_order_${uid}`).then((rejStr) => {
-            if (rejStr) {
-              try {
-                const parsed = JSON.parse(rejStr);
-                if (parsed && parsed.timestamp && (Date.now() - Number(parsed.timestamp) < 3600000)) {
-                  setRecentRejectedOrder(parsed);
+          AsyncStorage.getItem(`has_active_order_${uid}`).then((hasActive) => {
+            if (hasActive === 'true') {
+              setRecentRejectedOrder(null);
+              AsyncStorage.removeItem(`recent_rejected_order_${uid}`).catch(() => {});
+            } else {
+              AsyncStorage.getItem(`recent_rejected_order_${uid}`).then((rejStr) => {
+                if (rejStr) {
+                  try {
+                    const parsed = JSON.parse(rejStr);
+                    if (parsed && parsed.timestamp && (Date.now() - Number(parsed.timestamp) < 3600000)) {
+                      setRecentRejectedOrder(parsed);
+                    } else {
+                      AsyncStorage.removeItem(`recent_rejected_order_${uid}`).catch(() => {});
+                      setRecentRejectedOrder(null);
+                    }
+                  } catch (e) {}
                 } else {
-                  AsyncStorage.removeItem(`recent_rejected_order_${uid}`).catch(() => {});
                   setRecentRejectedOrder(null);
                 }
-              } catch (e) {}
+              });
             }
           });
 
@@ -901,7 +973,13 @@ export default function OrderStatusScreen() {
           </Text>
 
           <TouchableOpacity
-            onPress={() => router.replace('/restaurentlist')}
+            onPress={() => {
+              setRecentRejectedOrder(null);
+              AsyncStorage.getItem('userid').then((uid) => {
+                if (uid) AsyncStorage.removeItem(`recent_rejected_order_${uid}`).catch(() => {});
+              });
+              router.replace('/restaurentlist');
+            }}
             style={[styles.orderButton, { backgroundColor: '#DC2626', marginTop: 16 }]}
             activeOpacity={0.85}
           >

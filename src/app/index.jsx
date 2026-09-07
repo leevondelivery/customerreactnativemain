@@ -75,7 +75,10 @@ export default function Index() {
 
             if (response.ok) {
               const data = await response.json();
-              if (data.success && data.orderStatus) {
+              const sStr = (data.orderStatus?.status || data.orderStatus?.orderStatus || '').toLowerCase().trim();
+              const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+
+              if (data.success && data.orderStatus && !isRej) {
                 setHasActiveOrder(true);
                 AsyncStorage.setItem(`has_active_order_${userid}`, 'true').catch(() => {});
                 AsyncStorage.setItem(`active_order_data_${userid}`, JSON.stringify(data.orderStatus)).catch(() => {});

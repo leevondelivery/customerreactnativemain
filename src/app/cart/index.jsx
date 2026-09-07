@@ -180,13 +180,44 @@ export default function CartScreen() {
       });
       const data = await response.json();
       if (data.success) {
+        const minOrderRaw =
+          data.minOrderAmount ??
+          data.minOrderValue ??
+          data.minOrder ??
+          data.min_order_amount ??
+          data.min_order_value ??
+          data.minimumOrderValue ??
+          data.minimumOrderAmount ??
+          data.minPurchase ??
+          data.minAmount ??
+          data.coupon?.minOrderAmount ??
+          data.coupon?.minOrderValue ??
+          data.coupon?.minOrder ??
+          data.coupon?.min_order_amount ??
+          data.coupon?.min_order_value ??
+          data.couponDetails?.minOrderValue ??
+          data.couponDetails?.minOrderAmount ??
+          data.data?.minOrderValue ??
+          data.data?.minOrderAmount ??
+          0;
+        const minOrder = Number(minOrderRaw || 0);
+
+        const currentSub = calculateTotal();
+        if (minOrder > 0 && currentSub < minOrder) {
+          setCouponError(`Minimum order value of ₹${minOrder} required to apply this coupon.`);
+          setAppliedCoupon(null);
+          await AsyncStorage.removeItem('applied_coupon');
+          return;
+        }
+
         const couponObj = {
-          couponCode: data.couponCode,
-          influencerName: data.influencerName,
-          discountType: data.discountType,
-          discountValue: data.discountValue,
-          discountAmount: data.discountAmount,
-          minOrderAmount: Number(data.minOrderAmount || 0),
+          couponCode: data.couponCode || data.coupon?.couponCode || data.code || couponInput.trim(),
+          influencerName: data.influencerName || data.coupon?.influencerName || '',
+          discountType: data.discountType || data.coupon?.discountType || 'flat',
+          discountValue: Number(data.discountValue ?? data.coupon?.discountValue ?? 0),
+          discountAmount: Number(data.discountAmount ?? data.coupon?.discountAmount ?? 0),
+          minOrderAmount: minOrder,
+          minOrderValue: minOrder,
         };
         setAppliedCoupon(couponObj);
         await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
@@ -207,11 +238,15 @@ export default function CartScreen() {
 
   // Automatically remove coupon and discount if cart total drops below minimum order requirement
   useEffect(() => {
-    if (appliedCoupon && appliedCoupon.minOrderAmount > 0 && cartItems.length > 0) {
-      const currentSub = calculateTotal();
-      if (currentSub < appliedCoupon.minOrderAmount) {
-        setAppliedCoupon(null);
-        AsyncStorage.removeItem('applied_coupon');
+    if (appliedCoupon && cartItems.length > 0) {
+      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+      if (minOrder > 0) {
+        const currentSub = calculateTotal();
+        if (currentSub < minOrder) {
+          setAppliedCoupon(null);
+          setCouponError(`Coupon removed: Minimum order value of ₹${minOrder} required.`);
+          AsyncStorage.removeItem('applied_coupon');
+        }
       }
     }
   }, [cartItems, appliedCoupon]);
@@ -341,7 +376,26 @@ export default function CartScreen() {
       }
       const storedCoupon = await AsyncStorage.getItem('applied_coupon');
       if (storedCoupon) {
-        setAppliedCoupon(JSON.parse(storedCoupon));
+        try {
+          const parsedCoupon = JSON.parse(storedCoupon);
+          const minOrder = Number(parsedCoupon.minOrderAmount ?? parsedCoupon.minOrderValue ?? parsedCoupon.minOrder ?? 0);
+          const currentSub = currentItems.reduce((sum, item) => {
+            const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+            const price = (offerPercent > 0 && offerPercent <= 100)
+              ? (item.price - (item.price * (offerPercent / 100)))
+              : (item.price || 0);
+            return sum + price * (item.quantity || 0);
+          }, 0);
+
+          if (minOrder > 0 && currentSub < minOrder) {
+            await AsyncStorage.removeItem('applied_coupon');
+            setAppliedCoupon(null);
+          } else {
+            setAppliedCoupon(parsedCoupon);
+          }
+        } catch (e) {
+          setAppliedCoupon(null);
+        }
       }
 
       // Background live check: auto-remove turned-off items when viewing the cart
@@ -485,7 +539,9 @@ export default function CartScreen() {
             const activeRes = await fetch(`${API_URL}/orderstatus/user/${uid}`);
             const activeData = await activeRes.json();
             if (activeRes.ok && activeData.success && activeData.orderStatus) {
-              setHasActiveOrder(true);
+              const sStr = (activeData.orderStatus.status || activeData.orderStatus.orderStatus || '').toLowerCase().trim();
+              const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+              setHasActiveOrder(!isRej);
             } else {
               setHasActiveOrder(false);
             }
@@ -952,14 +1008,18 @@ export default function CartScreen() {
         const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserIdCheck}`);
         const activeData = await activeRes.json();
         if (activeRes.ok && activeData.success && activeData.orderStatus) {
-          setHasActiveOrder(true);
-          await AsyncStorage.setItem(`has_active_order_${activeUserIdCheck}`, 'true');
-          setIsProcessingPayment(false);
-          showAlert(
-            'Active Order Exists',
-            'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
-          );
-          return;
+          const sStr = (activeData.orderStatus.status || activeData.orderStatus.orderStatus || '').toLowerCase().trim();
+          const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+          if (!isRej) {
+            setHasActiveOrder(true);
+            await AsyncStorage.setItem(`has_active_order_${activeUserIdCheck}`, 'true');
+            setIsProcessingPayment(false);
+            showAlert(
+              'Active Order Exists',
+              'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+            );
+            return;
+          }
         }
       } catch (activeErr) {
         console.warn('[Cart] Error checking active order during checkout:', activeErr);
@@ -1103,7 +1163,8 @@ export default function CartScreen() {
     }
 
     // Gated Phone Verification Check
-    const activePhone = await AsyncStorage.getItem('phone');
+    const rawActivePhone = await AsyncStorage.getItem('phone');
+    const activePhone = rawActivePhone !== null ? String(rawActivePhone) : '';
     const isPhoneVerified = await AsyncStorage.getItem('isPhoneVerified');
     const isTempPhone = activePhone && (activePhone.startsWith('google_temp_') || activePhone.startsWith('temp_google_'));
     if (!activePhone || activePhone === 'N/A' || activePhone.trim() === '' || isTempPhone || isPhoneVerified !== 'true') {
@@ -1126,12 +1187,17 @@ export default function CartScreen() {
       const subTotal = calculateTotal();
       let discountValAmount = 0;
       if (appliedCoupon) {
-        if (appliedCoupon.discountType === 'flat') {
-          discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
-        } else if (appliedCoupon.discountType === 'percentage') {
-          discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+        const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+        if (minOrder === 0 || subTotal >= minOrder) {
+          if (appliedCoupon.discountType === 'flat') {
+            discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
+          } else if (appliedCoupon.discountType === 'percentage') {
+            discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+          }
+          discountValAmount = Math.round(discountValAmount * 100) / 100;
+        } else {
+          discountValAmount = 0;
         }
-        discountValAmount = Math.round(discountValAmount * 100) / 100;
       }
 
       const restId = cartItems[0]?.restId || '';
@@ -1160,17 +1226,39 @@ export default function CartScreen() {
           const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserId}`);
           const activeData = await activeRes.json();
           if (activeRes.ok && activeData.success && activeData.orderStatus) {
-            setHasActiveOrder(true);
-            await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
-            setIsProcessingPayment(false);
-            showAlert(
-              'Active Order Exists',
-              'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
-            );
-            return;
+            const sStr = (activeData.orderStatus.status || activeData.orderStatus.orderStatus || '').toLowerCase().trim();
+            const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+            if (!isRej) {
+              setHasActiveOrder(true);
+              await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+              setIsProcessingPayment(false);
+              showAlert(
+                'Active Order Exists',
+                'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+              );
+              return;
+            }
           }
         } catch (activeErr) {
           console.warn('[Cart] Live active order check warning in COD:', activeErr);
+        }
+      }
+
+      // Dynamic Coins Calculation
+      const coinsMin = Number(feesConfig?.coinMinOrderAmount ?? 200);
+      const coinsBase = Number(feesConfig?.coinBaseAmount ?? 10);
+      const coinsStep = Number(feesConfig?.coinStepAmount ?? 100);
+      const coinsStepVal = Number(feesConfig?.coinStepValue ?? 5);
+      const coinsMax = Number(feesConfig?.coinMaxLimit ?? 100);
+      const coinsMaxOrder = Number(feesConfig?.coinMaxThreshold ?? 1000);
+
+      let coins = 0;
+      if (feesConfig?.isCoinsActive !== false) {
+        if (subTotal >= coinsMaxOrder) {
+          coins = coinsMax;
+        } else if (subTotal >= coinsMin) {
+          coins = coinsBase + Math.floor((subTotal - coinsMin) / coinsStep) * coinsStepVal;
+          coins = Math.min(coins, coinsMax);
         }
       }
 
@@ -1185,7 +1273,7 @@ export default function CartScreen() {
         deliveryGst: deliveryGstAmount,
         platformFee: 0.00,
         grandTotal: gTotal,
-        coinsEarned: 0,
+        coinsEarned: coins,
         userName: activeName,
         userEmail: activeEmail,
         userPhone: activePhone,
@@ -1221,6 +1309,7 @@ export default function CartScreen() {
         if (activeUserId) {
           await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
           await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
+          await AsyncStorage.removeItem(`active_order_data_${activeUserId}`).catch(() => {});
         }
         setHasActiveOrder(true);
         await AsyncStorage.removeItem('cart');
@@ -1250,12 +1339,17 @@ export default function CartScreen() {
     // Coupon Discount Calculation
     let discountValAmount = 0;
     if (appliedCoupon) {
-      if (appliedCoupon.discountType === 'flat') {
-        discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
-      } else if (appliedCoupon.discountType === 'percentage') {
-        discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+      if (minOrder === 0 || subTotal >= minOrder) {
+        if (appliedCoupon.discountType === 'flat') {
+          discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
+        } else if (appliedCoupon.discountType === 'percentage') {
+          discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
+        }
+        discountValAmount = Math.round(discountValAmount * 100) / 100;
+      } else {
+        discountValAmount = 0;
       }
-      discountValAmount = Math.round(discountValAmount * 100) / 100;
     }
 
     const pFee = 0.00;
@@ -1281,10 +1375,10 @@ export default function CartScreen() {
     const coinsMaxOrder = feesConfig.coinMaxThreshold ?? 1000;
 
     let coins = 0;
-    if (feesConfig.isCoinsActive !== false) {
+    if (feesConfig?.isCoinsActive !== false) {
       if (subTotal >= coinsMaxOrder) {
         coins = coinsMax;
-      } else if (subTotal > coinsMin) {
+      } else if (subTotal >= coinsMin) {
         coins = coinsBase + Math.floor((subTotal - coinsMin) / coinsStep) * coinsStepVal;
         coins = Math.min(coins, coinsMax);
       }
@@ -1302,14 +1396,18 @@ export default function CartScreen() {
         const activeRes = await fetch(`${API_URL}/orderstatus/user/${activeUserId}`);
         const activeData = await activeRes.json();
         if (activeRes.ok && activeData.success && activeData.orderStatus) {
-          setHasActiveOrder(true);
-          await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
-          setIsProcessingPayment(false);
-          showAlert(
-            'Active Order Exists',
-            'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
-          );
-          return;
+          const sStr = (activeData.orderStatus.status || activeData.orderStatus.orderStatus || '').toLowerCase().trim();
+          const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+          if (!isRej) {
+            setHasActiveOrder(true);
+            await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
+            setIsProcessingPayment(false);
+            showAlert(
+              'Active Order Exists',
+              'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
+            );
+            return;
+          }
         }
       } catch (activeErr) {
         console.warn('[Cart] Live active order check warning in online payment:', activeErr);
@@ -1412,6 +1510,7 @@ export default function CartScreen() {
                 if (activeUserId) {
                   await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
                   await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
+                  await AsyncStorage.removeItem(`active_order_data_${activeUserId}`).catch(() => {});
                 }
                 setHasActiveOrder(true);
                 // Clear cart in AsyncStorage
@@ -1518,6 +1617,7 @@ export default function CartScreen() {
                   if (activeUserId) {
                     await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
                     await AsyncStorage.removeItem(`recent_rejected_order_${activeUserId}`).catch(() => {});
+                    await AsyncStorage.removeItem(`active_order_data_${activeUserId}`).catch(() => {});
                   }
                   setHasActiveOrder(true);
                   // Clear cart in AsyncStorage
@@ -1578,12 +1678,17 @@ export default function CartScreen() {
   // Dynamic Coupon Discount Calculation
   let discountAmount = 0;
   if (appliedCoupon) {
-    if (appliedCoupon.discountType === 'flat') {
-      discountAmount = Math.min(appliedCoupon.discountValue, total);
-    } else if (appliedCoupon.discountType === 'percentage') {
-      discountAmount = total * (appliedCoupon.discountValue / 100);
+    const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+    if (minOrder === 0 || total >= minOrder) {
+      if (appliedCoupon.discountType === 'flat') {
+        discountAmount = Math.min(appliedCoupon.discountValue, total);
+      } else if (appliedCoupon.discountType === 'percentage') {
+        discountAmount = total * (appliedCoupon.discountValue / 100);
+      }
+      discountAmount = Math.round(discountAmount * 100) / 100;
+    } else {
+      discountAmount = 0;
     }
-    discountAmount = Math.round(discountAmount * 100) / 100;
   }
 
   const platformFee = 0.00; // Platform fee removed
@@ -1609,10 +1714,10 @@ export default function CartScreen() {
   const coinsMaxOrder = feesConfig.coinMaxThreshold ?? 1000;
 
   let coinsEarned = 0;
-  if (feesConfig.isCoinsActive !== false) {
+  if (feesConfig?.isCoinsActive !== false) {
     if (total >= coinsMaxOrder) {
       coinsEarned = coinsMax;
-    } else if (total > coinsMin) {
+    } else if (total >= coinsMin) {
       coinsEarned = coinsBase + Math.floor((total - coinsMin) / coinsStep) * coinsStepVal;
       coinsEarned = Math.min(coinsEarned, coinsMax);
     }
@@ -2007,10 +2112,11 @@ export default function CartScreen() {
                     <View style={{ marginTop: 4 }}>
                       <Text style={styles.savedAddressesLabel}>Your addresses:</Text>
                       {savedAddresses.map((addr) => {
-                        const isSelected = selectedSavedAddressId === (addr.id || addr._id);
+                        const addressId = addr.id || addr._id;
+                        const isSelected = selectedSavedAddressId === addressId;
                         return (
                           <TouchableOpacity
-                            key={addr.id || addr._id}
+                            key={addressId}
                             style={[
                               styles.savedAddressCard,
                               isSelected && styles.savedAddressCardSelected,
@@ -2042,7 +2148,7 @@ export default function CartScreen() {
                               )}
                               <TouchableOpacity
                                 style={styles.deleteAddressDustbin}
-                                onPress={() => handleDeleteAddress(addr.id || addr._id)}
+                                onPress={() => handleDeleteAddress(addressId)}
                                 activeOpacity={0.7}
                               >
                                 <Feather name="trash-2" size={18} color="#FF5E5E" />
@@ -2397,7 +2503,7 @@ export default function CartScreen() {
                     maxLength={10}
                     value={verificationPhone}
                     onChangeText={setVerificationPhone}
-                    disabled={otpLoading}
+                    editable={!otpLoading}
                   />
                 </View>
 
@@ -2439,7 +2545,7 @@ export default function CartScreen() {
                   maxLength={6}
                   value={otpCode}
                   onChangeText={setOtpCode}
-                  disabled={otpLoading}
+                  editable={!otpLoading}
                 />
 
                 <TouchableOpacity
