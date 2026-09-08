@@ -113,7 +113,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           });
         }
 
-        // 3. Request coordinates with a strict 4-second timeout to prevent UI hanging
+        // 3. Request coordinates with a 10-second timeout to prevent UI hanging
         console.log('[Location Redux] Querying current coordinates...');
         if (typeof window !== 'undefined' && window.navigator && window.navigator.geolocation) {
           const getWebPosition = () => new Promise((resolve, reject) => {
@@ -125,7 +125,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
                 }
               }),
               (err) => reject(err),
-              { enableHighAccuracy: false, timeout: 6000, maximumAge: 10000 }
+              { enableHighAccuracy: false, timeout: 10000, maximumAge: 10000 }
             );
           });
           const location = await getWebPosition();
@@ -133,13 +133,13 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           longitude = location.coords.longitude;
         } else {
           try {
-            // Race getCurrentPositionAsync with a 4s timeout
+            // Race getCurrentPositionAsync with a 10s timeout
             const positionPromise = Location.getCurrentPositionAsync({
               accuracy: Location.Accuracy.Balanced,
-              timeout: 4000,
+              timeout: 10000,
             });
             const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Location timeout')), 4000)
+              setTimeout(() => reject(new Error('Location timeout')), 10000)
             );
             const location = await Promise.race([positionPromise, timeoutPromise]);
             latitude = location.coords.latitude;

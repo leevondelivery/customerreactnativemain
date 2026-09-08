@@ -24,11 +24,14 @@ import { API_URL, CONTACT_INFO } from '../../config';
 import { styles } from '../../styles/login.styles';
 // Native-only modules: lazily required to avoid crashes when not linked
 let GoogleSignin = null;
+let statusCodes = null;
 let auth = null;
 let GoogleAuthProvider = null;
 if (Platform.OS !== 'web') {
   try {
-    GoogleSignin = require('@react-native-google-signin/google-signin').GoogleSignin;
+    const googleSigninModule = require('@react-native-google-signin/google-signin');
+    GoogleSignin = googleSigninModule.GoogleSignin;
+    statusCodes = googleSigninModule.statusCodes;
   } catch (e) {
     console.warn('[Login] GoogleSignin native module not available:', e.message);
   }
@@ -52,6 +55,7 @@ export default function LoginScreen() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   // Forgot Password Modal States
   const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
@@ -167,7 +171,8 @@ export default function LoginScreen() {
       }
 
       if (!idToken) {
-        throw new Error('Google ID token is missing. Please try again.');
+        console.log('[Google Login] No ID token retrieved (sign-in cancelled or dismissed by user).');
+        return;
       }
 
       console.log('[Google Login] Firebase authenticating credential...');
@@ -267,6 +272,25 @@ export default function LoginScreen() {
       }
     } catch (error) {
       console.error('[Google Login] Flow error:', error);
+
+      const isCancelled =
+        error?.code === '12501' ||
+        error?.code === statusCodes?.SIGN_IN_CANCELLED ||
+        error?.code === 'SIGN_IN_CANCELLED' ||
+        (error?.message && (
+          error.message.toLowerCase().includes('cancel') ||
+          error.message.toLowerCase().includes('dismiss') ||
+          error.message.toLowerCase().includes('12501') ||
+          error.message.toLowerCase().includes('sign_in_cancelled') ||
+          error.message.toLowerCase().includes('user canceled') ||
+          error.message.toLowerCase().includes('user cancelled')
+        ));
+
+      if (isCancelled) {
+        console.log('[Google Login] Google Sign-In was cancelled by the user.');
+        return;
+      }
+
       const detail = error.message || error.code || JSON.stringify(error);
       setErrorMessage(`Google Sign-in failed: ${detail}`);
       setShowErrorModal(true);
@@ -433,6 +457,12 @@ export default function LoginScreen() {
       return;
     }
 
+    if (!acceptedTerms) {
+      setErrorMessage('Please accept the Privacy Policy and Terms & Conditions to create an account.');
+      setShowErrorModal(true);
+      return;
+    }
+
     const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
     if (cleanPhone.length < 10) {
       setErrorMessage('Please enter a valid 10-digit mobile number');
@@ -531,7 +561,9 @@ export default function LoginScreen() {
           password,
           name: name.trim(),
           email: email.trim(),
-          isPhoneVerified: true
+          isPhoneVerified: true,
+          termsAccepted: true,
+          termsAcceptedAt: new Date().toISOString()
         }),
       });
 
@@ -558,6 +590,7 @@ export default function LoginScreen() {
         setConfirmPassword('');
         setName('');
         setEmail('');
+        setAcceptedTerms(false);
         setIsSignUp(false);
 
         router.replace('/restaurentlist');
@@ -1260,6 +1293,37 @@ export default function LoginScreen() {
                   onChangeText={setConfirmPassword}
                   autoCapitalize="none"
                 />
+              </View>
+            )}
+
+            {/* Terms and Conditions & Privacy Policy Acceptance Checkbox (Sign Up Only) */}
+            {isSignUp && (
+              <View style={styles.termsContainer}>
+                <TouchableOpacity
+                  style={styles.checkboxTouchable}
+                  onPress={() => setAcceptedTerms(!acceptedTerms)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkboxBox, acceptedTerms && styles.checkboxBoxChecked]}>
+                    {acceptedTerms && <Feather name="check" size={14} color="#FFFFFF" />}
+                  </View>
+                </TouchableOpacity>
+                <View style={styles.termsTextContainer}>
+                  <Text style={styles.termsText}>I agree to the </Text>
+                  <TouchableOpacity
+                    onPress={() => Linking.openURL('https://leevon-delivery.vercel.app/privacy').catch(err => console.error('Failed to open Privacy Policy URL:', err))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.termsLink}>Privacy Policy</Text>
+                  </TouchableOpacity>
+                  <Text style={styles.termsText}> and </Text>
+                  <TouchableOpacity
+                    onPress={() => Linking.openURL('https://tandccustomer.vercel.app/').catch(err => console.error('Failed to open Terms URL:', err))}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.termsLink}>Terms & Conditions</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
 

@@ -161,6 +161,50 @@ export const styles = StyleSheet.create({
     }),
   },
   
+  termsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    marginBottom: 2,
+    paddingHorizontal: 4,
+    width: '100%',
+  },
+  checkboxTouchable: {
+    padding: 2,
+    marginRight: 8,
+  },
+  checkboxBox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#7E7C77',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#000000',
+    borderColor: '#000000',
+  },
+  termsTextContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  termsText: {
+    fontSize: 13,
+    color: '#4A4A4A',
+    fontWeight: '500',
+  },
+  termsLink: {
+    fontSize: 13,
+    color: '#000000',
+    fontWeight: 'bold',
+    textDecorationLine: 'underline',
+  },
+
   // Custom Error Modal Styles
   modalBackdrop: {
     flex: 1,

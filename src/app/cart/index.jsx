@@ -294,7 +294,7 @@ export default function CartScreen() {
   const [toastTranslateY] = useState(() => new Animated.Value(30));
   const toastTimeoutRef = useRef(null);
 
-  const triggerToast = (message, type = 'success') => {
+  const triggerToast = useCallback((message, type = 'success') => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
@@ -332,7 +332,7 @@ export default function CartScreen() {
         setToastConfig({ visible: false, message: '', type: 'success' });
       });
     }, type === 'warning' ? 3000 : 2000);
-  };
+  }, [toastOpacity, toastTranslateY]);
 
   useEffect(() => {
     return () => {
@@ -993,10 +993,19 @@ export default function CartScreen() {
     }
   };
 
+  const resetPlacingOrderState = () => {
+    setIsProcessingPayment(false);
+  };
+
   const handleConfirmOrder = async () => {
+    if (isProcessingPayment) return;
+
+    // 1. INSTANTLY SHOW FULL-SCREEN LOADING SPINNER (0ms DELAY)
+    setIsProcessingPayment(true);
+
     // Instant 0ms check from Redux (polled every 5s in background)
     if (!confirmPayEnabled) {
-      setIsProcessingPayment(false);
+      resetPlacingOrderState();
       showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
       return;
     }
@@ -1013,7 +1022,7 @@ export default function CartScreen() {
           if (!isRej) {
             setHasActiveOrder(true);
             await AsyncStorage.setItem(`has_active_order_${activeUserIdCheck}`, 'true');
-            setIsProcessingPayment(false);
+            resetPlacingOrderState();
             showAlert(
               'Active Order Exists',
               'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
@@ -1025,9 +1034,6 @@ export default function CartScreen() {
         console.warn('[Cart] Error checking active order during checkout:', activeErr);
       }
     }
-
-    // 1. SHOW LOADING INDICATOR & FETCH LIVE DB RESTAURANT & MENU STATUS IN PARALLEL
-    setIsProcessingPayment(true);
 
     const targetRestId = cartItems[0]?.restId || cartItems[0]?.restaurantId || cartItems[0]?.id || '';
     const targetRestName = cartItems[0]?.restaurantName || '';
@@ -1071,7 +1077,7 @@ export default function CartScreen() {
           String(currentRest.status || '').toLowerCase() === 'off';
 
         if (isRestClosed) {
-          setIsProcessingPayment(false);
+          resetPlacingOrderState();
           showAlert('Restaurant Closed', 'Sorry, restaurant is closed.', clearCart);
           return;
         }
@@ -1108,7 +1114,7 @@ export default function CartScreen() {
         }
 
         if (unavailableItems.length > 0) {
-          setIsProcessingPayment(false);
+          resetPlacingOrderState();
           const unavailableNames = unavailableItems.map(i => `"${i.itemName || 'Item'}"`).join(', ');
           const unavailableIds = unavailableItems.map(i => String(i._id || i.itemId || ''));
           const unavailableNameList = unavailableItems.map(i => (i.itemName || '').trim().toLowerCase());
@@ -1141,7 +1147,7 @@ export default function CartScreen() {
       console.warn('[Cart] Live DB status check warning:', err);
     }
 
-    setIsProcessingPayment(false);
+    resetPlacingOrderState();
 
     const userChoice = await AsyncStorage.getItem('user_location_choice');
     const hasValidLocation = !!(userLocation || selectedSavedAddressId || userChoice === 'inside' || userChoice === 'saved');
@@ -1180,6 +1186,7 @@ export default function CartScreen() {
   };
 
   const processCodPayment = async () => {
+    if (isProcessingPayment) return;
     setShowPaymentChoiceModal(false);
     setIsProcessingPayment(true);
 
@@ -1231,7 +1238,7 @@ export default function CartScreen() {
             if (!isRej) {
               setHasActiveOrder(true);
               await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
-              setIsProcessingPayment(false);
+              resetPlacingOrderState();
               showAlert(
                 'Active Order Exists',
                 'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
@@ -1314,10 +1321,10 @@ export default function CartScreen() {
         setHasActiveOrder(true);
         await AsyncStorage.removeItem('cart');
         await AsyncStorage.removeItem('applied_coupon');
-        setIsProcessingPayment(false);
+        resetPlacingOrderState();
         setShowSuccessModal(true);
       } else {
-        setIsProcessingPayment(false);
+        resetPlacingOrderState();
         if (response.status === 403 || data.isBlocked) {
           await AsyncStorage.clear();
           showAlert('Account Blocked', data.message || 'Your account has been blocked by admin.');
@@ -1327,13 +1334,16 @@ export default function CartScreen() {
         showAlert('Order Error', data.message || 'Failed to place order.');
       }
     } catch (err) {
-      setIsProcessingPayment(false);
+      resetPlacingOrderState();
       console.error('UPI On Delivery Order Error:', err);
       showAlert('Order Error', 'Failed to connect to backend server.');
     }
   };
 
   const processOnlinePayment = async () => {
+    if (isProcessingPayment) return;
+    setShowPaymentChoiceModal(false);
+    setIsProcessingPayment(true);
     const subTotal = calculateTotal();
 
     // Coupon Discount Calculation
@@ -1401,7 +1411,7 @@ export default function CartScreen() {
           if (!isRej) {
             setHasActiveOrder(true);
             await AsyncStorage.setItem(`has_active_order_${activeUserId}`, 'true');
-            setIsProcessingPayment(false);
+            resetPlacingOrderState();
             showAlert(
               'Active Order Exists',
               'You already have an active order in progress. Please wait until your current order is completed before placing a new one.'
@@ -1434,7 +1444,7 @@ export default function CartScreen() {
 
       const orderData = await response.json();
       if (!orderData.success) {
-        setIsProcessingPayment(false);
+        resetPlacingOrderState();
         showAlert('Payment Error', orderData.message || 'Failed to initiate payment.');
         return;
       }
@@ -1443,7 +1453,7 @@ export default function CartScreen() {
       if (Platform.OS === 'web') {
         const loaded = await loadRazorpayScript();
         if (!loaded) {
-          setIsProcessingPayment(false);
+          resetPlacingOrderState();
           showAlert('Payment Error', 'Failed to load Razorpay checkout SDK.');
           return;
         }
@@ -1516,21 +1526,21 @@ export default function CartScreen() {
                 // Clear cart in AsyncStorage
                 await AsyncStorage.removeItem('cart');
                 await AsyncStorage.removeItem('applied_coupon');
-                setIsProcessingPayment(false);
+                resetPlacingOrderState();
                 setShowSuccessModal(true);
               } else {
-                setIsProcessingPayment(false);
+                resetPlacingOrderState();
                 showAlert('Verification Failed', verifyData.message || 'Unable to verify payment with server.');
               }
             } catch (verifyError) {
-              setIsProcessingPayment(false);
+              resetPlacingOrderState();
               console.error('Verify payment error on Web:', verifyError);
               showAlert('Server Error', 'Failed to connect to backend server for verification.');
             }
           },
           modal: {
             ondismiss: function () {
-              setIsProcessingPayment(false);
+              resetPlacingOrderState();
             }
           }
         };
@@ -1623,24 +1633,24 @@ export default function CartScreen() {
                   // Clear cart in AsyncStorage
                   await AsyncStorage.removeItem('cart');
                   await AsyncStorage.removeItem('applied_coupon');
-                  setIsProcessingPayment(false);
+                  resetPlacingOrderState();
                   setShowSuccessModal(true);
                 } else {
-                  setIsProcessingPayment(false);
+                  resetPlacingOrderState();
                   showAlert('Verification Failed', verifyData.message || 'Unable to verify payment with server.');
                 }
               } catch (verifyError) {
-                setIsProcessingPayment(false);
+                resetPlacingOrderState();
                 console.error('Verify payment error:', verifyError);
                 showAlert('Server Error', 'Failed to connect to backend server for verification.');
               }
             })
             .catch((error) => {
-              setIsProcessingPayment(false);
+              resetPlacingOrderState();
               console.log('[Razorpay] Payment checkout cancelled or dismissed:', error);
             });
         } else {
-          setIsProcessingPayment(false);
+          resetPlacingOrderState();
           showAlert(
             'Razorpay Native Checkout',
             'To process live Razorpay payments on mobile, please run on a compiled APK / Android build (npx expo run:android) or on web.'
@@ -1648,7 +1658,7 @@ export default function CartScreen() {
         }
       }
     } catch (err) {
-      setIsProcessingPayment(false);
+      resetPlacingOrderState();
       console.error('Initiate payment error:', err);
       showAlert('Payment Connection Error', 'Could not establish connection to initiate checkout.');
     }
@@ -1700,7 +1710,7 @@ export default function CartScreen() {
   const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
   const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
   const isLocationFetched = locationStatus === 'inside';
-  const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
+  const deliveryFee = isLocationFetched ? Math.round((baseDeliveryFee + surgeFee) * 100) / 100 : 0;
   const foodGst = Math.round((total * 0.05) * 100) / 100; // 5% Food GST
   const deliveryGst = isLocationFetched ? Math.round((deliveryFee * 0.18) * 100) / 100 : 0; // 18% Delivery GST
   const gst = Math.round((foodGst + deliveryGst) * 100) / 100;
@@ -2310,12 +2320,18 @@ export default function CartScreen() {
         })()}
       </ScrollView>
 
-      {/* Loading Overlay */}
-      {isProcessingPayment && (
-        <View style={styles.loadingOverlay}>
+      {/* Processing Payment Full Screen Loading Overlay Modal */}
+      <Modal
+        visible={isProcessingPayment}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent={true}
+        onRequestClose={() => {}}
+      >
+        <View style={{ flex: 1, width: '100%', height: '100%', backgroundColor: 'rgb(247, 247, 235)' }}>
           <LoadingView />
         </View>
-      )}
+      </Modal>
 
       {/* Success Modal */}
       <Modal
@@ -2754,6 +2770,7 @@ export default function CartScreen() {
 
             {/* Option 1: Pay Online (Razorpay) */}
             <TouchableOpacity
+              disabled={isProcessingPayment}
               style={{
                 width: '100%',
                 flexDirection: 'row',
@@ -2764,9 +2781,11 @@ export default function CartScreen() {
                 borderRadius: 18,
                 padding: 16,
                 marginBottom: 12,
-                gap: 12
+                gap: 12,
+                opacity: isProcessingPayment ? 0.6 : 1
               }}
               onPress={() => {
+                if (isProcessingPayment) return;
                 setShowPaymentChoiceModal(false);
                 processOnlinePayment();
               }}
@@ -2788,6 +2807,7 @@ export default function CartScreen() {
 
             {/* Option 2: UPI On Delivery */}
             <TouchableOpacity
+              disabled={isProcessingPayment}
               style={{
                 width: '100%',
                 flexDirection: 'row',
@@ -2798,9 +2818,14 @@ export default function CartScreen() {
                 borderRadius: 18,
                 padding: 16,
                 marginBottom: 16,
-                gap: 12
+                gap: 12,
+                opacity: isProcessingPayment ? 0.6 : 1
               }}
-              onPress={processCodPayment}
+              onPress={() => {
+                if (isProcessingPayment) return;
+                setShowPaymentChoiceModal(false);
+                processCodPayment();
+              }}
               activeOpacity={0.85}
             >
               <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
