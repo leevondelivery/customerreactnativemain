@@ -42,15 +42,55 @@ const isPointInPolygon = (point, polygon) => {
 };
 
 const getHaversineDistance = (lat1, lon1, lat2, lon2) => {
+  const nLat1 = Number(lat1);
+  const nLon1 = Number(lon1);
+  const nLat2 = Number(lat2);
+  const nLon2 = Number(lon2);
+  if (isNaN(nLat1) || isNaN(nLon1) || isNaN(nLat2) || isNaN(nLon2)) return 0;
   const R = 6371; // Radius of the earth in km
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const dLat = (nLat2 - nLat1) * Math.PI / 180;
+  const dLon = (nLon2 - nLon1) * Math.PI / 180;
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.cos(nLat1 * Math.PI / 180) * Math.cos(nLat2 * Math.PI / 180) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distance in km
+};
+
+const getRestaurantCoords = (rest) => {
+  if (!rest) return null;
+  const loc = rest.restaurantLocation || rest.location || rest.coords || rest.geo || rest;
+  if (!loc) return null;
+
+  // Handle GeoJSON array format [longitude, latitude]
+  if (loc.coordinates && Array.isArray(loc.coordinates) && loc.coordinates.length >= 2) {
+    const lng = Number(loc.coordinates[0]);
+    const lat = Number(loc.coordinates[1]);
+    if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+      return { lat, lng };
+    }
+  }
+
+  // Handle GeoJSON string format "longitude latitude" or "longitude, latitude"
+  if (loc.coordinates && typeof loc.coordinates === 'string') {
+    const parts = loc.coordinates.trim().split(/[,\s]+/);
+    if (parts.length >= 2) {
+      const lng = Number(parts[0]);
+      const lat = Number(parts[1]);
+      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
+        return { lat, lng };
+      }
+    }
+  }
+
+  const rawLat = loc.lat ?? loc.latitude ?? loc.latitute ?? rest.lat ?? rest.latitude;
+  const rawLng = loc.lng ?? loc.longitude ?? loc.longtitude ?? rest.lng ?? rest.longitude;
+  if (rawLat === undefined || rawLng === undefined || rawLat === null || rawLng === null) return null;
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+  if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+  return { lat, lng };
 };
 
 export const checkLocationAndCalculateDistances = createAsyncThunk(
@@ -64,9 +104,12 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
     try {
       let latitude, longitude;
 
-      if (customCoords && customCoords.latitude !== undefined && customCoords.longitude !== undefined) {
-        latitude = Number(customCoords.latitude);
-        longitude = Number(customCoords.longitude);
+      const customLat = customCoords ? (customCoords.latitude ?? customCoords.lat) : undefined;
+      const customLng = customCoords ? (customCoords.longitude ?? customCoords.lng) : undefined;
+
+      if (customLat !== undefined && customLng !== undefined && customLat !== null && customLng !== null && !isNaN(Number(customLat)) && !isNaN(Number(customLng))) {
+        latitude = Number(customLat);
+        longitude = Number(customLng);
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
         // 1. Check if location services are enabled globally (GPS is ON)
@@ -113,9 +156,9 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           });
         }
 
-        // 3. Request coordinates with a 10-second timeout to prevent UI hanging
+        // 3. Request coordinates with pinpoint precision
         console.log('[Location Redux] Querying current coordinates...');
-        if (typeof window !== 'undefined' && window.navigator && window.navigator.geolocation) {
+        if (Platform.OS === 'web' && typeof window !== 'undefined' && window.navigator && window.navigator.geolocation) {
           const getWebPosition = () => new Promise((resolve, reject) => {
             window.navigator.geolocation.getCurrentPosition(
               (pos) => resolve({
@@ -125,7 +168,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
                 }
               }),
               (err) => reject(err),
-              { enableHighAccuracy: false, timeout: 10000, maximumAge: 10000 }
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
             );
           });
           const location = await getWebPosition();
@@ -133,115 +176,140 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
           longitude = location.coords.longitude;
         } else {
           try {
-            // Race getCurrentPositionAsync with a 10s timeout
+            // Tier 1: Try Highest navigation accuracy (pinpoint GPS satellite fix)
             const positionPromise = Location.getCurrentPositionAsync({
-              accuracy: Location.Accuracy.Balanced,
-              timeout: 10000,
+              accuracy: Location.Accuracy.Highest,
+              timeout: 8000,
             });
             const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Location timeout')), 10000)
+              setTimeout(() => reject(new Error('Location timeout')), 8500)
             );
             const location = await Promise.race([positionPromise, timeoutPromise]);
             latitude = location.coords.latitude;
             longitude = location.coords.longitude;
+            console.log('[Location Redux Mobile] Pinpoint satellite GPS coordinates acquired:', latitude, longitude);
           } catch (posErr) {
-            console.warn('[Location Redux] getCurrentPositionAsync failed/timed out, attempting getLastKnownPositionAsync:', posErr);
-            const fallbackLoc = await Location.getLastKnownPositionAsync();
-            if (fallbackLoc && fallbackLoc.coords) {
-              latitude = fallbackLoc.coords.latitude;
-              longitude = fallbackLoc.coords.longitude;
-              console.log('[Location Redux] Successfully retrieved coordinates from last known position:', latitude, longitude);
-            } else {
-              throw posErr; // rethrow if fallback also fails
+            console.warn('[Location Redux] Highest accuracy timed out, trying High accuracy fallback:', posErr.message);
+            try {
+              // Tier 2: Try High accuracy with shorter timeout
+              const highAccLoc = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.High,
+                timeout: 5000,
+              });
+              latitude = highAccLoc.coords.latitude;
+              longitude = highAccLoc.coords.longitude;
+              console.log('[Location Redux] High accuracy location acquired:', latitude, longitude);
+            } catch (tier2Err) {
+              console.warn('[Location Redux] Attempting recent known position (< 5 mins old):', tier2Err.message);
+              const fallbackLoc = await Location.getLastKnownPositionAsync({
+                maxAge: 300000, // strictly reject positions older than 5 minutes
+              });
+              if (fallbackLoc && fallbackLoc.coords) {
+                latitude = fallbackLoc.coords.latitude;
+                longitude = fallbackLoc.coords.longitude;
+                console.log('[Location Redux] Successfully retrieved fresh recent position:', latitude, longitude);
+              } else {
+                console.error('[Location Redux] All GPS queries failed to retrieve location.');
+                return rejectWithValue({
+                  type: 'LOCATION_FAILED',
+                  message: 'Could not fetch device GPS location. Please check device location settings.'
+                });
+              }
             }
           }
         }
       }
-      console.log('[Location Redux] Location coordinates verified:', latitude, longitude);
 
-      // 4. Verify Kurnool geofence
-      const inside = isPointInPolygon({ latitude, longitude }, kurnoolPolygon);
-      console.log('[Location Redux] Geofence check inside Kurnool:', inside);
-      if (!inside) {
+      console.log('[Location Redux] Active customer coordinates:', latitude, longitude);
+
+      // 4. Verify Kurnool geofence (strictly inside polygon boundary)
+      const insideGeofence = isPointInPolygon({ latitude, longitude }, kurnoolPolygon);
+      console.log('[Location Redux] Geofence check inside Kurnool polygon:', insideGeofence);
+      if (!insideGeofence) {
         return rejectWithValue({
           type: 'OUT_OF_ZONE',
           message: 'Service is only available in Kurnool.'
         });
       }
 
-      // 5. Instantly compute initial air distances
-      const initialDistances = {};
-      restaurantsList.forEach(rest => {
-        const restLoc = rest.restaurantLocation;
-        if (restLoc && restLoc.lat !== undefined && restLoc.lng !== undefined) {
-          const airDist = getHaversineDistance(latitude, longitude, restLoc.lat, restLoc.lng);
-          const formatted = `${airDist.toFixed(1)} km`;
-          if (rest._id) initialDistances[String(rest._id)] = formatted;
-          if (rest.restId) initialDistances[String(rest.restId)] = formatted;
-        }
-      });
-      console.log('[Location Redux] Set zero-latency initial air distances:', initialDistances);
-      dispatch(setRoadDistances(initialDistances));
-
-      // 6. Try loading cached road distances from AsyncStorage
+      // 5. Attempt Reverse Geocoding to resolve street/area address
+      let userAddress = null;
       try {
-        const cached = await AsyncStorage.getItem('cached_road_distances');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          console.log('[Location Redux] Loaded cached road distances:', parsed);
-          dispatch(setRoadDistances(parsed));
+        const reverseResults = await Location.reverseGeocodeAsync({ latitude, longitude });
+        if (reverseResults && reverseResults.length > 0) {
+          const res = reverseResults[0];
+          const areaParts = [res.name, res.street, res.district || res.subregion || res.city].filter(Boolean);
+          const formattedStr = areaParts.length > 0 ? areaParts.join(', ') : 'Kurnool';
+          userAddress = {
+            formattedAddress: formattedStr,
+            street: res.street || res.name || '',
+            subregion: res.district || res.subregion || res.city || 'Kurnool',
+            city: res.city || 'Kurnool',
+          };
+          console.log('[Location Redux] Resolved address via reverse geocoding:', userAddress);
         }
-      } catch (err) {
-        console.warn('[Location Redux] Cache load error:', err);
+      } catch (geocodeErr) {
+        console.warn('[Location Redux] Reverse geocoding warning:', geocodeErr.message);
       }
 
-      // 7. Request exact road route distance from backend API for all restaurants in parallel with AbortController timeout
-      console.log('[Location Redux] Querying backend /distance endpoint for exact road distances...');
+      // 6. Request exact road route distance directly from backend API for all restaurants in 1 fast batch call
+      console.log('[Location Redux] Fetching exact road route distances from backend...');
       const updatedDistances = {};
-      await Promise.all(restaurantsList.map(async (rest) => {
-        const restId = rest._id || rest.restId;
-        const restLoc = rest.restaurantLocation;
-        if (restLoc && restLoc.lat !== undefined && restLoc.lng !== undefined) {
-          const airDist = getHaversineDistance(latitude, longitude, restLoc.lat, restLoc.lng);
-          if (airDist > 30) {
-            console.log(`[Location Redux] Skipping backend road distance for ${rest.name || 'restaurant'} because air distance is too large (${airDist.toFixed(1)} km)`);
-            return;
+      if (restaurantsList && restaurantsList.length > 0) {
+        const destinationItems = [];
+        restaurantsList.forEach((rest) => {
+          const restId = rest._id || rest.restId || rest.id;
+          const restCoords = getRestaurantCoords(rest);
+          if (restId && restCoords) {
+            destinationItems.push({
+              id: String(restId),
+              lat: restCoords.lat,
+              lng: restCoords.lng,
+            });
           }
+        });
 
+        if (destinationItems.length > 0) {
           try {
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
-            const url = `${API_URL}/distance?originLat=${latitude}&originLng=${longitude}&restaurantId=${restId}`;
-            console.log(`[Location Redux] Fetching distance for ${rest.name} from: ${url}`);
-            const response = await fetch(url, controller ? { signal: controller.signal } : undefined);
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+            const batchRes = await fetch(`${API_URL}/distance/batch`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                originLat: latitude,
+                originLng: longitude,
+                destinations: destinationItems,
+              }),
+              signal: controller ? controller.signal : undefined,
+            });
             if (timeoutId) clearTimeout(timeoutId);
 
-            if (response.ok) {
-              const resData = await response.json();
-              console.log(`[Location Redux] Backend response for ${rest.name}:`, resData);
-              if (resData.success && resData.distance) {
-                if (rest._id) updatedDistances[String(rest._id)] = resData.distance;
-                if (rest.restId) updatedDistances[String(rest.restId)] = resData.distance;
+            if (batchRes.ok) {
+              const batchData = await batchRes.json();
+              if (batchData.success && batchData.distances) {
+                restaurantsList.forEach((rest) => {
+                  const restId = rest._id || rest.restId || rest.id;
+                  let distText = batchData.distances[String(restId)];
+
+                  if (distText) {
+                    const keys = [rest._id, rest.restId, rest.id, rest.restaurantId, rest.name, rest.restaurantName].filter(Boolean);
+                    keys.forEach(k => { updatedDistances[String(k)] = distText; });
+                  }
+                });
               }
-            } else {
-              console.warn(`[Location Redux] Backend returned error status ${response.status} for ${rest.name}`);
             }
-          } catch (err) {
-            console.warn(`[Location Redux] Failed to fetch road distance for ${rest.name}:`, err);
+          } catch (batchErr) {
+            console.warn('[Location Redux] Batch road distance query error:', batchErr);
           }
         }
-      }));
-
-      // Cache updated road distances
-      if (Object.keys(updatedDistances).length > 0) {
-        console.log('[Location Redux] Saving updated road distances to AsyncStorage cache:', updatedDistances);
-        AsyncStorage.setItem('cached_road_distances', JSON.stringify(updatedDistances)).catch(err =>
-          console.warn('[Location Redux] Cache write error:', err)
-        );
       }
+
+      console.log('[Location Redux] Final exact backend road distances:', updatedDistances);
 
       return {
         userLocation: { latitude, longitude },
+        userAddress,
         updatedDistances
       };
 
@@ -259,6 +327,7 @@ const locationSlice = createSlice({
   name: 'location',
   initialState: {
     userLocation: null,
+    userAddress: null,
     roadDistances: {},
     locationStatus: 'idle', // 'idle' | 'requesting' | 'inside' | 'outside' | 'denied'
     showLocationModal: false,
@@ -303,9 +372,11 @@ const locationSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(checkLocationAndCalculateDistances.pending, (state) => {
+      .addCase(checkLocationAndCalculateDistances.pending, (state, action) => {
         state.locationStatus = 'requesting';
-        state.showFetchingModal = true;
+        if (!state.userLocation || (action.meta && action.meta.arg && action.meta.arg.forceModal)) {
+          state.showFetchingModal = true;
+        }
         state.showLocationModal = false;
         state.showOutOfZoneModal = false;
         state.locationError = null;
@@ -313,7 +384,12 @@ const locationSlice = createSlice({
       .addCase(checkLocationAndCalculateDistances.fulfilled, (state, action) => {
         state.locationStatus = 'inside';
         state.userLocation = action.payload.userLocation;
-        state.roadDistances = { ...state.roadDistances, ...action.payload.updatedDistances };
+        if (action.payload.userAddress) {
+          state.userAddress = action.payload.userAddress;
+        }
+        if (action.payload.updatedDistances) {
+          state.roadDistances = { ...state.roadDistances, ...action.payload.updatedDistances };
+        }
         state.showFetchingModal = false;
         state.showLocationModal = false;
         state.showOutOfZoneModal = false;
@@ -330,7 +406,7 @@ const locationSlice = createSlice({
           state.showOutOfZoneModal = true;
         } else {
           state.locationStatus = 'denied';
-          state.showLocationModal = false; // Never open a 2nd modal box
+          state.showLocationModal = false;
         }
       });
   }

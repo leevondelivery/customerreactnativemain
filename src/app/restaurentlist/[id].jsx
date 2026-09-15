@@ -1,7 +1,7 @@
 import { Feather, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTabBar } from '../_layout';
 import {
   Alert,
@@ -80,16 +80,29 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
 export default function RestaurantMenuScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
+  const bannerAnimY = useRef(new Animated.Value(0)).current;
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
     const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
 
-    if (Math.abs(currentOffset - lastOffsetY.current) > 15) {
-      if (direction === 'down' && currentOffset > 60) {
+    if (Math.abs(currentOffset - lastOffsetY.current) > 8) {
+      if (direction === 'down' && currentOffset > 40) {
         hideTabBar();
+        Animated.spring(bannerAnimY, {
+          toValue: 72,
+          tension: 160,
+          friction: 14,
+          useNativeDriver: true,
+        }).start();
       } else if (direction === 'up') {
         showTabBar();
+        Animated.spring(bannerAnimY, {
+          toValue: 0,
+          tension: 160,
+          friction: 14,
+          useNativeDriver: true,
+        }).start();
       }
       lastOffsetY.current = currentOffset;
     }
@@ -98,7 +111,13 @@ export default function RestaurantMenuScreen() {
   useFocusEffect(
     useCallback(() => {
       showTabBar();
-    }, [showTabBar])
+      Animated.spring(bannerAnimY, {
+        toValue: 0,
+        tension: 160,
+        friction: 14,
+        useNativeDriver: true,
+      }).start();
+    }, [showTabBar, bannerAnimY])
   );
 
   const [nowTime, setNowTime] = useState(new Date());
@@ -309,7 +328,7 @@ const isItemAvailable = (item) => {
 };
 
   // Extract all unique categories from database items
-  const categories = [
+  const categories = useMemo(() => [
     'All',
     ...new Set(
       menuItems
@@ -319,53 +338,106 @@ const isItemAvailable = (item) => {
         })
         .filter(Boolean)
     ),
-  ];
+  ], [menuItems]);
 
-  // Filter and sort items
-  const sortedItems = menuItems
-    .filter((item) => {
-      // Filter by search query
+  // Fast O(1) cart quantity lookup map
+  const cartMap = useMemo(() => {
+    const map = {};
+    if (!cart || cart.length === 0) return map;
+    for (let i = 0; i < cart.length; i++) {
+      const c = cart[i];
+      if (String(c.restId || '') === String(restId || '')) {
+        const qty = c.quantity || 0;
+        if (c.itemId) map[String(c.itemId)] = qty;
+        if (c._id) map[String(c._id)] = qty;
+        if (c.id) map[String(c.id)] = qty;
+      }
+    }
+    return map;
+  }, [cart, restId]);
+
+  // Total cart item count and subtotal
+  const cartItemCount = useMemo(() => {
+    if (!cart || cart.length === 0) return 0;
+    return cart.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  }, [cart]);
+
+  const cartSubtotal = useMemo(() => {
+    if (!cart || cart.length === 0) return 0;
+    return cart.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
+  }, [cart]);
+
+  const bannerBottom = useMemo(() => {
+    return insets.bottom > 0 ? insets.bottom + 94 : (Platform.OS === 'ios' ? 120 : 114);
+  }, [insets.bottom]);
+
+  // Memoized filter and sort items for ultra-fast instant filter toggling
+  const sortedItems = useMemo(() => {
+    if (!menuItems || menuItems.length === 0) return EMPTY_ARRAY;
+
+    const query = searchQuery.trim();
+    const hasQuery = Boolean(query);
+    const filterAll = filterType === 'All';
+    const catAll = selectedCategory === 'All';
+    const selectedCatLower = catAll ? '' : selectedCategory.toLowerCase();
+
+    const checkMatch = (item) => {
+      if (!item || !hasQuery) return false;
       const name = item.itemName || item.name || '';
       const cat = item.category || '';
       const desc = item.description || '';
-      const query = searchQuery.trim();
-      const matchesSearch = !query ||
+      return (
         isTextMatchingQuery(name, query) ||
         isTextMatchingQuery(cat, query) ||
-        (query.length >= 3 && desc.toLowerCase().includes(query.toLowerCase()));
+        (query.length >= 3 && desc.toLowerCase().includes(query.toLowerCase()))
+      );
+    };
 
-      // Filter by type
-      const itemVegType = item.vegOrNonVeg || 'Veg'; // default fallback
-      const matchesType =
-        filterType === 'All' ||
-        (filterType === 'Veg' && itemVegType.toLowerCase() === 'veg') ||
-        (filterType === 'Non-Veg' && itemVegType.toLowerCase() === 'non-veg');
+    return menuItems
+      .filter((item) => {
+        // Step 1: Filter by Veg/Non-Veg type first
+        if (!filterAll) {
+          const itemVegType = (item.vegOrNonVeg || 'Veg').toLowerCase();
+          if (filterType === 'Veg' && itemVegType !== 'veg') return false;
+          if (filterType === 'Non-Veg' && itemVegType !== 'non-veg') return false;
+        }
 
-      // Filter by category (case-insensitive)
-      const matchesCategory =
-        selectedCategory === 'All' ||
-        (item.category && item.category.toLowerCase() === selectedCategory.toLowerCase());
+        // Step 2: Filter by category
+        if (!catAll) {
+          const itemCat = (item.category || '').toLowerCase();
+          if (itemCat !== selectedCatLower) return false;
+        }
 
-      return matchesSearch && matchesType && matchesCategory;
-    })
-    .sort((a, b) => {
-      const availA = isItemAvailable(a);
-      const availB = isItemAvailable(b);
+        return true;
+      })
+      .sort((a, b) => {
+        // Priority 1: Available items before out-of-stock items
+        const availA = isItemAvailable(a);
+        const availB = isItemAvailable(b);
 
-      // Available items stay at top, items with status === false sit at the bottom
-      if (availA && !availB) return -1;
-      if (!availA && availB) return 1;
+        if (availA && !availB) return -1;
+        if (!availA && availB) return 1;
 
-      if (sortBy === 'Low to High') {
-        return (a.price || 0) - (b.price || 0);
-      }
-      if (sortBy === 'High to Low') {
-        return (b.price || 0) - (a.price || 0);
-      }
-      return 0;
-    });
+        // Priority 2: Search query matching items at top
+        if (hasQuery) {
+          const matchA = checkMatch(a);
+          const matchB = checkMatch(b);
+          if (matchA && !matchB) return -1;
+          if (!matchA && matchB) return 1;
+        }
 
-  const handleUpdateQuantity = async (item, change) => {
+        // Priority 3: Price sorting
+        if (sortBy === 'Low to High') {
+          return (a.price || 0) - (b.price || 0);
+        }
+        if (sortBy === 'High to Low') {
+          return (b.price || 0) - (a.price || 0);
+        }
+        return 0;
+      });
+  }, [menuItems, searchQuery, filterType, selectedCategory, sortBy]);
+
+  const handleUpdateQuantity = useCallback(async (item, change) => {
     if (!isItemAvailable(item)) {
       triggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning');
       return;
@@ -379,7 +451,9 @@ const isItemAvailable = (item) => {
       let currentCart = cartData ? JSON.parse(cartData) : [];
 
       // Check if cart has items from a different restaurant
-      const differentRestaurantItem = currentCart.find((cartItem) => cartItem.restId && cartItem.restId !== restId);
+      const differentRestaurantItem = currentCart.find(
+        (cartItem) => cartItem.restId && String(cartItem.restId) !== String(restId)
+      );
       if (change > 0 && differentRestaurantItem) {
         setPreviousRestaurantName(differentRestaurantItem.restaurantName || 'another restaurant');
         setPendingItemToAdd(item);
@@ -389,8 +463,12 @@ const isItemAvailable = (item) => {
 
       const existingItemIndex = currentCart.findIndex(
         (cartItem) => 
-          ((cartItem.itemId && cartItem.itemId === item.itemId) || (cartItem._id && cartItem._id === item._id))
-          && cartItem.restId === restId
+          String(cartItem.restId || '') === String(restId || '') &&
+          (
+            (cartItem.itemId && item.itemId && String(cartItem.itemId) === String(item.itemId)) ||
+            (cartItem._id && item._id && String(cartItem._id) === String(item._id)) ||
+            (cartItem.id && item.id && String(cartItem.id) === String(item.id))
+          )
       );
 
       if (existingItemIndex > -1) {
@@ -416,9 +494,9 @@ const isItemAvailable = (item) => {
       console.error('Error updating quantity:', error);
       Alert.alert('Error', 'Failed to update item quantity.');
     }
-  };
+  }, [hasActiveOrder, restId, passedName, triggerToast]);
 
-  const renderItemCard = ({ item }) => {
+  const renderItemCard = useCallback(({ item }) => {
     const available = isItemAvailable(item);
     const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
     const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
@@ -429,11 +507,12 @@ const isItemAvailable = (item) => {
       displayItemName += suffix;
     }
 
-    const cartItem = cart.find((c) => 
-      ((c.itemId && c.itemId === item.itemId) || (c._id && c._id === item._id))
-      && c.restId === restId
+    const quantity = (
+      (item._id && cartMap[String(item._id)]) ||
+      (item.itemId && cartMap[String(item.itemId)]) ||
+      (item.id && cartMap[String(item.id)]) ||
+      0
     );
-    const quantity = cartItem ? cartItem.quantity : 0;
 
     const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
     const hasOffer = offerPercent > 0 && offerPercent <= 100;
@@ -531,7 +610,92 @@ const isItemAvailable = (item) => {
         )}
       </View>
     );
-  };
+  }, [cartMap, handleUpdateQuantity, triggerToast]);
+
+  // Group sorted items by category for section headings
+  const groupedCategories = useMemo(() => {
+    if (!sortedItems || sortedItems.length === 0) return EMPTY_ARRAY;
+
+    const groups = [];
+    const groupMap = {};
+
+    for (let i = 0; i < sortedItems.length; i++) {
+      const item = sortedItems[i];
+      const rawCat = item.category ? item.category.trim() : 'Menu';
+      const catTitle = rawCat ? (rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) : 'Menu';
+
+      if (!groupMap[catTitle]) {
+        groupMap[catTitle] = [];
+        groups.push({ title: catTitle, items: groupMap[catTitle] });
+      }
+      groupMap[catTitle].push(item);
+    }
+
+    return groups;
+  }, [sortedItems]);
+
+  const renderCategoryGroup = useCallback(({ item: group }) => {
+    return (
+      <View key={group.title} style={{ marginBottom: 16 }}>
+        {/* Premium Category Heading Banner */}
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          marginTop: 22,
+          marginBottom: 14,
+          paddingHorizontal: 2,
+        }}>
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#1E3545',
+            paddingHorizontal: 14,
+            paddingVertical: 7,
+            borderRadius: 16,
+            gap: 8,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.15,
+            shadowRadius: 4,
+            elevation: 3,
+          }}>
+            <View style={{
+              width: 8,
+              height: 8,
+              borderRadius: 4,
+              backgroundColor: '#0F8A65',
+            }} />
+            <Text style={{
+              fontSize: 13,
+              fontWeight: '800',
+              color: '#FFFFFF',
+              letterSpacing: 0.8,
+              textTransform: 'uppercase',
+            }}>
+              {group.title}
+            </Text>
+          </View>
+          <View style={{
+            flex: 1,
+            height: 1.5,
+            backgroundColor: 'rgba(30, 53, 69, 0.15)',
+            marginLeft: 12,
+            borderRadius: 1,
+          }} />
+        </View>
+
+        {/* 2-Column Cards Grid */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+          {group.items.map((foodItem) => (
+            <React.Fragment key={foodItem._id || foodItem.itemId}>
+              {renderItemCard({ item: foodItem })}
+            </React.Fragment>
+          ))}
+          {group.items.length % 2 !== 0 && <View style={{ width: '48%' }} />}
+        </View>
+      </View>
+    );
+  }, [renderItemCard]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#008000';
@@ -542,15 +706,17 @@ const isItemAvailable = (item) => {
     <SafeAreaView style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0 }]}>
       {/* Main Content */}
       <FlatList
-        data={sortedItems}
-        keyExtractor={(item) => item._id || item.itemId}
-        renderItem={renderItemCard}
-        numColumns={2}
-        columnWrapperStyle={styles.columnWrapper}
+        data={groupedCategories}
+        keyExtractor={(group) => group.title}
+        renderItem={renderCategoryGroup}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }]}
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        removeClippedSubviews={Platform.OS !== 'web'}
         ListHeaderComponent={
           <>
             {/* Restaurant Hero Card (redesigned) */}
@@ -666,22 +832,44 @@ const isItemAvailable = (item) => {
                   ]}>All</Text>
                 </TouchableOpacity>
 
-                {/* Veg leaf segment */}
+                {/* Veg green square dot segment */}
                 <TouchableOpacity
                   style={[styles.filterButton, filterType === 'Veg' && styles.filterButtonActive]}
                   activeOpacity={0.7}
                   onPress={() => setFilterType('Veg')}
                 >
-                  <FontAwesome5 name="leaf" size={20} color={filterType === 'Veg' ? "#2B783E" : "#5EC48D"} solid />
+                  <View style={{
+                    width: 20,
+                    height: 20,
+                    borderWidth: 2,
+                    borderColor: '#0F8A65',
+                    borderRadius: 4,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: filterType === 'Veg' ? '#E8F5E9' : '#FFF'
+                  }}>
+                    <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
+                  </View>
                 </TouchableOpacity>
 
-                {/* Non-veg segment */}
+                {/* Non-veg red square dot segment */}
                 <TouchableOpacity
                   style={[styles.filterButton, filterType === 'Non-Veg' && styles.filterButtonActive]}
                   activeOpacity={0.7}
                   onPress={() => setFilterType('Non-Veg')}
                 >
-                  <FontAwesome5 name="drumstick-bite" size={19} color={filterType === 'Non-Veg' ? "#D9383A" : "#FA4D56"} />
+                  <View style={{
+                    width: 20,
+                    height: 20,
+                    borderWidth: 2,
+                    borderColor: '#E53935',
+                    borderRadius: 4,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: filterType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
+                  }}>
+                    <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
+                  </View>
                 </TouchableOpacity>
               </View>
             </View>
@@ -772,17 +960,37 @@ const isItemAvailable = (item) => {
         <TouchableOpacity
           style={styles.categoriesTabHandle}
           onPress={() => setIsSidebarOpen(!isSidebarOpen)}
-          activeOpacity={0.9}
+          activeOpacity={0.85}
         >
-          <Feather
-            name={isSidebarOpen ? "chevron-right" : "chevron-left"}
-            size={16}
-            color="#FFFFFF"
-            style={{ marginBottom: 4 }}
-          />
+          <View style={{
+            width: 26,
+            height: 26,
+            borderRadius: 13,
+            backgroundColor: '#FFFFFF',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 6,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.25,
+            shadowRadius: 2,
+            elevation: 3,
+          }}>
+            <Ionicons
+              name={isSidebarOpen ? "close" : "restaurant-outline"}
+              size={14}
+              color="#1E3545"
+            />
+          </View>
           <Text style={styles.categoriesTabHandleText}>
             {"C\nA\nT\nE\nG\nO\nR\nI\nE\nS"}
           </Text>
+          <Feather
+            name={isSidebarOpen ? "chevron-right" : "chevron-left"}
+            size={14}
+            color="#FFFFFF"
+            style={{ marginTop: 6 }}
+          />
         </TouchableOpacity>
       </View>
 
@@ -792,8 +1000,9 @@ const isItemAvailable = (item) => {
           style={[
             styles.toastContainer,
             {
+              bottom: cartItemCount > 0 ? bannerBottom + 65 : 100,
               opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
+              transform: [{ translateY: Animated.add(toastTranslateY, bannerAnimY) }],
             },
           ]}
         >
@@ -803,6 +1012,46 @@ const isItemAvailable = (item) => {
             </View>
             <Text style={styles.toastText}>{toastConfig.message}</Text>
           </View>
+        </Animated.View>
+      )}
+
+      {/* Fixed Green Cart Banner */}
+      {cartItemCount > 0 && (
+        <Animated.View
+          style={[
+            styles.fixedCartBanner,
+            {
+              bottom: bannerBottom,
+              transform: [{ translateY: bannerAnimY }],
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              width: '100%',
+            }}
+            activeOpacity={0.9}
+            onPress={() => router.push('/cart')}
+          >
+            <View style={styles.cartBannerLeft}>
+              <View style={styles.cartBannerIconBadge}>
+                <Feather name="shopping-bag" size={18} color="#27AE60" />
+              </View>
+              <View>
+                <Text style={styles.cartBannerTitle}>
+                  {cartItemCount} {cartItemCount === 1 ? 'ITEM' : 'ITEMS'} ADDED
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.cartBannerRight}>
+              <Text style={styles.cartBannerBtnText}>View Cart</Text>
+              <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 4 }} />
+            </View>
+          </TouchableOpacity>
         </Animated.View>
       )}
       {/* Custom Replace Cart Confirmation Modal */}
@@ -1026,7 +1275,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   filterPillContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.06)',
+    backgroundColor: 'transparent',
     borderRadius: 23,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1044,23 +1293,6 @@ const styles = StyleSheet.create({
   },
   filterButtonActive: {
     backgroundColor: '#FFFFFF',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-      default: {
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12,
-        shadowRadius: 4,
-      },
-    }),
   },
   allButtonText: {
     fontSize: 14,
@@ -1308,27 +1540,31 @@ const styles = StyleSheet.create({
   },
   categoriesTabHandle: {
     position: 'absolute',
-    left: -36,
+    left: -42,
     top: '30%',
-    width: 36,
-    backgroundColor: '#333333',
-    borderTopLeftRadius: 10,
-    borderBottomLeftRadius: 10,
-    paddingVertical: 10, // Shrunken vertical padding for shorter tab height
+    width: 42,
+    backgroundColor: '#1E3545',
+    borderTopLeftRadius: 16,
+    borderBottomLeftRadius: 16,
+    paddingVertical: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: -3, height: 0 },
-    shadowOpacity: 0.15,
-    shadowRadius: 5,
-    elevation: 5,
+    shadowColor: '#1E3545',
+    shadowOffset: { width: -4, height: 2 },
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    elevation: 8,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+    borderRightWidth: 0,
   },
   categoriesTabHandleText: {
-    fontSize: 9, // Shrunken font size for more compact height
+    fontSize: 10,
     fontWeight: '900',
     color: '#FFFFFF',
     textAlign: 'center',
-    lineHeight: 11, // Shrunken line height
+    lineHeight: 12,
+    letterSpacing: 0.5,
   },
   toastContainer: {
     position: 'absolute',
@@ -1408,5 +1644,62 @@ const styles = StyleSheet.create({
     color: '#1E3545',
     textAlign: 'center',
     lineHeight: 20,
+  },
+  fixedCartBanner: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 105 : 100,
+    left: 16,
+    right: 16,
+    backgroundColor: '#27AE60',
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 8,
+    zIndex: 9998,
+  },
+  cartBannerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  cartBannerIconBadge: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  cartBannerSubtitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#E8F5E9',
+    marginTop: 1,
+  },
+  cartBannerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  cartBannerBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

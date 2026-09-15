@@ -227,7 +227,7 @@ export const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   filterPillContainer: {
-    backgroundColor: 'rgba(0, 0, 0, 0.06)',
+    backgroundColor: 'transparent',
     borderRadius: 23,
     flexDirection: 'row',
     alignItems: 'center',
@@ -245,23 +245,6 @@ export const styles = StyleSheet.create({
   },
   filterButtonActive: {
     backgroundColor: '#FFFFFF',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12,
-        shadowRadius: 4,
-      },
-      android: {
-        elevation: 3,
-      },
-      default: {
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12,
-        shadowRadius: 4,
-      },
-    }),
   },
   allButtonText: {
     fontSize: 14,

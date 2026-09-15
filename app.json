@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "customerreactnative",
+    "name": "Leevon Delivery",
     "slug": "customerreactnative",
     "version": "1.0.3",
     "orientation": "portrait",
@@ -16,16 +16,14 @@
       "backgroundColor": "#F9F9F6"
     },
     "ios": {
-      "icon": "./assets/expo.icon",
+      "icon": "./assets/images/logo.png",
       "bundleIdentifier": "com.leevondelivery.customer"
     },
     "android": {
       "allowBackup": false,
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/logo.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.leevon.delivery.app",
@@ -33,7 +31,9 @@
       "usesCleartextTraffic": true,
       "googleServicesFile": "./google-services.json",
       "permissions": [
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
@@ -52,10 +52,10 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
+          "backgroundColor": "#F9F9F6",
           "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
+            "image": "./assets/images/logo.png",
+            "imageWidth": 120
           }
         }
       ],

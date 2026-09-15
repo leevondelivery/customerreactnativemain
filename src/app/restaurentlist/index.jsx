@@ -49,7 +49,7 @@ const isTextMatchingQuery = (text, query) => {
   if (queryWords.length === 0) return false;
 
   return queryWords.every((qWord) => {
-    // Singular variant if query word ends with 's' and length > 3 (e.g. 'fries' -> 'frie')
+    // Singuar variant if query word ends with 's' and length > 3 (e.g. 'fries' -> 'frie')
     const sWord = (qWord.length > 3 && qWord.endsWith('s')) ? qWord.slice(0, -1) : null;
     return words.some((w) => w.startsWith(qWord) || (sWord && w.startsWith(sWord)));
   });
@@ -176,6 +176,7 @@ export default function RestaurantListScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
   const flatListRef = useRef(null);
+  const categoryScrollRef = useRef(null);
 
   const dispatch = useDispatch();
   const restaurants = useSelector((state) => state.restaurants.list);
@@ -188,6 +189,7 @@ export default function RestaurantListScreen() {
   // Redux Selectors for Global Location State
   const {
     userLocation,
+    userAddress,
     roadDistances,
     locationStatus,
     showLocationModal,
@@ -260,13 +262,19 @@ export default function RestaurantListScreen() {
         } catch (e) {}
       }
 
-      // When reopening app without an active order, show deliver-to location modal ONCE on launch
-      if (!hasActiveOrder) {
+      // When reopening app without an active order and without an existing location choice, show modal ONCE on launch
+      if (!hasActiveOrder && !globalHasShownDeliverToModal && userChoice !== 'inside' && userChoice !== 'saved' && !savedAddrId) {
         globalHasShownDeliverToModal = true;
         setShowDeliverToModal(true);
       } else {
         globalHasShownDeliverToModal = true;
         setShowDeliverToModal(false);
+      }
+
+      if (savedAddrId) {
+        dispatch(setSelectedSavedAddressId(savedAddrId));
+      } else if (userChoice === 'inside') {
+        dispatch(checkLocationAndCalculateDistances(restaurants));
       }
 
       // Asynchronously verify addresses & active order status in background without delaying UI
@@ -537,6 +545,29 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, restaurants]);
 
+  // Auto-trigger distance calculation as soon as restaurants are loaded
+  useEffect(() => {
+    if (restaurants && restaurants.length > 0) {
+      const hasAnyDistance = restaurants.some(r => roadDistances && (roadDistances[r._id] || roadDistances[r.restId] || roadDistances[r.id] || roadDistances[r.name]));
+      if (!hasAnyDistance) {
+        if (selectedSavedAddressId) {
+          const addrList = (savedAddresses && savedAddresses.length > 0) ? savedAddresses : reduxSavedAddresses;
+          const selectedAddr = addrList.find(a => String(a.id || a._id) === String(selectedSavedAddressId));
+          const sLat = selectedAddr?.lat ?? selectedAddr?.latitude;
+          const sLng = selectedAddr?.lng ?? selectedAddr?.longitude;
+          if (sLat && sLng) {
+            dispatch(checkLocationAndCalculateDistances({
+              restaurantsList: restaurants,
+              customCoords: { latitude: Number(sLat), longitude: Number(sLng) }
+            }));
+            return;
+          }
+        }
+        dispatch(checkLocationAndCalculateDistances(restaurants));
+      }
+    }
+  }, [restaurants, roadDistances, dispatch, selectedSavedAddressId, savedAddresses, reduxSavedAddresses]);
+
   // Focus Effect: Re-fetch fresh restaurant statuses silently after transition completes
   useFocusEffect(
     useCallback(() => {
@@ -662,44 +693,128 @@ export default function RestaurantListScreen() {
   // Memoized filter and search calculations to prevent heavy re-computations on every render tick
   const { filteredList, matchingItemsMap } = useMemo(() => {
     const matchingMap = {};
-    const list = (Array.isArray(restaurants) ? restaurants : [])
+    if (!restaurants || restaurants.length === 0) {
+      return { filteredList: [], matchingItemsMap: matchingMap };
+    }
+
+    const query = searchQuery ? searchQuery.trim().toLowerCase() : '';
+    const hasQuery = Boolean(query);
+    const isAllType = activeType === 'All';
+    const hasCatFilter = Boolean(selectedCategory);
+
+    let normalSelected = '';
+    let singularSelected = '';
+    if (hasCatFilter) {
+      normalSelected = selectedCategory.toLowerCase().trim();
+      singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
+    }
+
+    const list = restaurants
       .filter((item) => {
-        // Filter by search query (Matches Restaurant Name, Address, Categories, or Menu Items)
-        if (searchQuery && searchQuery.trim()) {
-          const q = searchQuery.trim().toLowerCase();
+        // Fast Step 1: Filter by Veg/Non-Veg
+        if (!isAllType) {
+          const restType = item.vegOrNonVeg || 'Both';
+          if (activeType === 'Veg' && restType !== 'Veg') return false;
+          if (activeType === 'Non-Veg' && restType !== 'Non-Veg' && restType !== 'Both') return false;
+        }
 
-          const nameField = item.name || item.email || '';
-          const addressField = item.address || '';
+        // Fast Step 2: Filter by selected category
+        if (hasCatFilter) {
+          const itemCats = item.categories;
+          if (!itemCats || itemCats.length === 0) return false;
 
-          const matchesName = isTextMatchingQuery(nameField, q);
-          const matchesAddress = q.length >= 3 && addressField.toLowerCase().includes(q);
+          let hasCategory = false;
+          for (let i = 0; i < itemCats.length; i++) {
+            const c = itemCats[i];
+            if (!c || typeof c !== 'string') continue;
+            const normalC = c.toLowerCase().trim();
+            if (
+              normalC.includes(normalSelected) ||
+              normalSelected.includes(normalC) ||
+              (singularSelected && normalC.includes(singularSelected))
+            ) {
+              hasCategory = true;
+              break;
+            }
+          }
+          if (!hasCategory) return false;
+        }
 
-          const hasCategoryMatch = item.categories && item.categories.some(c => {
-            if (!c || typeof c !== 'string') return false;
-            return isTextMatchingQuery(c, q);
-          });
+        const restIdKey = item._id || item.restId;
+        const restMenu = menus[restIdKey] || menus[item.restId] || menus[item._id] || [];
 
-          // Check menu items for this restaurant
-          const restIdKey = item._id || item.restId;
-          const restMenu = menus[restIdKey] || menus[item.restId] || menus[item._id] || [];
-
-          const matchingItems = restMenu.filter(mItem => {
-            if (!mItem) return false;
+        // Populate matching menu items for selected category filter display
+        if (hasCatFilter && !hasQuery && restMenu.length > 0) {
+          const catMatchingItems = [];
+          for (let i = 0; i < restMenu.length; i++) {
+            const mItem = restMenu[i];
+            if (!mItem) continue;
             const isAvail = mItem.itemStatus !== false && mItem.itemStatus !== 'false' && mItem.itemStatus !== 0 &&
                             mItem.itemtodisplayintherestuarentapp !== false && mItem.itemtodisplayintherestuarentapp !== 'false' && mItem.itemtodisplayintherestuarentapp !== 0 &&
                             mItem.status !== 'unavailable' && mItem.status !== 'OUT_OF_STOCK' && mItem.status !== 'inactive' && mItem.status !== false && mItem.status !== 0 &&
                             mItem.available !== false && mItem.available !== 'false' && mItem.available !== 0 &&
                             mItem.isAvailable !== false && mItem.isAvailable !== 'false' && mItem.isAvailable !== 0;
-            if (!isAvail) return false;
+            if (!isAvail) continue;
 
-            const itemName = mItem.itemName || mItem.name || '';
-            const itemCat = mItem.category || '';
-            const itemDesc = mItem.description || '';
+            const itemCat = (mItem.category || '').toLowerCase().trim();
+            const singularCat = itemCat.endsWith('s') ? itemCat.slice(0, -1) : itemCat;
 
-            return isTextMatchingQuery(itemName, q) ||
-                   isTextMatchingQuery(itemCat, q) ||
-                   isTextMatchingQuery(itemDesc, q);
-          });
+            if (
+              itemCat.includes(normalSelected) ||
+              normalSelected.includes(itemCat) ||
+              (singularSelected && itemCat.includes(singularSelected)) ||
+              (singularCat && normalSelected.includes(singularCat))
+            ) {
+              catMatchingItems.push(mItem);
+            }
+          }
+          if (catMatchingItems.length > 0) {
+            matchingMap[item._id || item.restId] = catMatchingItems;
+          }
+        }
+
+        // Fast Step 3: Search query (only evaluate menu items if user typed a search query!)
+        if (hasQuery) {
+          const nameField = item.name || item.email || '';
+          const addressField = item.address || '';
+
+          const matchesName = isTextMatchingQuery(nameField, query);
+          const matchesAddress = query.length >= 3 && addressField.toLowerCase().includes(query);
+
+          const itemCats = item.categories || [];
+          let hasCategoryMatch = false;
+          for (let i = 0; i < itemCats.length; i++) {
+            if (itemCats[i] && isTextMatchingQuery(itemCats[i], query)) {
+              hasCategoryMatch = true;
+              break;
+            }
+          }
+
+          let matchingItems = [];
+          if (restMenu.length > 0) {
+            for (let i = 0; i < restMenu.length; i++) {
+              const mItem = restMenu[i];
+              if (!mItem) continue;
+              const isAvail = mItem.itemStatus !== false && mItem.itemStatus !== 'false' && mItem.itemStatus !== 0 &&
+                              mItem.itemtodisplayintherestuarentapp !== false && mItem.itemtodisplayintherestuarentapp !== 'false' && mItem.itemtodisplayintherestuarentapp !== 0 &&
+                              mItem.status !== 'unavailable' && mItem.status !== 'OUT_OF_STOCK' && mItem.status !== 'inactive' && mItem.status !== false && mItem.status !== 0 &&
+                              mItem.available !== false && mItem.available !== 'false' && mItem.available !== 0 &&
+                              mItem.isAvailable !== false && mItem.isAvailable !== 'false' && mItem.isAvailable !== 0;
+              if (!isAvail) continue;
+
+              const itemName = mItem.itemName || mItem.name || '';
+              const itemCat = mItem.category || '';
+              const itemDesc = mItem.description || '';
+
+              if (
+                isTextMatchingQuery(itemName, query) ||
+                isTextMatchingQuery(itemCat, query) ||
+                isTextMatchingQuery(itemDesc, query)
+              ) {
+                matchingItems.push(mItem);
+              }
+            }
+          }
 
           const hasItemMatch = matchingItems.length > 0;
           const matchesSearch = matchesName || matchesAddress || hasCategoryMatch || hasItemMatch;
@@ -708,39 +823,6 @@ export default function RestaurantListScreen() {
           if (hasItemMatch) {
             matchingMap[item._id || item.restId] = matchingItems;
           }
-        }
-
-        // Filter by Veg/Non-Veg (Veg shows only Veg, Non-Veg shows Non-Veg and Both)
-        const restType = item.vegOrNonVeg || 'Both';
-        if (activeType === 'Veg') {
-          if (restType !== 'Veg') return false;
-        }
-        if (activeType === 'Non-Veg') {
-          if (restType !== 'Non-Veg' && restType !== 'Both') return false;
-        }
-
-        // Filter by selected category (case-insensitive and plural/singular tolerant checks)
-        if (selectedCategory) {
-          const normalSelected = selectedCategory.toLowerCase().trim();
-          const singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
-
-          const hasCategory = item.categories && item.categories.some(
-            c => {
-              if (!c || typeof c !== 'string') return false;
-              const normalC = c.toLowerCase().trim();
-              const singularC = normalC.endsWith('s') ? normalC.slice(0, -1) : normalC;
-
-              return (
-                normalC.includes(normalSelected) ||
-                normalSelected.includes(normalC) ||
-                normalC.includes(singularSelected) ||
-                normalSelected.includes(singularC) ||
-                singularC.includes(singularSelected) ||
-                singularSelected.includes(singularC)
-              );
-            }
-          );
-          if (!hasCategory) return false;
         }
 
         return true;
@@ -826,6 +908,9 @@ export default function RestaurantListScreen() {
                   return 'Saved Address';
                 }
                 if (locationStatus === 'inside') {
+                  if (userAddress && (userAddress.formattedAddress || userAddress.street)) {
+                    return userAddress.formattedAddress || [userAddress.street, userAddress.subregion || userAddress.city].filter(Boolean).join(', ');
+                  }
                   return 'Current Location (GPS)';
                 }
                 if (locationStatus === 'skipped') {
@@ -916,22 +1001,44 @@ export default function RestaurantListScreen() {
               ]}>All</Text>
             </TouchableOpacity>
 
-            {/* Veg leaf segment */}
+            {/* Veg green square dot segment */}
             <TouchableOpacity
               style={[styles.filterButton, activeType === 'Veg' && styles.filterButtonActive]}
               activeOpacity={0.7}
               onPress={() => setActiveType('Veg')}
             >
-              <FontAwesome5 name="leaf" size={20} color={activeType === 'Veg' ? "#2B783E" : "#5EC48D"} solid />
+              <View style={{
+                width: 20,
+                height: 20,
+                borderWidth: 2,
+                borderColor: '#0F8A65',
+                borderRadius: 4,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: activeType === 'Veg' ? '#E8F5E9' : '#FFF'
+              }}>
+                <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
+              </View>
             </TouchableOpacity>
 
-            {/* Non-veg segment */}
+            {/* Non-veg red square dot segment */}
             <TouchableOpacity
               style={[styles.filterButton, activeType === 'Non-Veg' && styles.filterButtonActive]}
               activeOpacity={0.7}
               onPress={() => setActiveType('Non-Veg')}
             >
-              <FontAwesome5 name="drumstick-bite" size={19} color={activeType === 'Non-Veg' ? "#D9383A" : "#FA4D56"} />
+              <View style={{
+                width: 20,
+                height: 20,
+                borderWidth: 2,
+                borderColor: '#E53935',
+                borderRadius: 4,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: activeType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
+              }}>
+                <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
+              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -939,59 +1046,115 @@ export default function RestaurantListScreen() {
         {/* Horizontal Category Filter List */}
         {categories.length > 0 && (
           <View style={styles.categoriesContainer}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.categoriesScroll}
-            >
-              {categories.map((cat) => {
-                const isSelected = selectedCategory === cat.name;
-                return (
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, paddingHorizontal: 4 }}>
+              <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1E3545' }}>Most Popular Categories</Text>
+              
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 18 }}>
+                {selectedCategory ? (
                   <TouchableOpacity
-                    key={cat._id}
-                    style={[
-                      styles.categoryCard,
-                      isSelected && styles.categoryCardActive
-                    ]}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setSelectedCategory(isSelected ? null : cat.name);
+                    onPress={() => setSelectedCategory(null)}
+                    activeOpacity={0.7}
+                    style={{
+                      backgroundColor: 'rgba(224, 90, 71, 0.12)',
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 10,
                     }}
                   >
-                    <Image
-                      source={{ uri: cat.imageUrl }}
-                      style={[styles.categoryImage, isSelected && styles.categoryImageActive]}
-                      contentFit="cover"
-                      onError={(e) => console.log(`[Category Image Error] Failed to load "${cat.name}" from ${cat.imageUrl}:`, e.nativeEvent.error)}
-                    />
-                    <View style={[styles.categoryOverlay, isSelected && styles.categoryOverlayActive]}>
-                      <Text style={styles.categoryText}>{cat.name}</Text>
-                    </View>
-                    {isSelected && (
-                      <View style={styles.categoryCloseBadge}>
-                        <Feather name="x" size={10} color="#FFF" />
-                      </View>
-                    )}
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#E05A47' }}>Clear Filter</Text>
                   </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+                ) : null}
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
+                  activeOpacity={0.7}
+                  onPress={() => setSelectedCategory(null)}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1E3545' }}>Explore</Text>
+                  <Feather name="chevron-right" size={18} color="#1E3545" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={{ position: 'relative' }}>
+              <ScrollView
+                ref={categoryScrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.categoriesScroll}
+              >
+                {categories.map((cat) => {
+                  const isSelected = selectedCategory === cat.name;
+                  return (
+                    <TouchableOpacity
+                      key={cat._id}
+                      style={[
+                        styles.categoryCard,
+                        isSelected && styles.categoryCardActive
+                      ]}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setSelectedCategory(isSelected ? null : cat.name);
+                      }}
+                    >
+                      <Image
+                        source={{ uri: cat.imageUrl }}
+                        style={[styles.categoryImage, isSelected && styles.categoryImageActive]}
+                        contentFit="cover"
+                        onError={(e) => console.log(`[Category Image Error] Failed to load "${cat.name}" from ${cat.imageUrl}:`, e.nativeEvent.error)}
+                      />
+                      <View style={[styles.categoryOverlay, isSelected && styles.categoryOverlayActive]}>
+                        <Text style={styles.categoryText}>{cat.name}</Text>
+                      </View>
+                      {isSelected && (
+                        <View style={styles.categoryCloseBadge}>
+                          <Feather name="x" size={10} color="#FFF" />
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+
+              {/* Right side floating arrow scroll indicator badge */}
+              <TouchableOpacity
+                style={{
+                  position: 'absolute',
+                  right: -4,
+                  top: '50%',
+                  marginTop: -16,
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: '#FFFFFF',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  elevation: 5,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.2,
+                  shadowRadius: 4,
+                  zIndex: 20,
+                  borderWidth: 1,
+                  borderColor: 'rgba(0, 0, 0, 0.08)',
+                }}
+                activeOpacity={0.8}
+                onPress={() => {
+                  categoryScrollRef.current?.scrollTo({ x: 250, animated: true });
+                }}
+              >
+                <Feather name="chevron-right" size={20} color="#1E3545" />
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
         {/* Restaurant Cards */}
-        {filteredList.slice(0, searchQuery ? 999 : displayLimit).map((item) => {
+        {filteredList.slice(0, (searchQuery || activeType !== 'All' || selectedCategory) ? 999 : displayLimit).map((item) => {
           const matchingDishes = matchingItemsMap[item._id || item.restId];
           // Retrieve isactive/isActive status
           const isActive = isRestActive(item);
 
-          // Default fallback image if logoUrl is not present
-          const baseUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
-
-          // Apply true CDN-level grayscale desaturation for native Android/iOS bundles if inactive
-          const imageUri = isActive
-            ? baseUri
-            : `https://wsrv.nl/?url=${encodeURIComponent(baseUri)}&filt=greyscale`;
+          const imageUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
 
           // Display name if available, otherwise fallback to capitalized email
           const rawName = item.name || item.email || 'Restaurant';
@@ -1095,18 +1258,28 @@ export default function RestaurantListScreen() {
                     </View>
                   ) : null}
 
-                  {roadDistances[item._id || item.restId] ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
-                      <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
-                        {roadDistances[item._id || item.restId]}
-                      </Text>
-                    </View>
-                  ) : null}
+                  {(() => {
+                    const distVal = roadDistances && (
+                      roadDistances[item._id] ||
+                      roadDistances[item.restId] ||
+                      roadDistances[item.id] ||
+                      roadDistances[item.restaurantId] ||
+                      roadDistances[item.name]
+                    );
+                    if (!distVal) return null;
+                    return (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
+                        <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
+                          {distVal}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </View>
 
-                {/* Matching Dishes Preview when searching (single line horizontal scroll) */}
-                {searchQuery && searchQuery.trim() && matchingDishes && matchingDishes.length > 0 ? (
+                {/* Matching Dishes Preview when searching or category filtering (2 green items + X remaining items badge) */}
+                {(searchQuery || selectedCategory) && matchingDishes && matchingDishes.length > 0 ? (
                   <View style={{
                     marginTop: 8,
                     paddingTop: 6,
@@ -1114,29 +1287,38 @@ export default function RestaurantListScreen() {
                     borderTopColor: 'rgba(0, 0, 0, 0.08)',
                     flexDirection: 'row',
                     alignItems: 'center',
+                    flexWrap: 'wrap',
                     gap: 6
                   }}>
                     <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E3545', flexShrink: 0 }}>
                       Dishes:
                     </Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                    >
-                      {matchingDishes.map((dish, idx) => (
-                        <View key={idx} style={{
-                          backgroundColor: 'rgba(43, 120, 62, 0.12)',
-                          paddingHorizontal: 7,
-                          paddingVertical: 2,
-                          borderRadius: 6,
-                        }}>
-                          <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
-                            {dish.itemName || dish.name} {dish.price ? `(₹${dish.price})` : ''}
-                          </Text>
-                        </View>
-                      ))}
-                    </ScrollView>
+                    {matchingDishes.slice(0, 2).map((dish, idx) => (
+                      <View key={idx} style={{
+                        backgroundColor: '#E8F5E9',
+                        borderColor: '#2B783E',
+                        borderWidth: 1,
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 8,
+                      }}>
+                        <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
+                          {dish.itemName || dish.name}
+                        </Text>
+                      </View>
+                    ))}
+                    {matchingDishes.length > 2 && (
+                      <View style={{
+                        backgroundColor: '#2B783E',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 8,
+                      }}>
+                        <Text style={{ fontSize: 11, color: '#FFFFFF', fontWeight: 'bold' }}>
+                          +{matchingDishes.length - 2} items
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 ) : null}
               </View>
@@ -1246,9 +1428,12 @@ export default function RestaurantListScreen() {
                           }
                         }
                         await dispatch(checkLocationAndCalculateDistances(restaurants)).unwrap();
+                        await AsyncStorage.setItem('user_location_choice', 'inside');
                       } catch (err) {
                         console.warn('[Location UI] Current location check skipped/failed:', err);
-                        dispatch(skipLocation());
+                        if (err && (err.type === 'PERMISSION_DENIED' || err.type === 'GPS_OFF')) {
+                          dispatch(skipLocation());
+                        }
                       }
                     }}
                   >

@@ -1576,7 +1576,7 @@ export default function CartScreen() {
           theme: { color: '#27AE60' },
         };
 
-        if (RazorpayCheckout && typeof RazorpayCheckout.open === 'function') {
+        if (hasNativeRazorpay && RazorpayCheckout && typeof RazorpayCheckout.open === 'function') {
           console.log('[Razorpay] Opening official Razorpay Checkout SDK for real-time payment...');
           RazorpayCheckout.open(options)
             .then(async (paymentResult) => {

@@ -668,7 +668,6 @@ export default function OrderStatusScreen() {
         setOrderStatus(null);
         setError(data.message || 'No active order found');
         showTabBar(true);
-        dispatch(skipLocation());
 
         const hasActiveOrderCached = await AsyncStorage.getItem(`has_active_order_${userid}`);
 

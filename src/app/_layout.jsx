@@ -442,9 +442,10 @@ export default function Layout() {
   const showTabBar = useCallback((force = false) => {
     if (isTabBarVisible.current && !force) return;
     isTabBarVisible.current = true;
-    Animated.timing(translateY, {
+    Animated.spring(translateY, {
       toValue: 0,
-      duration: 250,
+      tension: 160,
+      friction: 14,
       useNativeDriver: true,
     }).start();
   }, [translateY]);
@@ -452,9 +453,10 @@ export default function Layout() {
   const hideTabBar = useCallback(() => {
     if (!isTabBarVisible.current) return;
     isTabBarVisible.current = false;
-    Animated.timing(translateY, {
+    Animated.spring(translateY, {
       toValue: 120, // offset down off-screen
-      duration: 250,
+      tension: 160,
+      friction: 14,
       useNativeDriver: true,
     }).start();
   }, [translateY]);
