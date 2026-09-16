@@ -63,33 +63,62 @@ const getRestaurantCoords = (rest) => {
   const loc = rest.restaurantLocation || rest.location || rest.coords || rest.geo || rest;
   if (!loc) return null;
 
-  // Handle GeoJSON array format [longitude, latitude]
-  if (loc.coordinates && Array.isArray(loc.coordinates) && loc.coordinates.length >= 2) {
-    const lng = Number(loc.coordinates[0]);
-    const lat = Number(loc.coordinates[1]);
-    if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-      return { lat, lng };
-    }
-  }
+  let rawLat, rawLng;
 
-  // Handle GeoJSON string format "longitude latitude" or "longitude, latitude"
-  if (loc.coordinates && typeof loc.coordinates === 'string') {
+  // Handle GeoJSON array format [c1, c2]
+  if (loc.coordinates && Array.isArray(loc.coordinates) && loc.coordinates.length >= 2) {
+    const c1 = Number(loc.coordinates[0]);
+    const c2 = Number(loc.coordinates[1]);
+    if (!isNaN(c1) && !isNaN(c2) && c1 !== 0 && c2 !== 0) {
+      // Automatic detection for India/Kurnool coordinates (lat ~15.8, lng ~78.0)
+      if (Math.abs(c1) < 45 && Math.abs(c2) > 45) {
+        rawLat = c1;
+        rawLng = c2;
+      } else if (Math.abs(c2) < 45 && Math.abs(c1) > 45) {
+        rawLat = c2;
+        rawLng = c1;
+      } else {
+        rawLng = c1;
+        rawLat = c2;
+      }
+    }
+  } else if (loc.coordinates && typeof loc.coordinates === 'string') {
     const parts = loc.coordinates.trim().split(/[,\s]+/);
     if (parts.length >= 2) {
-      const lng = Number(parts[0]);
-      const lat = Number(parts[1]);
-      if (!isNaN(lat) && !isNaN(lng) && lat !== 0 && lng !== 0) {
-        return { lat, lng };
+      const c1 = Number(parts[0]);
+      const c2 = Number(parts[1]);
+      if (!isNaN(c1) && !isNaN(c2) && c1 !== 0 && c2 !== 0) {
+        if (Math.abs(c1) < 45 && Math.abs(c2) > 45) {
+          rawLat = c1;
+          rawLng = c2;
+        } else if (Math.abs(c2) < 45 && Math.abs(c1) > 45) {
+          rawLat = c2;
+          rawLng = c1;
+        } else {
+          rawLng = c1;
+          rawLat = c2;
+        }
       }
     }
   }
 
-  const rawLat = loc.lat ?? loc.latitude ?? loc.latitute ?? rest.lat ?? rest.latitude;
-  const rawLng = loc.lng ?? loc.longitude ?? loc.longtitude ?? rest.lng ?? rest.longitude;
+  if (rawLat === undefined || rawLng === undefined) {
+    rawLat = loc.lat ?? loc.latitude ?? loc.latitute ?? rest.lat ?? rest.latitude;
+    rawLng = loc.lng ?? loc.longitude ?? loc.longtitude ?? rest.lng ?? rest.longitude;
+  }
+
   if (rawLat === undefined || rawLng === undefined || rawLat === null || rawLng === null) return null;
-  const lat = Number(rawLat);
-  const lng = Number(rawLng);
+  let lat = Number(rawLat);
+  let lng = Number(rawLng);
   if (isNaN(lat) || isNaN(lng) || lat === 0 || lng === 0) return null;
+
+  // Auto-correct if lat and lng were swapped (e.g., lat > 45 and lng < 45 in India)
+  if (Math.abs(lat) > 45 && Math.abs(lng) < 45) {
+    const temp = lat;
+    lat = lng;
+    lng = temp;
+  }
+
   return { lat, lng };
 };
 
@@ -112,6 +141,19 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         longitude = Number(customLng);
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
+        // Check if user has an active order in progress; if so, do not fetch GPS location
+        const uid = await AsyncStorage.getItem('userid');
+        if (uid) {
+          const cachedActiveOrder = await AsyncStorage.getItem(`has_active_order_${uid}`);
+          if (cachedActiveOrder === 'true') {
+            console.log('[Location Redux] User has an active order in progress. Skipping GPS location fetch.');
+            return rejectWithValue({
+              type: 'ACTIVE_ORDER',
+              message: 'Active order in progress.'
+            });
+          }
+        }
+
         // 1. Check if location services are enabled globally (GPS is ON)
         let servicesEnabled = await Location.hasServicesEnabledAsync();
         if (!servicesEnabled && Platform.OS === 'android') {
@@ -252,8 +294,8 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         console.warn('[Location Redux] Reverse geocoding warning:', geocodeErr.message);
       }
 
-      // 6. Request exact road route distance directly from backend API for all restaurants in 1 fast batch call
-      console.log('[Location Redux] Fetching exact road route distances from backend...');
+      // 6. Request exact Google Maps road route distance directly from backend API for all restaurants in 1 batch call
+      console.log('[Location Redux] Fetching Google Maps road distances from backend...');
       const updatedDistances = {};
       if (restaurantsList && restaurantsList.length > 0) {
         const destinationItems = [];
@@ -272,7 +314,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         if (destinationItems.length > 0) {
           try {
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 12000) : null;
             const batchRes = await fetch(`${API_URL}/distance/batch`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -300,7 +342,7 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
               }
             }
           } catch (batchErr) {
-            console.warn('[Location Redux] Batch road distance query error:', batchErr);
+            console.warn('[Location Redux] Google Maps / backend batch distance query error:', batchErr);
           }
         }
       }
@@ -345,18 +387,27 @@ const locationSlice = createSlice({
       state.savedAddresses = action.payload || [];
     },
     resetLocationState: (state) => {
+      state.userLocation = null;
+      state.userAddress = null;
+      state.roadDistances = {};
       state.locationStatus = 'idle';
       state.showLocationModal = false;
       state.showFetchingModal = false;
       state.showOutOfZoneModal = false;
       state.locationError = null;
+      state.selectedSavedAddressId = null;
+      state.savedAddresses = [];
     },
     skipLocation: (state) => {
+      state.userLocation = null;
+      state.userAddress = null;
+      state.roadDistances = {};
       state.locationStatus = 'skipped';
       state.showLocationModal = false;
       state.showFetchingModal = false;
       state.showOutOfZoneModal = false;
       state.locationError = null;
+      state.selectedSavedAddressId = null;
       AsyncStorage.removeItem('user_location_choice');
       AsyncStorage.removeItem('selected_saved_address_id');
     },
@@ -401,7 +452,11 @@ const locationSlice = createSlice({
         state.locationError = errorDetail.message;
         state.showFetchingModal = false;
 
-        if (errorDetail.type === 'OUT_OF_ZONE') {
+        if (errorDetail.type === 'ACTIVE_ORDER') {
+          state.locationStatus = 'skipped';
+          state.showLocationModal = false;
+          state.showOutOfZoneModal = false;
+        } else if (errorDetail.type === 'OUT_OF_ZONE') {
           state.locationStatus = 'outside';
           state.showOutOfZoneModal = true;
         } else {

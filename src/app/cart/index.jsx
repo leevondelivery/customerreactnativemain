@@ -1550,7 +1550,12 @@ export default function CartScreen() {
       } else {
         // Mobile (Android / iOS)
         const { NativeModules } = require('react-native');
-        const hasNativeRazorpay = NativeModules && (NativeModules.RazorpayCheckout || NativeModules.Razorpay || NativeModules.RNPay);
+        const hasNativeRazorpay = NativeModules && (
+          NativeModules.RNRazorpayCheckout ||
+          NativeModules.RazorpayCheckout ||
+          NativeModules.Razorpay ||
+          NativeModules.RNPay
+        );
 
         let RazorpayCheckout = null;
         try {
@@ -2121,9 +2126,10 @@ export default function CartScreen() {
                   {isSavedAddressesExpanded && (
                     <View style={{ marginTop: 4 }}>
                       <Text style={styles.savedAddressesLabel}>Your addresses:</Text>
-                      {savedAddresses.map((addr) => {
-                        const addressId = addr.id || addr._id;
-                        const isSelected = selectedSavedAddressId === addressId;
+                      {Array.isArray(savedAddresses) && savedAddresses.map((addr, addrIdx) => {
+                        if (!addr || typeof addr !== 'object') return null;
+                        const addressId = String(addr.id || addr._id || `cart-addr-${addrIdx}`);
+                        const isSelected = String(selectedSavedAddressId) === addressId;
                         return (
                           <TouchableOpacity
                             key={addressId}
@@ -2143,7 +2149,7 @@ export default function CartScreen() {
                                 style={{ marginRight: 10 }}
                               />
                               <View style={{ flex: 1 }}>
-                                <Text style={[styles.savedCardTag, isSelected && { color: '#1B5E20' }]}>{addr.tag || addr.label}</Text>
+                                <Text style={[styles.savedCardTag, isSelected && { color: '#1B5E20' }]}>{addr.tag || addr.label || 'Address'}</Text>
                                 <Text style={styles.savedCardDetails} numberOfLines={2}>
                                   {`${addr.flatNo || ''}, ${addr.street || ''}${addr.landmark ? ', ' + addr.landmark : ''}`}
                                 </Text>
@@ -2666,16 +2672,19 @@ export default function CartScreen() {
               </TouchableOpacity>
 
               {/* Option B: Saved Addresses list */}
-              {savedAddresses.length > 0 && (
+              {Array.isArray(savedAddresses) && savedAddresses.length > 0 && (
                 <View style={{ marginBottom: 12 }}>
                   <Text style={{ fontSize: 12, color: '#000000', fontWeight: 'bold', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                     Saved Addresses
                   </Text>
-                  {savedAddresses.map((addr) => {
-                    const isSelected = selectedSavedAddressId === (addr.id || addr._id);
+                  {savedAddresses.map((addr, addrIdx) => {
+                    if (!addr || typeof addr !== 'object') return null;
+                    const addrId = String(addr.id || addr._id || `cart-modal-addr-${addrIdx}`);
+                    const isSelected = String(selectedSavedAddressId) === addrId;
+                    const tagLabel = addr.tag || addr.label || 'Address';
                     return (
                       <TouchableOpacity
-                        key={addr._id || addr.id}
+                        key={addrId}
                         style={{
                           flexDirection: 'row',
                           alignItems: 'center',
@@ -2694,10 +2703,10 @@ export default function CartScreen() {
                           setShowDeliveryForm(true);
                         }}
                       >
-                        <Feather name={addr.tag === 'Home' ? 'home' : addr.tag === 'Office' ? 'briefcase' : 'map-pin'} size={20} color={isSelected ? '#2B783E' : '#1E3545'} />
+                        <Feather name={tagLabel === 'Home' ? 'home' : tagLabel === 'Office' ? 'briefcase' : 'map-pin'} size={20} color={isSelected ? '#2B783E' : '#1E3545'} />
                         <View style={{ flex: 1 }}>
                           <Text style={{ fontSize: 14, fontWeight: '700', color: isSelected ? '#2B783E' : '#1E3545' }}>
-                            {addr.tag || addr.label || 'Address'}
+                            {tagLabel}
                           </Text>
                           <Text style={{ fontSize: 12, color: '#808C94', marginTop: 1 }} numberOfLines={1}>
                             {addr.flatNo ? `${addr.flatNo}, ` : ''}{addr.street || ''}

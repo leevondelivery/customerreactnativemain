@@ -370,14 +370,16 @@ export default function MyDetailsScreen() {
   const handleUpdateProfile = async () => {
     setErrorMsg('');
 
-    if (!editDob.trim()) {
-      setErrorMsg('Date of birth is required');
-      return;
-    }
-    const dobRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dobRegex.test(editDob.trim())) {
-      setErrorMsg('Please use YYYY-MM-DD format (e.g. 2003-01-04)');
-      return;
+    if (loginType === 'google') {
+      if (!editDob.trim()) {
+        setErrorMsg('Date of birth is required');
+        return;
+      }
+      const dobRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dobRegex.test(editDob.trim())) {
+        setErrorMsg('Please use YYYY-MM-DD format (e.g. 2003-01-04)');
+        return;
+      }
     }
 
     setUpdating(true);
@@ -391,7 +393,7 @@ export default function MyDetailsScreen() {
 
       const updatePayload = {
         userid,
-        dateOfBirth: editDob.trim(),
+        ...(loginType === 'google' ? { dateOfBirth: editDob.trim() } : {}),
       };
 
       const response = await fetch(`${API_URL}/user/update`, {
@@ -571,11 +573,13 @@ export default function MyDetailsScreen() {
             </View>
           )}
 
-          {/* Row 4: Date of Birth */}
-          <View style={styles.detailRow}>
-            <Feather name="calendar" size={20} color="#000000" />
-            <Text style={styles.detailText}>{user.dateOfBirth}</Text>
-          </View>
+          {/* Row 4: Date of Birth (Only for Google login accounts) */}
+          {loginType === 'google' && (
+            <View style={styles.detailRow}>
+              <Feather name="calendar" size={20} color="#000000" />
+              <Text style={styles.detailText}>{user.dateOfBirth}</Text>
+            </View>
+          )}
 
           {/* Row 5: Edit Profile Trigger */}
           <TouchableOpacity style={styles.editRow} activeOpacity={0.8} onPress={handleOpenEdit}>
@@ -617,104 +621,20 @@ export default function MyDetailsScreen() {
               </View>
             )}
 
-            {/* DOB Field */}
-            <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Date of Birth</Text>
-              <TouchableOpacity
-                style={[styles.textInput, styles.dobInputButton]}
-                activeOpacity={0.8}
-                disabled={updating}
-                onPress={() => setShowCalendar(prev => !prev)}
-              >
-                <Text style={editDob ? styles.dobInputText : styles.dobInputTextPlaceholder}>
-                  {editDob || 'Select Date'}
-                </Text>
-                <Feather name="calendar" size={18} color="#C2932E" />
-              </TouchableOpacity>
-
-              {/* Inline Custom Calendar Dropdown */}
-              {showCalendar && (
-                <View style={styles.calendarCard}>
-                  {/* Month/Year Title and Chevron Navigation */}
-                  <View style={styles.calendarHeader}>
-                    <TouchableOpacity
-                      style={styles.calendarHeaderBtn}
-                      onPress={handlePrevMonth}
-                    >
-                      <Feather name="chevron-left" size={20} color="#8E8E93" />
-                    </TouchableOpacity>
-
-                    <Text style={styles.calendarHeaderTitle}>
-                      {months[calMonth]} {calYear}
-                    </Text>
-
-                    <TouchableOpacity
-                      style={styles.calendarHeaderBtn}
-                      onPress={handleNextMonth}
-                    >
-                      <Feather name="chevron-right" size={20} color="#8E8E93" />
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Dropdown triggers for Month and Year */}
-                  <View style={styles.calendarSelectors}>
-                    {/* Month Dropdown Badge */}
-                    <TouchableOpacity
-                      style={styles.selectorBadge}
-                      onPress={() => setShowMonthSelect(true)}
-                    >
-                      <Text style={styles.selectorText}>{months[calMonth]}</Text>
-                      <Feather name="chevron-down" size={14} color="#000000" />
-                    </TouchableOpacity>
-
-                    {/* Year Dropdown Badge */}
-                    <TouchableOpacity
-                      style={styles.selectorBadge}
-                      onPress={() => setShowYearSelect(true)}
-                    >
-                      <Text style={styles.selectorText}>{calYear}</Text>
-                      <Feather name="chevron-down" size={14} color="#000000" />
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* Weekdays Row */}
-                  <View style={styles.weekdaysRow}>
-                    {weekdays.map((wd) => (
-                      <Text key={wd} style={styles.weekdayText}>
-                        {wd}
-                      </Text>
-                    ))}
-                  </View>
-
-                  {/* Date Grid */}
-                  <View style={styles.daysGrid}>
-                    {getDaysInMonth(calYear, calMonth).map((dayObj, index) => {
-                      const isSelected = editDob === `${dayObj.year}-${String(dayObj.month + 1).padStart(2, '0')}-${String(dayObj.day).padStart(2, '0')}`;
-                      return (
-                        <TouchableOpacity
-                          key={index}
-                          style={styles.dayCell}
-                          onPress={() => handleSelectDay(dayObj)}
-                          activeOpacity={0.8}
-                        >
-                          <View style={isSelected && dayObj.isCurrentMonth ? styles.activeDayCircle : null}>
-                            <Text
-                              style={[
-                                styles.dayText,
-                                !dayObj.isCurrentMonth && styles.dayTextInactive,
-                                isSelected && dayObj.isCurrentMonth && styles.dayTextSelected,
-                              ]}
-                            >
-                              {dayObj.day}
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+            {/* DOB Field (Read-only for Google accounts) */}
+            {loginType === 'google' && (
+              <View style={styles.inputContainer}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={styles.inputLabel}>Date of Birth</Text>
+                  <Text style={{ fontSize: 11, color: '#8E8E93', fontWeight: '600' }}>Read-only</Text>
                 </View>
-              )}
-            </View>
+                <TextInput
+                  style={[styles.textInput, { backgroundColor: '#F0F0F0', color: '#7E7C77', borderColor: '#E0E0E0' }]}
+                  value={editDob || 'N/A'}
+                  editable={false}
+                />
+              </View>
+            )}
 
             {/* Error Message */}
             {errorMsg ? (

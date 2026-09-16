@@ -48,7 +48,7 @@
     "eslint-config-expo": "~56.0.4"
   },
   "scripts": {
-    "start": "expo start",
+    "start": "expo start -c",
     "start:lan": "expo start --lan",
     "start:tunnel": "expo start --tunnel",
     "start:clear": "expo start -c",

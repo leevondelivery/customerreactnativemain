@@ -8,6 +8,7 @@ import {
   Animated,
   FlatList,
   Image,
+  LayoutAnimation,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -15,13 +16,20 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  UIManager,
   View,
   Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
-
+import LoadingView from '../../components/LoadingView';
+import { API_URL } from '../../config';
 import { skipLocation } from '../../store/locationSlice';
+import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // Precise search query matcher (matches word prefixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
 const isTextMatchingQuery = (text, query) => {
@@ -41,9 +49,72 @@ const isTextMatchingQuery = (text, query) => {
     return words.some((w) => w.startsWith(qWord) || (sWord && w.startsWith(sWord)));
   });
 };
-import LoadingView from '../../components/LoadingView';
-import { API_URL } from '../../config';
-import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
+
+// Layout animation preset for seamless layout reflows on filter / sort
+const SMOOTH_LAYOUT_ANIMATION = {
+  duration: 300,
+  create: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+  update: {
+    type: LayoutAnimation.Types.spring,
+    springDamping: 0.8,
+  },
+  delete: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+};
+
+// Smooth & responsive animated wrapper for card transitions when filtering/sorting
+function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
+  const [animValue] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    animValue.setValue(0);
+    const delay = Math.min(index * 30, 150);
+    const timer = setTimeout(() => {
+      Animated.spring(animValue, {
+        toValue: 1,
+        tension: 100,
+        friction: 9,
+        useNativeDriver: true,
+      }).start();
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [filterKey, animValue, index]);
+
+  const translateY = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [20, 0],
+  });
+
+  const scale = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.95, 1],
+  });
+
+  const opacity = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 1],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity,
+          transform: [{ translateY }, { scale }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
 
 const EMPTY_ARRAY = [];
 
@@ -144,6 +215,63 @@ export default function RestaurantMenuScreen() {
   const [cart, setCart] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
+
+  // Animated values for filter pills (sliding indicator + button scale micro-animations)
+  const [filterTranslateX] = useState(() => new Animated.Value(0));
+  const [allScale] = useState(() => new Animated.Value(1));
+  const [vegScale] = useState(() => new Animated.Value(1));
+  const [nonVegScale] = useState(() => new Animated.Value(1));
+
+  const animateButtonPress = (scaleAnim) => {
+    Animated.sequence([
+      Animated.timing(scaleAnim, {
+        toValue: 0.92,
+        duration: 50,
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        friction: 5,
+        tension: 240,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const handleFilterTypeChange = (type) => {
+    if (filterType === type) return;
+
+    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+      try {
+        LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
+      } catch (_e) {}
+    }
+
+    let targetX = 0;
+    if (type === 'Veg') targetX = 42;
+    else if (type === 'Non-Veg') targetX = 84;
+
+    Animated.spring(filterTranslateX, {
+      toValue: targetX,
+      tension: 240,
+      friction: 18,
+      useNativeDriver: true,
+    }).start();
+
+    setFilterType(type);
+  };
+
+  const handleSortByChange = (sortOption) => {
+    if (sortBy === sortOption) return;
+
+    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+      try {
+        LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
+      } catch (_e) {}
+    }
+
+    setSortBy(sortOption);
+  };
 
   // Custom Replace Cart Modal States
   const [showReplaceCartModal, setShowReplaceCartModal] = useState(false);
@@ -309,13 +437,11 @@ export default function RestaurantMenuScreen() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setInitialLoading(false);
-    }, 6000);
+    }, 600);
     return () => clearTimeout(timer);
   }, []);
 
-  if (initialLoading && menuLoading && menuItems.length === 0) {
-    return <LoadingView />;
-  }
+
 
 const isItemAvailable = (item) => {
   if (!item) return false;
@@ -649,27 +775,27 @@ const isItemAvailable = (item) => {
             flexDirection: 'row',
             alignItems: 'center',
             backgroundColor: '#1E3545',
-            paddingHorizontal: 14,
-            paddingVertical: 7,
-            borderRadius: 16,
-            gap: 8,
+            paddingHorizontal: 12,
+            paddingVertical: 3.5,
+            borderRadius: 10,
+            gap: 7,
             shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.15,
-            shadowRadius: 4,
-            elevation: 3,
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.12,
+            shadowRadius: 3,
+            elevation: 2,
           }}>
             <View style={{
-              width: 8,
-              height: 8,
-              borderRadius: 4,
+              width: 7,
+              height: 7,
+              borderRadius: 3.5,
               backgroundColor: '#0F8A65',
             }} />
             <Text style={{
-              fontSize: 13,
+              fontSize: 12,
               fontWeight: '800',
               color: '#FFFFFF',
-              letterSpacing: 0.8,
+              letterSpacing: 0.7,
               textTransform: 'uppercase',
             }}>
               {group.title}
@@ -684,23 +810,32 @@ const isItemAvailable = (item) => {
           }} />
         </View>
 
-        {/* 2-Column Cards Grid */}
+        {/* 2-Column Cards Grid with smooth fast entrance animation */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-          {group.items.map((foodItem) => (
-            <React.Fragment key={foodItem._id || foodItem.itemId}>
+          {group.items.map((foodItem, idx) => (
+            <AnimatedCardWrapper
+              key={foodItem._id || foodItem.itemId}
+              index={idx}
+              filterKey={`${filterType}_${sortBy}_${selectedCategory}_${searchQuery}`}
+              style={{ width: '48%' }}
+            >
               {renderItemCard({ item: foodItem })}
-            </React.Fragment>
+            </AnimatedCardWrapper>
           ))}
           {group.items.length % 2 !== 0 && <View style={{ width: '48%' }} />}
         </View>
       </View>
     );
-  }, [renderItemCard]);
+  }, [renderItemCard, filterType, sortBy, selectedCategory, searchQuery]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#008000';
   const toastIconColor = isWarningToast ? '#D32F2F' : '#008000';
   const toastIconName = isWarningToast ? 'alert' : 'checkmark';
+
+  if (initialLoading || (menuLoading && menuItems.length === 0)) {
+    return <LoadingView />;
+  }
 
   return (
     <SafeAreaView style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0 }]}>
@@ -815,62 +950,88 @@ const isItemAvailable = (item) => {
                   numberOfLines={1}
                   multiline={false}
                   textAlignVertical="center"
+                  returnKeyType="search"
                 />
               </View>
 
               {/* Filtering Pills */}
               <View style={styles.filterPillContainer}>
+                {/* Smooth Animated Sliding Active Pill Background */}
+                <Animated.View
+                  style={[
+                    styles.filterPillActiveBg,
+                    {
+                      transform: [{ translateX: filterTranslateX }],
+                    },
+                  ]}
+                />
+
                 {/* All segment */}
-                <TouchableOpacity
-                  style={[styles.filterButton, filterType === 'All' && styles.filterButtonActive]}
-                  activeOpacity={0.7}
-                  onPress={() => setFilterType('All')}
-                >
-                  <Text style={[
-                    styles.allButtonText,
-                    filterType !== 'All' && { color: '#666666' }
-                  ]}>All</Text>
-                </TouchableOpacity>
+                <Animated.View style={{ transform: [{ scale: allScale }] }}>
+                  <TouchableOpacity
+                    style={styles.filterButton}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      animateButtonPress(allScale);
+                      handleFilterTypeChange('All');
+                    }}
+                  >
+                    <Text style={[
+                      styles.allButtonText,
+                      filterType !== 'All' && { color: '#666666' }
+                    ]}>All</Text>
+                  </TouchableOpacity>
+                </Animated.View>
 
                 {/* Veg green square dot segment */}
-                <TouchableOpacity
-                  style={[styles.filterButton, filterType === 'Veg' && styles.filterButtonActive]}
-                  activeOpacity={0.7}
-                  onPress={() => setFilterType('Veg')}
-                >
-                  <View style={{
-                    width: 20,
-                    height: 20,
-                    borderWidth: 2,
-                    borderColor: '#0F8A65',
-                    borderRadius: 4,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: filterType === 'Veg' ? '#E8F5E9' : '#FFF'
-                  }}>
-                    <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
-                  </View>
-                </TouchableOpacity>
+                <Animated.View style={{ transform: [{ scale: vegScale }] }}>
+                  <TouchableOpacity
+                    style={styles.filterButton}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      animateButtonPress(vegScale);
+                      handleFilterTypeChange('Veg');
+                    }}
+                  >
+                    <View style={{
+                      width: 20,
+                      height: 20,
+                      borderWidth: 2,
+                      borderColor: '#0F8A65',
+                      borderRadius: 4,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: filterType === 'Veg' ? '#E8F5E9' : '#FFF'
+                    }}>
+                      <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
+                    </View>
+                  </TouchableOpacity>
+                </Animated.View>
 
                 {/* Non-veg red square dot segment */}
-                <TouchableOpacity
-                  style={[styles.filterButton, filterType === 'Non-Veg' && styles.filterButtonActive]}
-                  activeOpacity={0.7}
-                  onPress={() => setFilterType('Non-Veg')}
-                >
-                  <View style={{
-                    width: 20,
-                    height: 20,
-                    borderWidth: 2,
-                    borderColor: '#E53935',
-                    borderRadius: 4,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    backgroundColor: filterType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
-                  }}>
-                    <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
-                  </View>
-                </TouchableOpacity>
+                <Animated.View style={{ transform: [{ scale: nonVegScale }] }}>
+                  <TouchableOpacity
+                    style={styles.filterButton}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      animateButtonPress(nonVegScale);
+                      handleFilterTypeChange('Non-Veg');
+                    }}
+                  >
+                    <View style={{
+                      width: 20,
+                      height: 20,
+                      borderWidth: 2,
+                      borderColor: '#E53935',
+                      borderRadius: 4,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: filterType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
+                    }}>
+                      <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
+                    </View>
+                  </TouchableOpacity>
+                </Animated.View>
               </View>
             </View>
 
@@ -883,7 +1044,7 @@ const isItemAvailable = (item) => {
             >
               <TouchableOpacity
                 style={sortBy === 'All' ? styles.sortButtonActive : styles.sortButton}
-                onPress={() => setSortBy('All')}
+                onPress={() => handleSortByChange('All')}
                 activeOpacity={0.7}
               >
                 <Text style={sortBy === 'All' ? styles.sortButtonTextActive : styles.sortButtonText}>All</Text>
@@ -891,7 +1052,7 @@ const isItemAvailable = (item) => {
 
               <TouchableOpacity
                 style={sortBy === 'Low to High' ? styles.sortButtonActive : styles.sortButton}
-                onPress={() => setSortBy('Low to High')}
+                onPress={() => handleSortByChange('Low to High')}
                 activeOpacity={0.7}
               >
                 <Text style={sortBy === 'Low to High' ? styles.sortButtonTextActive : styles.sortButtonText}>Low Price to High Price</Text>
@@ -899,7 +1060,7 @@ const isItemAvailable = (item) => {
 
               <TouchableOpacity
                 style={sortBy === 'High to Low' ? styles.sortButtonActive : styles.sortButton}
-                onPress={() => setSortBy('High to Low')}
+                onPress={() => handleSortByChange('High to Low')}
                 activeOpacity={0.7}
               >
                 <Text style={sortBy === 'High to Low' ? styles.sortButtonTextActive : styles.sortButtonText}>High Price to Low Price</Text>
@@ -1283,6 +1444,21 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: 4,
     flexShrink: 0,
+    position: 'relative',
+  },
+  filterPillActiveBg: {
+    position: 'absolute',
+    top: 3,
+    left: 4,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
   },
   filterButton: {
     width: 38,
@@ -1290,9 +1466,10 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 2,
   },
   filterButtonActive: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
   allButtonText: {
     fontSize: 14,
@@ -1349,7 +1526,7 @@ const styles = StyleSheet.create({
   itemCard: {
     backgroundColor: 'rgb(224, 214, 188)', // Matching restaurentlist card background
     borderRadius: 20,
-    width: '48%',
+    width: '100%',
     marginTop: 45, // space for the absolute positioned circular image
     paddingTop: 50, // push texts below the overlaying image
     paddingHorizontal: 12,
