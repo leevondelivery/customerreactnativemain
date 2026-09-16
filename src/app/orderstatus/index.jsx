@@ -25,6 +25,7 @@ import { useDispatch } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { skipLocation } from '../../store/locationSlice';
+import { fetchProfileData, addReviewLocally } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/orderstatus.styles';
 import { useTabBar } from '../_layout';
 
@@ -372,6 +373,10 @@ export default function OrderStatusScreen() {
   const [deliveryBoyReview, setDeliveryBoyReview] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
 
+  const showReviewModalRef = useRef(false);
+  const reviewOrderRef = useRef(null);
+  const reviewedOrDismissedSessionRef = useRef(new Set());
+
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
     const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
@@ -417,6 +422,13 @@ export default function OrderStatusScreen() {
 
   // Check if this order was already reviewed or review prompt was dismissed
   const isOrderAlreadyReviewed = useCallback(async (orderId, orderObj = null) => {
+    const targetId = String(orderId || orderObj?.orderId || orderObj?.orderID || orderObj?.order_id || orderObj?._id || orderObj?.id || '');
+    if (!targetId) return false;
+
+    if (reviewedOrDismissedSessionRef.current.has(targetId)) {
+      return true;
+    }
+
     if (orderObj) {
       if (
         (orderObj.restaurantRating && Number(orderObj.restaurantRating) > 0) ||
@@ -430,9 +442,6 @@ export default function OrderStatusScreen() {
     }
 
     try {
-      const targetId = String(orderId || orderObj?.orderId || orderObj?.orderID || orderObj?.order_id || orderObj?._id || orderObj?.id || '');
-      if (!targetId) return false;
-
       const storedIds = await AsyncStorage.getItem('submitted_reviewed_orders');
       if (storedIds) {
         const parsed = JSON.parse(storedIds);
@@ -455,8 +464,13 @@ export default function OrderStatusScreen() {
   }, []);
 
   const handleOpenReviewModal = useCallback(async (order) => {
-    const orderId = order?.orderId || order?.orderID || order?.order_id || order?._id || '';
+    const orderId = String(order?.orderId || order?.orderID || order?.order_id || order?._id || '');
     if (!orderId) return;
+
+    // If modal is already open for this exact order, DO NOT reset state or flicker!
+    if (showReviewModalRef.current && String(reviewOrderRef.current?.orderId) === orderId) {
+      return;
+    }
 
     // Skip review modal ONLY if order was rejected or cancelled
     const statusStr = (order?.status || order?.orderStatus || order?.order_status || '').toLowerCase().trim();
@@ -471,14 +485,14 @@ export default function OrderStatusScreen() {
       return;
     }
 
-    // Don't show if already reviewed
-    const alreadyReviewed = await isOrderAlreadyReviewed(orderId);
+    // Don't show if already reviewed or dismissed
+    const alreadyReviewed = await isOrderAlreadyReviewed(orderId, order);
     if (alreadyReviewed) {
       console.log('[OrderStatus] Order already reviewed, skipping modal.');
       return;
     }
 
-    setReviewOrder({
+    const newReviewOrder = {
       orderId,
       restaurantName: order.restaurantName || order.restaurant_name || order.restName || 'Restaurant',
       restaurantId: order.restaurantId || order.restaurant_id || order.restId || '',
@@ -492,7 +506,11 @@ export default function OrderStatusScreen() {
       surgeFee: order.surgeFee ?? order.surge_fee ?? '',
       discountAmount: order.discountAmount ?? order.discount ?? '',
       grandTotal: order.grandTotal ?? order.totalPrice ?? order.total ?? '',
-    });
+    };
+
+    reviewOrderRef.current = newReviewOrder;
+    showReviewModalRef.current = true;
+    setReviewOrder(newReviewOrder);
 
     // Reset form fields
     setRestaurantRating(0);
@@ -503,9 +521,10 @@ export default function OrderStatusScreen() {
   }, [isOrderAlreadyReviewed]);
 
   const handleDismissReview = async () => {
-    if (reviewOrder?.orderId) {
+    const targetId = String(reviewOrderRef.current?.orderId || reviewOrder?.orderId || '');
+    if (targetId) {
+      reviewedOrDismissedSessionRef.current.add(targetId);
       try {
-        const targetId = String(reviewOrder.orderId);
         const storedDismissed = await AsyncStorage.getItem('dismissed_review_prompts');
         const existingIds = storedDismissed ? JSON.parse(storedDismissed) : [];
         const updatedIds = Array.from(new Set([...existingIds, targetId]));
@@ -514,13 +533,16 @@ export default function OrderStatusScreen() {
         console.warn('[OrderStatus] Error saving dismissed review prompt:', e);
       }
     }
+    showReviewModalRef.current = false;
+    reviewOrderRef.current = null;
     setShowReviewModal(false);
     setReviewOrder(null);
   };
 
   const handleSubmitReview = async () => {
-    if (!reviewOrder) return;
-    const currentOrderId = String(reviewOrder.orderId);
+    const currentOrder = reviewOrderRef.current || reviewOrder;
+    if (!currentOrder) return;
+    const currentOrderId = String(currentOrder.orderId);
 
     try {
       setSubmittingReview(true);
@@ -529,14 +551,14 @@ export default function OrderStatusScreen() {
       const reviewPayload = {
         userId: userid || '',
         user_id: userid || '',
-        orderId: reviewOrder.orderId,
-        order_id: reviewOrder.orderId,
-        restaurantId: reviewOrder.restaurantId || '',
-        restaurant_id: reviewOrder.restaurantId || '',
-        restaurantName: reviewOrder.restaurantName || 'Restaurant',
-        deliveryBoyId: reviewOrder.deliveryBoyId || '',
-        delivery_boy_id: reviewOrder.deliveryBoyId || '',
-        deliveryBoyName: reviewOrder.deliveryBoyName || 'Delivery Partner',
+        orderId: currentOrder.orderId,
+        order_id: currentOrder.orderId,
+        restaurantId: currentOrder.restaurantId || '',
+        restaurant_id: currentOrder.restaurantId || '',
+        restaurantName: currentOrder.restaurantName || 'Restaurant',
+        deliveryBoyId: currentOrder.deliveryBoyId || '',
+        delivery_boy_id: currentOrder.deliveryBoyId || '',
+        deliveryBoyName: currentOrder.deliveryBoyName || 'Delivery Partner',
         restaurantRating: Number(restaurantRating) || 0,
         restaurantReview: restaurantReview.trim(),
         rating: Number(restaurantRating) || 0,
@@ -544,17 +566,19 @@ export default function OrderStatusScreen() {
         deliveryBoyRating: Number(deliveryBoyRating) || 0,
         deliveryBoyReview: deliveryBoyReview.trim(),
         orderDetails: [{
-          items: reviewOrder.items || [],
-          grandTotal: reviewOrder.grandTotal,
-          subTotal: reviewOrder.subTotal,
-          deliveryCharges: reviewOrder.deliveryCharges,
-          gst: reviewOrder.gst,
-          platformFee: reviewOrder.platformFee,
-          surgeFee: reviewOrder.surgeFee,
-          discountAmount: reviewOrder.discountAmount,
-          restaurantName: reviewOrder.restaurantName,
+          items: currentOrder.items || [],
+          grandTotal: currentOrder.grandTotal,
+          subTotal: currentOrder.subTotal,
+          deliveryCharges: currentOrder.deliveryCharges,
+          gst: currentOrder.gst,
+          platformFee: currentOrder.platformFee,
+          surgeFee: currentOrder.surgeFee,
+          discountAmount: currentOrder.discountAmount,
+          restaurantName: currentOrder.restaurantName,
         }],
       };
+
+      reviewedOrDismissedSessionRef.current.add(currentOrderId);
 
       // Mark as reviewed locally immediately
       const storedIds = await AsyncStorage.getItem('submitted_reviewed_orders');
@@ -562,44 +586,60 @@ export default function OrderStatusScreen() {
       const updatedIds = Array.from(new Set([...existingIds, currentOrderId]));
       await AsyncStorage.setItem('submitted_reviewed_orders', JSON.stringify(updatedIds));
 
-      // Attempt POST to backend
-      const candidateEndpoints = [
-        `${API_URL}/reviews`,
-        `${API_URL}/reviews/user/${userid}`,
-        `${API_URL}/reviews/create`,
-        `${API_URL}/reviews/add`,
-        `${API_URL}/reviews/submit`,
-        `${API_URL}/review`,
-        `${API_URL}/review/create`,
-        `${API_URL}/api/reviews`,
-      ];
+      // Save into locally_submitted_reviews for MyReviews
+      try {
+        const storedLocals = await AsyncStorage.getItem('locally_submitted_reviews');
+        const existingLocals = storedLocals ? JSON.parse(storedLocals) : [];
+        const localEntry = {
+          ...reviewPayload,
+          _id: `local_rev_${Date.now()}`,
+          createdAt: new Date().toISOString(),
+        };
+        const updatedLocals = [localEntry, ...existingLocals.filter(r => String(r.orderId) !== currentOrderId)];
+        await AsyncStorage.setItem('locally_submitted_reviews', JSON.stringify(updatedLocals));
+        dispatch(addReviewLocally(localEntry));
+      } catch (locErr) {
+        console.warn('[OrderStatus] Error saving locally_submitted_reviews:', locErr);
+      }
 
-      let successRes = false;
-      for (const endpoint of candidateEndpoints) {
-        try {
-          const res = await fetch(endpoint, {
+      // Attempt POST to backend with timeout
+      try {
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : null;
+        const res = await fetch(`${API_URL}/reviews`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reviewPayload),
+          signal: controller?.signal,
+        });
+        if (timeoutId) clearTimeout(timeoutId);
+        if (res.ok) {
+          console.log('[OrderStatus] Review saved to MongoDB successfully');
+        } else {
+          // Fallback alias
+          await fetch(`${API_URL}/api/reviews`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(reviewPayload),
-          });
-          if (res.ok) {
-            console.log('[OrderStatus] Review saved to MongoDB at:', endpoint);
-            successRes = true;
-            break;
-          }
-        } catch (postErr) {
-          console.log('[OrderStatus] POST to', endpoint, 'failed:', postErr.message);
+          }).catch(() => {});
         }
+      } catch (_postErr) {
+        console.warn('[OrderStatus] Network error posting review, saved locally:', _postErr?.message);
       }
 
-      if (!successRes) {
-        console.warn('[OrderStatus] Review saved locally only.');
-      }
-
+      showReviewModalRef.current = false;
+      reviewOrderRef.current = null;
       setShowReviewModal(false);
+      setSubmittingReview(false);
+
+      if (userid) {
+        dispatch(fetchProfileData(userid));
+      }
       setReviewOrder(null);
     } catch (err) {
       console.error('[OrderStatus] Review submission error:', err);
+      showReviewModalRef.current = false;
+      reviewOrderRef.current = null;
       setShowReviewModal(false);
       setReviewOrder(null);
     } finally {
@@ -609,6 +649,11 @@ export default function OrderStatusScreen() {
 
   // ── Order Fetch ───────────────────────────────────────────────────────────
   const fetchStatus = useCallback(async (isRefresh = false, isSilent = false) => {
+    // If the review modal is currently open and being interacted with, avoid re-fetching or polling interference
+    if (showReviewModalRef.current) {
+      return;
+    }
+
     try {
       if (isSilent) {
         // Silent background polling: DO NOT trigger any loading or refreshing spinners
@@ -714,9 +759,9 @@ export default function OrderStatusScreen() {
           } else {
             setRecentRejectedOrder(null);
             AsyncStorage.removeItem(`recent_rejected_order_${userid}`).catch(() => {});
-            if (prevId) {
+            if (prevId && !reviewedOrDismissedSessionRef.current.has(String(prevId))) {
               const reviewed = await isOrderAlreadyReviewed(prevId, previousActiveOrder);
-              if (!reviewed) {
+              if (!reviewed && !showReviewModalRef.current) {
                 console.log('[OrderStatus] Active order completed successfully! Opening review modal ONCE for order:', prevId);
                 await handleOpenReviewModal(previousActiveOrder);
               }
@@ -736,6 +781,7 @@ export default function OrderStatusScreen() {
             }
           } catch (e) {}
           try {
+            if (showReviewModalRef.current) return;
             const completedRes = await fetch(`${API_URL}/orders/completed/${userid}`);
             if (completedRes.ok) {
               const completedData = await completedRes.json();
@@ -743,9 +789,9 @@ export default function OrderStatusScreen() {
               if (Array.isArray(completedList) && completedList.length > 0) {
                 const latestOrder = completedList[0];
                 const latestId = latestOrder.orderId || latestOrder.orderID || latestOrder.order_id || latestOrder._id || latestOrder.id || '';
-                if (latestId) {
+                if (latestId && !reviewedOrDismissedSessionRef.current.has(String(latestId))) {
                   const reviewed = await isOrderAlreadyReviewed(latestId, latestOrder);
-                  if (!reviewed) {
+                  if (!reviewed && !showReviewModalRef.current) {
                     const orderDate = new Date(latestOrder.orderDate || latestOrder.completedAt || latestOrder.createdAt || Date.now()).getTime();
                     if (Date.now() - orderDate < 24 * 60 * 60 * 1000) {
                       console.log('[OrderStatus] Unreviewed recent completed order found:', latestId);
@@ -769,7 +815,7 @@ export default function OrderStatusScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [handleOpenReviewModal, showTabBar, dispatch]);
+  }, [handleOpenReviewModal, showTabBar, dispatch, isOrderAlreadyReviewed]);
 
   // Auto-refresh silently while focused & app is active
   useFocusEffect(

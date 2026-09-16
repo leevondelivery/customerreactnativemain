@@ -229,36 +229,122 @@ export const pollRestaurantMenu = createAsyncThunk(
   }
 );
 
+export const fetchUserReviews = createAsyncThunk(
+  'restaurants/fetchUserReviews',
+  async (userid, { rejectWithValue }) => {
+    try {
+      if (!userid) return [];
+      const currentUserIdStr = String(userid).trim();
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+      const res = await fetch(`${API_URL}/reviews/user/${currentUserIdStr}`, { signal: controller?.signal });
+      if (timeoutId) clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        return Array.isArray(data) ? data : (data.reviews || data.data || []);
+      }
+      return [];
+    } catch (_err) {
+      return [];
+    }
+  }
+);
+
 export const fetchProfileData = createAsyncThunk(
   'restaurants/fetchProfileData',
   async (userid, { rejectWithValue }) => {
     try {
+      if (!userid) return { orders: [], reviews: [], userid: '' };
+      const currentUserIdStr = String(userid).trim();
+      let userPhone = '';
+      try {
+        userPhone = (await AsyncStorage.getItem('phone')) || '';
+        userPhone = String(userPhone).replace(/\D/g, '').slice(-10);
+      } catch (e) {}
+
       let orders = [];
-      let reviews = [];
+      let serverReviews = [];
+      let localReviews = [];
 
+      // 1. Load locally submitted reviews from AsyncStorage
       try {
-        const ordersRes = await fetch(`${API_URL}/orders/completed/${userid}`);
-        if (ordersRes.ok) {
-          const ordersData = await ordersRes.json();
-          orders = ordersData.orders || [];
+        const storedLocals = await AsyncStorage.getItem('locally_submitted_reviews');
+        if (storedLocals) {
+          const parsed = JSON.parse(storedLocals);
+          if (Array.isArray(parsed)) {
+            localReviews = parsed.filter((r) => {
+              if (!r) return false;
+              const rUid = String(r.userId || r.user_id || '').trim();
+              return !rUid || rUid === currentUserIdStr || (userPhone && rUid.includes(userPhone));
+            });
+          }
         }
       } catch (e) {
-        console.warn('[Restaurants] Orders fetch error:', e);
+        console.warn('[Restaurants] Local reviews load error:', e);
       }
 
-      try {
-        const reviewsRes = await fetch(`${API_URL}/reviews/user/${userid}`);
-        if (reviewsRes.ok) {
-          const reviewsData = await reviewsRes.json();
-          reviews = reviewsData.reviews || [];
+      // Helper to create independent AbortController with 5s timeout
+      const createController = (ms = 5000) => {
+        if (typeof AbortController !== 'undefined') {
+          const c = new AbortController();
+          const t = setTimeout(() => c.abort(), ms);
+          return { signal: c.signal, clear: () => clearTimeout(t) };
         }
-      } catch (e) {
-        console.warn('[Restaurants] Reviews fetch error:', e);
+        return { signal: undefined, clear: () => {} };
+      };
+
+      const ordersCtrl = createController(5000);
+      const reviewsCtrl = createController(5000);
+
+      // 2 & 3. Fetch orders and reviews in parallel
+      const [ordersResSettled, reviewsResSettled] = await Promise.allSettled([
+        fetch(`${API_URL}/orders/completed/${currentUserIdStr}`, { signal: ordersCtrl.signal }),
+        fetch(`${API_URL}/reviews/user/${currentUserIdStr}`, { signal: reviewsCtrl.signal }),
+      ]);
+      ordersCtrl.clear();
+      reviewsCtrl.clear();
+
+      if (ordersResSettled.status === 'fulfilled' && ordersResSettled.value.ok) {
+        try {
+          const ordersData = await ordersResSettled.value.json();
+          const rawOrders = ordersData.orders || ordersData.data || (Array.isArray(ordersData) ? ordersData : []);
+          orders = Array.isArray(rawOrders) ? rawOrders.filter(o => {
+            if (!o) return false;
+            const oUid = String(o.userId || o.user_id || o.userid || o.customerId || o.customer_id || '').trim();
+            if (!oUid) return true;
+            return oUid === currentUserIdStr || (userPhone && (oUid.includes(userPhone) || userPhone.includes(oUid.replace(/\D/g, ''))));
+          }) : [];
+        } catch (e) {}
       }
 
-      return { orders, reviews };
+      if (reviewsResSettled.status === 'fulfilled' && reviewsResSettled.value.ok) {
+        try {
+          const reviewsData = await reviewsResSettled.value.json();
+          const rawReviews = Array.isArray(reviewsData)
+            ? reviewsData
+            : (reviewsData.reviews || reviewsData.data || reviewsData.userReviews || []);
+          serverReviews = Array.isArray(rawReviews) ? rawReviews : [];
+        } catch (e) {}
+      }
+
+      // 4. Merge local reviews with server reviews (preventing duplicate orderIds)
+      const mergedReviews = [
+        ...localReviews,
+        ...serverReviews.filter(sr => {
+          if (!sr) return false;
+          const srOrderId = String(sr.orderId || sr.order_id || '').replace(/^ord-/i, '').trim();
+          return !localReviews.some(lr => {
+            const lrOrderId = String(lr.orderId || lr.order_id || '').replace(/^ord-/i, '').trim();
+            const matchOrder = Boolean(srOrderId && lrOrderId && srOrderId === lrOrderId);
+            const matchId = Boolean(sr._id && lr._id && String(sr._id) === String(lr._id));
+            return matchOrder || matchId;
+          });
+        })
+      ];
+
+      return { orders, reviews: mergedReviews, userid: currentUserIdStr };
     } catch (err) {
-      return { orders: [], reviews: [] };
+      return { orders: [], reviews: [], userid: String(userid || '') };
     }
   }
 );
@@ -272,7 +358,10 @@ const restaurantsSlice = createSlice({
     menus: {},         // Cache of menus: { [restaurantId]: [item1, item2, ...] }
     menuLoading: {},   // Loading state by restaurantId: { [restaurantId]: boolean }
     orders: [],        // Cache of completed orders
-    reviews: [],       // Cache of user reviews
+    reviews: [],       // Cache of user reviews (Redux Store)
+    reviewsLoaded: false,
+    reviewsLoading: false,
+    profileLoadedUserId: null, // Current loaded profile user id
     profileLoaded: false, // Track if profile data is loaded
     profileLoading: false, // Track profile loading state
     loading: false,
@@ -300,11 +389,22 @@ const restaurantsSlice = createSlice({
       state.list = action.payload;
       state.initialLoaded = true;
     },
+    addReviewLocally: (state, action) => {
+      const newRev = action.payload;
+      if (!newRev) return;
+      const orderIdStr = String(newRev.orderId || newRev.order_id || '').trim();
+      const filtered = (state.reviews || []).filter(r => {
+        const rOrd = String(r.orderId || r.order_id || '').trim();
+        return !(rOrd && orderIdStr && rOrd === orderIdStr);
+      });
+      state.reviews = [newRev, ...filtered];
+    },
     resetProfile: (state) => {
       state.orders = [];
       state.reviews = [];
       state.profileLoaded = false;
       state.profileLoading = false;
+      state.profileLoadedUserId = null;
     }
   },
   extraReducers: (builder) => {
@@ -374,14 +474,59 @@ const restaurantsSlice = createSlice({
       })
       .addCase(fetchProfileData.fulfilled, (state, action) => {
         state.orders = action.payload.orders || [];
-        state.reviews = action.payload.reviews || [];
+        const incomingReviews = action.payload.reviews || [];
+        const existingReviews = state.reviews || [];
+        // Merge without losing any local reviews that were already added
+        const mergedRev = [
+          ...incomingReviews,
+          ...existingReviews.filter((er) => {
+            if (!er) return false;
+            const erOrderId = String(er.orderId || er.order_id || '').replace(/^ord-/i, '').trim();
+            return !incomingReviews.some((ir) => {
+              const irOrderId = String(ir.orderId || ir.order_id || '').replace(/^ord-/i, '').trim();
+              const sameOrder = Boolean(erOrderId && irOrderId && erOrderId === irOrderId);
+              const sameId = Boolean(er._id && ir._id && String(er._id) === String(ir._id));
+              return sameOrder || sameId;
+            });
+          })
+        ];
+        state.reviews = mergedRev;
+        state.profileLoadedUserId = action.payload.userid || null;
         state.profileLoading = false;
         state.profileLoaded = true;
         state.error = null;
       })
       .addCase(fetchProfileData.rejected, (state, action) => {
         state.profileLoading = false;
+        state.profileLoaded = true;
         state.error = action.payload;
+      })
+      .addCase(fetchUserReviews.pending, (state) => {
+        state.reviewsLoading = true;
+      })
+      .addCase(fetchUserReviews.fulfilled, (state, action) => {
+        const incoming = Array.isArray(action.payload) ? action.payload : [];
+        if (incoming.length > 0) {
+          const existing = state.reviews || [];
+          const merged = [
+            ...incoming,
+            ...existing.filter((er) => {
+              if (!er) return false;
+              const erOrderId = String(er.orderId || er.order_id || '').replace(/^ord-/i, '').trim();
+              return !incoming.some((ir) => {
+                const irOrderId = String(ir.orderId || ir.order_id || '').replace(/^ord-/i, '').trim();
+                return Boolean(erOrderId && irOrderId && erOrderId === irOrderId) || (er._id && ir._id && String(er._id) === String(ir._id));
+              });
+            })
+          ];
+          state.reviews = merged;
+        }
+        state.reviewsLoading = false;
+        state.reviewsLoaded = true;
+      })
+      .addCase(fetchUserReviews.rejected, (state) => {
+        state.reviewsLoading = false;
+        state.reviewsLoaded = true;
       })
       .addCase(pollRestaurantMenu.fulfilled, (state, action) => {
         const { restaurantId, rest, items } = action.payload;
@@ -395,5 +540,5 @@ const restaurantsSlice = createSlice({
   },
 });
 
-export const { updateRestaurantStatuses, setRestaurantsList, resetProfile } = restaurantsSlice.actions;
+export const { updateRestaurantStatuses, setRestaurantsList, addReviewLocally, resetProfile } = restaurantsSlice.actions;
 export default restaurantsSlice.reducer;

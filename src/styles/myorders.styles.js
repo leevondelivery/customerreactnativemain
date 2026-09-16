@@ -3,7 +3,7 @@ import { Platform, StyleSheet } from 'react-native';
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)', // half-white / cream background
+    backgroundColor: '#F9F9F6', // half-white / cream background
   },
   scrollView: {
     flex: 1,

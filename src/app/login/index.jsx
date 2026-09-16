@@ -19,8 +19,10 @@ import {
   View,
 } from 'react-native';
 
+import { useDispatch } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL, CONTACT_INFO } from '../../config';
+import { fetchProfileData, resetProfile } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/login.styles';
 // Native-only modules: lazily required to avoid crashes when not linked
 let GoogleSignin = null;
@@ -46,6 +48,7 @@ if (Platform.OS !== 'web') {
 
 export default function LoginScreen() {
   const router = useRouter();
+  const dispatch = useDispatch();
   const [mobile, setMobile] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -78,6 +81,12 @@ export default function LoginScreen() {
   const [signupOtpError, setSignupOtpError] = useState('');
   const [signupResendTimer, setSignupResendTimer] = useState(0);
   const otpInputRef = useRef(null);
+
+  // Google Signup Terms & Conditions Modal States
+  const [showGoogleTermsModal, setShowGoogleTermsModal] = useState(false);
+  const [googleTermsAccepted, setGoogleTermsAccepted] = useState(false);
+  const [pendingGoogleSession, setPendingGoogleSession] = useState(null);
+  const [savingGoogleTerms, setSavingGoogleTerms] = useState(false);
 
   useEffect(() => {
     let interval = null;
@@ -125,6 +134,122 @@ export default function LoginScreen() {
   const [showErrorModal, setShowErrorModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  const completeGoogleLogin = async (user, userCredential) => {
+    const logintime = String(Date.now());
+    const rawUserId = user._id || user.id || user.userId || '';
+    await AsyncStorage.setItem('userid', String(rawUserId));
+    await AsyncStorage.setItem('phone', String(user.phone ?? 'N/A'));
+    await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
+
+    // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
+    const rawBackendName = typeof user.name === 'string' ? user.name : String(user.name || '');
+    const rawFirebaseName = userCredential.user?.displayName ? String(userCredential.user.displayName) : '';
+
+    const displayName = rawBackendName && rawBackendName.toLowerCase() !== 'n/a'
+      ? rawBackendName
+      : (rawFirebaseName && rawFirebaseName.toLowerCase() !== 'n/a'
+        ? rawFirebaseName
+        : 'N/A');
+    await AsyncStorage.setItem('name', String(displayName));
+
+    // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
+    const rawBackendEmail = typeof user.email === 'string' ? user.email : String(user.email || '');
+    const rawFirebaseEmail = userCredential.user?.email ? String(userCredential.user.email) : '';
+
+    const displayEmail = rawBackendEmail && rawBackendEmail.toLowerCase() !== 'n/a'
+      ? rawBackendEmail
+      : (rawFirebaseEmail && rawFirebaseEmail.toLowerCase() !== 'n/a'
+        ? rawFirebaseEmail
+        : 'N/A');
+    await AsyncStorage.setItem('email', String(displayEmail));
+    await AsyncStorage.setItem('logintime', logintime);
+    await AsyncStorage.setItem('loginType', 'google');
+    await AsyncStorage.setItem('coins', String(user.coins ?? 0));
+    await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+    // Pre-fetch active order status flag so tracker tab is ready on login
+    if (rawUserId) {
+      try {
+        const orderRes = await fetch(`${API_URL}/orderstatus/user/${rawUserId}`);
+        if (orderRes.ok) {
+          const orderData = await orderRes.json();
+          if (orderData.success && orderData.orderStatus) {
+            const sStr = (orderData.orderStatus.status || orderData.orderStatus.orderStatus || '').toLowerCase().trim();
+            const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
+            if (!isRej) {
+              await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
+              await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
+            } else {
+              await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+              await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+            }
+          } else {
+            await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
+            await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
+          }
+        }
+      } catch (e) {}
+    }
+
+    dispatch(resetProfile());
+    if (rawUserId) {
+      dispatch(fetchProfileData(String(rawUserId)));
+    }
+
+    router.replace('/restaurentlist');
+  };
+
+  const handleAcceptGoogleTerms = async () => {
+    if (!googleTermsAccepted || !pendingGoogleSession) return;
+    const { user, userCredential } = pendingGoogleSession;
+    const rawUserId = user._id || user.id || user.userId || '';
+
+    try {
+      setSavingGoogleTerms(true);
+      const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) + ' IST';
+
+      // Save acceptance proof in MongoDB
+      if (rawUserId) {
+        try {
+          await fetch(`${API_URL}/user/update`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userid: rawUserId,
+              termsAccepted: true,
+              termsAcceptedAt: timestamp,
+            }),
+          });
+        } catch (apiErr) {
+          console.warn('[Google Signup] Error updating terms in backend:', apiErr.message);
+        }
+      }
+
+      setShowGoogleTermsModal(false);
+      setPendingGoogleSession(null);
+      await completeGoogleLogin({ ...user, termsAccepted: true }, userCredential);
+    } catch (err) {
+      console.error('[Google Signup] Accept terms error:', err);
+      setShowGoogleTermsModal(false);
+      setPendingGoogleSession(null);
+      setErrorMessage('Failed to complete account registration. Please try again.');
+      setShowErrorModal(true);
+    } finally {
+      setSavingGoogleTerms(false);
+    }
+  };
+
+  const handleDeclineGoogleTerms = async () => {
+    try {
+      if (typeof auth === 'function' && auth() && auth().currentUser) {
+        await auth().signOut();
+      }
+    } catch (e) {}
+    setShowGoogleTermsModal(false);
+    setPendingGoogleSession(null);
+    setGoogleTermsAccepted(false);
+  };
 
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
@@ -208,64 +333,16 @@ export default function LoginScreen() {
 
       if (response.ok && data.success && data.user) {
         const user = data.user;
-        const logintime = String(Date.now());
+        const isNewUser = data.isNewUser === true || user.termsAccepted !== true;
 
-        const rawUserId = user._id || user.id || user.userId || '';
-        await AsyncStorage.setItem('userid', String(rawUserId));
-        await AsyncStorage.setItem('phone', String(user.phone ?? 'N/A'));
-        await AsyncStorage.setItem('isPhoneVerified', String(user.isPhoneVerified ?? 'false'));
-
-        // Use user.name from backend, fallback to firebase displayName, fallback to 'N/A'
-        const rawBackendName = typeof user.name === 'string' ? user.name : String(user.name || '');
-        const rawFirebaseName = userCredential.user?.displayName ? String(userCredential.user.displayName) : '';
-
-        const displayName = rawBackendName && rawBackendName.toLowerCase() !== 'n/a'
-          ? rawBackendName
-          : (rawFirebaseName && rawFirebaseName.toLowerCase() !== 'n/a'
-            ? rawFirebaseName
-            : 'N/A');
-        await AsyncStorage.setItem('name', String(displayName));
-
-        // Use user.email from backend, fallback to firebase email, fallback to 'N/A'
-        const rawBackendEmail = typeof user.email === 'string' ? user.email : String(user.email || '');
-        const rawFirebaseEmail = userCredential.user?.email ? String(userCredential.user.email) : '';
-
-        const displayEmail = rawBackendEmail && rawBackendEmail.toLowerCase() !== 'n/a'
-          ? rawBackendEmail
-          : (rawFirebaseEmail && rawFirebaseEmail.toLowerCase() !== 'n/a'
-            ? rawFirebaseEmail
-            : 'N/A');
-        await AsyncStorage.setItem('email', String(displayEmail));
-        await AsyncStorage.setItem('logintime', logintime);
-        await AsyncStorage.setItem('loginType', 'google');
-        await AsyncStorage.setItem('coins', String(user.coins ?? 0));
-        await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
-
-        // Pre-fetch active order status flag so tracker tab is ready on login
-        if (rawUserId) {
-          try {
-            const orderRes = await fetch(`${API_URL}/orderstatus/user/${rawUserId}`);
-            if (orderRes.ok) {
-              const orderData = await orderRes.json();
-              if (orderData.success && orderData.orderStatus) {
-                const sStr = (orderData.orderStatus.status || orderData.orderStatus.orderStatus || '').toLowerCase().trim();
-                const isRej = sStr.includes('reject') || sStr.includes('cancel') || sStr.includes('declin') || sStr.includes('failed');
-                if (!isRej) {
-                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'true');
-                  await AsyncStorage.setItem(`active_order_data_${rawUserId}`, JSON.stringify(orderData.orderStatus));
-                } else {
-                  await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
-                  await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
-                }
-              } else {
-                await AsyncStorage.setItem(`has_active_order_${rawUserId}`, 'false');
-                await AsyncStorage.removeItem(`active_order_data_${rawUserId}`);
-              }
-            }
-          } catch (e) {}
+        if (isNewUser) {
+          setPendingGoogleSession({ user, userCredential });
+          setGoogleTermsAccepted(false);
+          setShowGoogleTermsModal(true);
+          return;
         }
 
-        router.replace('/restaurentlist');
+        await completeGoogleLogin(user, userCredential);
       } else {
         setErrorMessage(data.message || 'Failed to sync account with backend.');
         setShowErrorModal(true);
@@ -436,6 +513,11 @@ export default function LoginScreen() {
           } catch (e) {}
         }
 
+        dispatch(resetProfile());
+        if (rawUserId) {
+          dispatch(fetchProfileData(String(rawUserId)));
+        }
+
         router.replace('/restaurentlist');
       } else {
         setErrorMessage(data.message || 'Mobile number and password is incorrect');
@@ -592,6 +674,11 @@ export default function LoginScreen() {
         setEmail('');
         setAcceptedTerms(false);
         setIsSignUp(false);
+
+        dispatch(resetProfile());
+        if (rawUserId) {
+          dispatch(fetchProfileData(String(rawUserId)));
+        }
 
         router.replace('/restaurentlist');
       } else {
@@ -793,6 +880,96 @@ export default function LoginScreen() {
       {/* Root Split Background */}
       <View style={styles.leftBg} />
       <View style={styles.rightBg} />
+
+      {/* Google New User Terms & Conditions Acceptance Modal */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={showGoogleTermsModal}
+        onRequestClose={handleDeclineGoogleTerms}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.otpModalCard}>
+            {/* Top Close / Cancel */}
+            <TouchableOpacity
+              style={styles.otpCloseIconButton}
+              onPress={handleDeclineGoogleTerms}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={18} color="#555555" />
+            </TouchableOpacity>
+
+            {/* Icon Badge */}
+            <View style={styles.otpIconBadge}>
+              <Feather name="shield" size={30} color="#000000" />
+            </View>
+
+            {/* Modal Title */}
+            <Text style={styles.otpModalTitle}>Terms & Privacy</Text>
+
+            <Text style={styles.otpModalSubtitle}>
+              Please accept our terms & conditions to complete your account setup.
+            </Text>
+
+            {/* Terms and Conditions & Privacy Policy Acceptance Checkbox */}
+            <View style={[styles.termsContainer, { marginBottom: 20 }]}>
+              <TouchableOpacity
+                style={styles.checkboxTouchable}
+                onPress={() => setGoogleTermsAccepted(!googleTermsAccepted)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkboxBox, googleTermsAccepted && styles.checkboxBoxChecked]}>
+                  {googleTermsAccepted && <Feather name="check" size={14} color="#FFFFFF" />}
+                </View>
+              </TouchableOpacity>
+              <View style={styles.termsTextContainer}>
+                <Text style={styles.termsText}>I agree to the </Text>
+                <TouchableOpacity
+                  onPress={() => Linking.openURL('https://leevon-delivery.vercel.app/privacy').catch(err => console.error('Failed to open Privacy Policy URL:', err))}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.termsLink}>Privacy Policy</Text>
+                </TouchableOpacity>
+                <Text style={styles.termsText}> and </Text>
+                <TouchableOpacity
+                  onPress={() => Linking.openURL('https://tandccustomer.vercel.app/').catch(err => console.error('Failed to open Terms URL:', err))}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.termsLink}>Terms & Conditions</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Accept & Continue Button */}
+            <TouchableOpacity
+              style={[
+                styles.otpVerifyButton,
+                styles.shadow,
+                (!googleTermsAccepted || savingGoogleTerms) && { opacity: 0.6 }
+              ]}
+              onPress={handleAcceptGoogleTerms}
+              disabled={!googleTermsAccepted || savingGoogleTerms}
+              activeOpacity={0.85}
+            >
+              {savingGoogleTerms ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.otpVerifyButtonText}>Accept & Continue</Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Cancel Button */}
+            <TouchableOpacity
+              style={{ marginTop: 16, paddingVertical: 4 }}
+              onPress={handleDeclineGoogleTerms}
+              disabled={savingGoogleTerms}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.otpResendButtonText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Signup OTP Verification Modal */}
       <Modal

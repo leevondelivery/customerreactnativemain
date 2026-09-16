@@ -36,20 +36,20 @@ export default function MyDetailsScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  const handleBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/profile');
+    }
+    return true;
+  }, [router]);
+
   useFocusEffect(
     useCallback(() => {
-      const onBackPress = () => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/profile');
-        }
-        return true;
-      };
-
-      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      const subscription = BackHandler.addEventListener('hardwareBackPress', handleBack);
       return () => subscription.remove();
-    }, [router])
+    }, [handleBack])
   );
 
   const [user, setUser] = useState({
@@ -519,7 +519,7 @@ export default function MyDetailsScreen() {
       >
         {/* Custom Header */}
         <View style={styles.header}>
-          <TouchableOpacity style={[styles.backButton, styles.shadow]} onPress={() => router.replace('/profile')} activeOpacity={0.8}>
+          <TouchableOpacity style={[styles.backButton, styles.shadow]} onPress={handleBack} activeOpacity={0.8}>
             <Feather name="chevron-left" size={24} color="#000000" />
           </TouchableOpacity>
 
@@ -581,11 +581,6 @@ export default function MyDetailsScreen() {
             </View>
           )}
 
-          {/* Row 5: Edit Profile Trigger */}
-          <TouchableOpacity style={styles.editRow} activeOpacity={0.8} onPress={handleOpenEdit}>
-            <FontAwesome5 name="user-edit" size={18} color="#000000" />
-            <Text style={styles.editText}>Edit my profile</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
 

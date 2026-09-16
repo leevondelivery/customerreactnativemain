@@ -148,7 +148,7 @@ export default function ProfileScreen() {
         console.warn('[Profile] Error syncing live profile details:', profileErr);
       }
 
-      if (userid && !profileLoaded) {
+      if (userid) {
         dispatch(fetchProfileData(userid));
       }
     } catch (e) {
@@ -156,7 +156,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [dispatch, profileLoaded]);
+  }, [dispatch]);
 
   useFocusEffect(
     useCallback(() => {
@@ -198,10 +198,6 @@ export default function ProfileScreen() {
       ])
     ).start();
   }, [shineValue]);
-
-  useEffect(() => {
-    fetchUserData();
-  }, [fetchUserData]);
 
   const handleLogout = async () => {
     try {

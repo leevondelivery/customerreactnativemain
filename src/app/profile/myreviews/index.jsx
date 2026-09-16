@@ -1,8 +1,10 @@
 import { Feather, FontAwesome } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  RefreshControl,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -11,9 +13,8 @@ import {
 } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
 
-import LoadingView from '../../../components/LoadingView';
 import { API_URL } from '../../../config';
-import { fetchProfileData } from '../../../store/restaurantsSlice';
+import { fetchUserReviews, fetchProfileData } from '../../../store/restaurantsSlice';
 import { styles } from '../../../styles/myreviews.styles';
 import { useTabBar } from '../../_layout';
 
@@ -23,26 +24,36 @@ export default function MyReviewsScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  const handleBack = useCallback(() => {
+    try {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/profile');
+      }
+    } catch (_e) {
+      router.replace('/profile');
+    }
+    return true;
+  }, [router]);
+
   useFocusEffect(
     useCallback(() => {
       showTabBar(true);
-      const onBackPress = () => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/profile');
-        }
-        return true;
-      };
-
-      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      const subscription = BackHandler.addEventListener('hardwareBackPress', handleBack);
       return () => subscription.remove();
-    }, [router, showTabBar])
+    }, [showTabBar, handleBack])
   );
 
   const reviews = useSelector((state) => state.restaurants.reviews || []);
   const completedOrders = useSelector((state) => state.restaurants.orders || []);
   const profileLoaded = useSelector((state) => state.restaurants.profileLoaded);
+  const profileLoadedUserId = useSelector((state) => state.restaurants.profileLoadedUserId);
+  const profileLoading = useSelector((state) => state.restaurants.profileLoading);
+
+  const [currentUserId, setCurrentUserId] = useState('');
+  const [screenLoading, setScreenLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -54,96 +65,79 @@ export default function MyReviewsScreen() {
     }
   };
 
+  // Always check current logged-in user and fetch their specific reviews (Identical to MyOrders)
+  const loadUserReviews = useCallback(async (isPullToRefresh = false) => {
+    if (isPullToRefresh) setRefreshing(true);
+    try {
+      const userid = await AsyncStorage.getItem('userid');
+      if (userid) {
+        const uidStr = String(userid).trim();
+        setCurrentUserId(uidStr);
+        // Unblock UI immediately on frame 0
+        setScreenLoading(false);
+        // Fetch fresh reviews and orders in background
+        dispatch(fetchProfileData(uidStr)).finally(() => {
+          setRefreshing(false);
+        });
+      } else {
+        setCurrentUserId('');
+        setScreenLoading(false);
+        setRefreshing(false);
+      }
+    } catch (err) {
+      console.error('[MyReviews] Error fetching reviews:', err);
+      setScreenLoading(false);
+      setRefreshing(false);
+    }
+  }, [dispatch]);
+
   useFocusEffect(
     useCallback(() => {
-      showTabBar(true);
-      const refreshOnFocus = async () => {
-        try {
-          const userid = await AsyncStorage.getItem('userid');
-          if (userid) dispatch(fetchProfileData(userid));
-        } catch (e) {
-          console.warn('[MyReviews] Error refreshing on focus:', e);
-        }
-      };
-      refreshOnFocus();
-    }, [showTabBar, dispatch])
+      loadUserReviews(false);
+    }, [loadUserReviews])
   );
-
-  const [loading, setLoading] = useState(false);
-  const [locallySubmittedReviews, setLocallySubmittedReviews] = useState([]);
-
-  useEffect(() => {
-    let isMounted = true;
-    const initializeData = async () => {
-      try {
-        const userid = await AsyncStorage.getItem('userid');
-
-        // Load locally submitted reviews from AsyncStorage (submitted via orderstatus modal)
-        const storedReviews = await AsyncStorage.getItem('locally_submitted_reviews');
-        if (storedReviews) {
-          try {
-            const parsedRev = JSON.parse(storedReviews);
-            if (Array.isArray(parsedRev) && isMounted) setLocallySubmittedReviews(parsedRev);
-          } catch (e) {
-            console.warn('[MyReviews] Error parsing storedReviews:', e);
-          }
-        }
-
-        if (userid && !profileLoaded) {
-          await dispatch(fetchProfileData(userid));
-        }
-      } catch (err) {
-        console.error('[MyReviews] Error initializing data:', err);
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    };
-    initializeData();
-    return () => { isMounted = false; };
-  }, [dispatch]);
 
   // Helper to safely extract Order ID from a review object
   const getOrderIdFromReview = (r) => {
     if (!r) return '';
-    const id = r.orderId || r.order_id || r.orderID || r.orderDetails?.[0]?.orderId || r.order?._id || r.order?.orderId || '';
+    const id = r.orderId || r.order_id || r.orderID || r.orderIdStr || r.orderDetails?.[0]?.orderId || r.order?._id || r.order?.orderId || '';
     const str = String(id).trim();
     if (!str || str === 'undefined' || str === 'null' || str === 'N/A') return '';
     return str;
   };
 
-  const hasAnyReview = (r) => {
-    if (!r) return false;
-    const hasRest = (r.restaurantRating && Number(r.restaurantRating) > 0) || (r.restaurantReview && r.restaurantReview.trim() !== '');
-    const hasDeliv = (r.deliveryBoyRating && Number(r.deliveryBoyRating) > 0) || (r.deliveryBoyReview && r.deliveryBoyReview.trim() !== '');
-    return hasRest || hasDeliv;
-  };
-
-  // Merge backend reviews + locally submitted reviews, deduplicating by orderId and filtering out unreviewed orders
-  const displayReviews = [
-    ...locallySubmittedReviews,
-    ...reviews.filter((r) => {
-      const rOrderId = getOrderIdFromReview(r);
-      return !locallySubmittedReviews.some((lr) => {
-        const lrOrderId = getOrderIdFromReview(lr);
-        return (rOrderId && lrOrderId && rOrderId === lrOrderId) || String(lr._id) === String(r._id);
-      });
-    }),
-  ].filter(hasAnyReview);
+  const displayReviews = useMemo(() => {
+    if (!Array.isArray(reviews)) return [];
+    const activeUid = currentUserId || profileLoadedUserId || '';
+    return reviews.filter((r) => {
+      if (!r) return false;
+      const rUid = String(r.userId || r.user_id || r.userid || r.customerId || r.customer_id || '').trim();
+      if (!rUid || !activeUid) return true; // keep if backend omits field in response
+      return rUid === activeUid || rUid.toLowerCase() === activeUid.toLowerCase();
+    }).sort((a, b) => {
+      const dateA = new Date(a.createdAt || a.date || a.timestamp || 0);
+      const dateB = new Date(b.createdAt || b.date || b.timestamp || 0);
+      return dateB - dateA;
+    });
+  }, [reviews, currentUserId, profileLoadedUserId]);
 
   const formatDate = (dateStr) => {
     if (!dateStr) return '';
     try {
       const date = new Date(dateStr);
-      return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+      }
+      return String(dateStr).split(',')[0];
     } catch {
-      return dateStr;
+      return String(dateStr);
     }
   };
 
   const renderStars = (rating) => {
     const stars = [];
     const maxStars = 5;
-    const activeRating = Math.max(0, Math.min(maxStars, Math.round(rating || 0)));
+    const activeRating = Math.max(0, Math.min(maxStars, Math.round(Number(rating) || 0)));
     for (let i = 1; i <= maxStars; i++) {
       stars.push(
         <FontAwesome key={i} name={i <= activeRating ? 'star' : 'star-o'} size={16} color="#FFC107" />
@@ -154,10 +148,11 @@ export default function MyReviewsScreen() {
 
   const formatCurrency = (val) => {
     if (val === undefined || val === null || val === '') return '';
-    return `₹ ${Number(val).toFixed(0)}`;
+    const num = Number(val);
+    return isNaN(num) ? String(val) : `₹ ${num.toFixed(0)}`;
   };
 
-  if (loading) return <LoadingView />;
+  const isInitialLoading = (!profileLoaded || profileLoading || screenLoading) && displayReviews.length === 0;
 
   return (
     <View style={styles.container}>
@@ -167,12 +162,20 @@ export default function MyReviewsScreen() {
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadUserReviews(true)}
+            colors={['#1E3545']}
+            tintColor="#1E3545"
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
             style={[styles.backButton, styles.shadow]}
-            onPress={() => router.replace('/profile')}
+            onPress={handleBack}
             activeOpacity={0.8}
           >
             <Feather name="chevron-left" size={24} color="#000000" />
@@ -186,50 +189,65 @@ export default function MyReviewsScreen() {
           <View style={styles.placeholderRight} />
         </View>
 
-
-
-        {/* Reviews List */}
-        {displayReviews.length === 0 ? (
+        {/* Reviews List or State */}
+        {isInitialLoading ? (
+          <View style={{ paddingVertical: 60, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator size="large" color="#1E3545" />
+            <Text style={{ marginTop: 14, fontSize: 14, color: '#666666', fontWeight: '600' }}>
+              Loading your reviews...
+            </Text>
+          </View>
+        ) : displayReviews.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Feather name="message-square" size={48} color="#C8C7CC" />
             <Text style={styles.emptyText}>No reviews submitted yet</Text>
           </View>
         ) : (
-          displayReviews.map((review) => {
-            const orderDetailsObj = review.orderDetails && review.orderDetails[0] ? review.orderDetails[0] : null;
-            const matchingCompletedOrder = completedOrders.find((o) => String(o.orderId || o._id) === String(review.orderId));
+          displayReviews.map((review, rIdx) => {
+            if (!review) return null;
+            const orderDetailsObj = review.orderDetails && Array.isArray(review.orderDetails) && review.orderDetails[0]
+              ? review.orderDetails[0]
+              : (review.orderDetails && typeof review.orderDetails === 'object' ? review.orderDetails : null);
 
-            const items = (orderDetailsObj && orderDetailsObj.items && orderDetailsObj.items.length > 0)
+            const rawOrderId = review.orderId || review.order_id || getOrderIdFromReview(review);
+            const rawOrderIdClean = String(rawOrderId || '').replace(/^ord-/i, '').trim();
+
+            const matchingCompletedOrder = Array.isArray(completedOrders)
+              ? completedOrders.find((o) => {
+                  if (!o) return false;
+                  const oId = String(o.orderId || o._id || o.id || '').replace(/^ord-/i, '').trim();
+                  return Boolean(oId && rawOrderIdClean && oId === rawOrderIdClean);
+                })
+              : null;
+
+            const items = (orderDetailsObj && orderDetailsObj.items && Array.isArray(orderDetailsObj.items) && orderDetailsObj.items.length > 0)
               ? orderDetailsObj.items
-              : (matchingCompletedOrder?.items || []);
+              : (matchingCompletedOrder?.items && Array.isArray(matchingCompletedOrder.items) ? matchingCompletedOrder.items : (Array.isArray(review.items) ? review.items : []));
 
-            const restaurantName = review.restaurantName || orderDetailsObj?.restaurantName || matchingCompletedOrder?.restaurantName || 'Restaurant';
+            const restaurantName = review.restaurantName || orderDetailsObj?.restaurantName || matchingCompletedOrder?.restaurantName || matchingCompletedOrder?.name || 'Restaurant';
             const subTotal = orderDetailsObj?.subTotal ?? matchingCompletedOrder?.subTotal ?? matchingCompletedOrder?.subtotal ?? '';
             const deliveryCharges = orderDetailsObj?.deliveryCharges ?? orderDetailsObj?.deliveryFee ?? matchingCompletedOrder?.deliveryFee ?? matchingCompletedOrder?.deliveryCharges ?? '';
             const surgeFee = orderDetailsObj?.surgeFee ?? matchingCompletedOrder?.surgeFee ?? matchingCompletedOrder?.surge_fee ?? '';
             const gst = orderDetailsObj?.gst ?? matchingCompletedOrder?.gst ?? matchingCompletedOrder?.tax ?? '';
             const platformFee = orderDetailsObj?.platformFee ?? matchingCompletedOrder?.platformFee ?? matchingCompletedOrder?.platform_fee ?? '';
             const discountAmount = orderDetailsObj?.discountAmount ?? matchingCompletedOrder?.discountAmount ?? matchingCompletedOrder?.discount ?? '';
-            const grandTotal = orderDetailsObj?.grandTotal ?? matchingCompletedOrder?.grandTotal ?? matchingCompletedOrder?.totalPrice ?? '';
+            const grandTotal = orderDetailsObj?.grandTotal ?? matchingCompletedOrder?.grandTotal ?? matchingCompletedOrder?.totalPrice ?? review.grandTotal ?? '';
 
-            const rawOrderId = review.orderId || getOrderIdFromReview(review);
-            const displayOrderId = String(rawOrderId || '').replace(/^ord-/i, '');
+            const displayOrderId = rawOrderIdClean || 'N/A';
 
-            const hasRestaurantExperience = Boolean(
-              (review.restaurantRating && Number(review.restaurantRating) > 0) ||
-              (review.restaurantReview && review.restaurantReview.trim() !== '')
-            );
+            const restRatingVal = Number(review.restaurantRating ?? review.rating ?? review.restRating ?? 0);
+            const restReviewVal = String(review.restaurantReview ?? review.review ?? review.restReview ?? '').trim();
+            const delivRatingVal = Number(review.deliveryBoyRating ?? review.deliveryRating ?? review.driverRating ?? 0);
+            const delivReviewVal = String(review.deliveryBoyReview ?? review.deliveryReview ?? review.driverReview ?? '').trim();
 
-            const hasDeliveryExperience = Boolean(
-              (review.deliveryBoyRating && Number(review.deliveryBoyRating) > 0) ||
-              (review.deliveryBoyReview && review.deliveryBoyReview.trim() !== '')
-            );
+            const hasRestaurantExperience = restRatingVal > 0 || restReviewVal.length > 0;
+            const hasDeliveryExperience = delivRatingVal > 0 || delivReviewVal.length > 0;
 
             return (
-              <View key={review._id || review.orderId} style={styles.reviewCard}>
+              <View key={review._id || review.orderId || `review-${rIdx}`} style={styles.reviewCard}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={styles.orderTitle}>Order ID - {displayOrderId}</Text>
-                  <Text style={styles.dateText}>{formatDate(review.createdAt)}</Text>
+                  <Text style={styles.dateText}>{formatDate(review.createdAt || review.date || review.timestamp)}</Text>
                 </View>
 
                 {restaurantName ? (
@@ -240,9 +258,9 @@ export default function MyReviewsScreen() {
                 {hasRestaurantExperience && (
                   <View style={styles.experienceBox}>
                     <Text style={styles.experienceTitle}>Restaurant Experience</Text>
-                    {renderStars(review.restaurantRating)}
-                    {review.restaurantReview && review.restaurantReview.trim() ? (
-                      <Text style={styles.reviewCommentText}>{review.restaurantReview.trim()}</Text>
+                    {restRatingVal > 0 ? renderStars(restRatingVal) : null}
+                    {restReviewVal ? (
+                      <Text style={styles.reviewCommentText}>{restReviewVal}</Text>
                     ) : null}
                   </View>
                 )}
@@ -251,9 +269,9 @@ export default function MyReviewsScreen() {
                 {hasDeliveryExperience && (
                   <View style={styles.experienceBox}>
                     <Text style={styles.experienceTitle}>Delivery Experience</Text>
-                    {renderStars(review.deliveryBoyRating)}
-                    {review.deliveryBoyReview && review.deliveryBoyReview.trim() ? (
-                      <Text style={styles.reviewCommentText}>{review.deliveryBoyReview.trim()}</Text>
+                    {delivRatingVal > 0 ? renderStars(delivRatingVal) : null}
+                    {delivReviewVal ? (
+                      <Text style={styles.reviewCommentText}>{delivReviewVal}</Text>
                     ) : null}
                   </View>
                 )}

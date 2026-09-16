@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,27 +12,28 @@ import { Feather, FontAwesome } from '@expo/vector-icons';
 import { useTabBar } from '../../_layout';
 import { CONTACT_INFO } from '../../../config';
 import { styles } from '../../../styles/contactus.styles';
+import LoadingView from '../../../components/LoadingView';
 
 export default function ContactUsScreen() {
   const router = useRouter();
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  const handleBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/profile');
+    }
+    return true;
+  }, [router]);
+
   useFocusEffect(
     useCallback(() => {
       showTabBar(true);
-      const onBackPress = () => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/profile');
-        }
-        return true;
-      };
-
-      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      const subscription = BackHandler.addEventListener('hardwareBackPress', handleBack);
       return () => subscription.remove();
-    }, [router, showTabBar])
+    }, [showTabBar, handleBack])
   );
 
   const handleScroll = (event) => {
@@ -87,6 +88,15 @@ export default function ContactUsScreen() {
     },
   ];
 
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, []);
+
   const handleCall = () => {
     Linking.openURL(`tel:${CONTACT_INFO.phone}`).catch(err =>
       console.error('Failed to make phone call:', err)
@@ -98,6 +108,10 @@ export default function ContactUsScreen() {
       console.error('Failed to open social URL:', err)
     );
   };
+
+  if (loading) {
+    return <LoadingView />;
+  }
 
   return (
     <View style={styles.container}>
@@ -112,13 +126,7 @@ export default function ContactUsScreen() {
         <View style={styles.header}>
           <TouchableOpacity
             style={[styles.backButton, styles.shadow]}
-            onPress={() => {
-              if (router.canGoBack()) {
-                router.back();
-              } else {
-                router.replace('/profile');
-              }
-            }}
+            onPress={handleBack}
             activeOpacity={0.8}
           >
             <Feather name="chevron-left" size={24} color="#000000" />

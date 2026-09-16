@@ -79,6 +79,55 @@ const SMOOTH_LAYOUT_ANIMATION = {
   },
 };
 
+// Ultra-fast smooth animated wrapper for card transitions when filtering/sorting
+function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
+  const [animValue] = useState(() => new Animated.Value(0));
+
+  useEffect(() => {
+    animValue.setValue(0);
+    const delay = Math.min(index * 6, 25);
+    const timer = setTimeout(() => {
+      Animated.spring(animValue, {
+        toValue: 1,
+        tension: 260,
+        friction: 18,
+        useNativeDriver: true,
+      }).start();
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [filterKey, animValue, index]);
+
+  const translateY = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 0],
+  });
+
+  const scale = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.98, 1],
+  });
+
+  const opacity = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.2, 1],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity,
+          transform: [{ translateY }, { scale }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
 // A cross-platform image component to bypass React Native Web's CORS checks on web
 function CarouselImage({ uri, style }) {
   if (Platform.OS === 'web') {
@@ -268,7 +317,6 @@ export default function RestaurantListScreen() {
       setUserid(uid);
 
       const savedAddrId = await AsyncStorage.getItem('selected_saved_address_id');
-      const userChoice = await AsyncStorage.getItem('user_location_choice');
 
       let hasActiveOrder = false;
 
@@ -288,17 +336,36 @@ export default function RestaurantListScreen() {
         } catch (e) {}
       }
 
-      // Show location modal immediately on fresh app launch (unless active in-flight order)
-      if (!hasActiveOrder) {
-        setShowDeliverToModal(true);
-      } else {
-        setShowDeliverToModal(false);
+      // Check if device location (GPS) is enabled and permission is granted
+      let isLocationActive = false;
+      try {
+        const servicesEnabled = await Location.hasServicesEnabledAsync();
+        const permission = await Location.getForegroundPermissionsAsync();
+        if (servicesEnabled && permission.status === 'granted') {
+          isLocationActive = true;
+        }
+      } catch (locErr) {
+        console.warn('[RestaurantList] Error checking location status:', locErr);
       }
 
-      if (savedAddrId) {
-        dispatch(setSelectedSavedAddressId(savedAddrId));
-      } else if (userChoice === 'inside' && !hasActiveOrder) {
-        dispatch(checkLocationAndCalculateDistances(restaurants));
+      if (isLocationActive) {
+        // Location is ON & permitted: Directly calculate distances and DO NOT show modal
+        setShowDeliverToModal(false);
+        if (savedAddrId) {
+          dispatch(setSelectedSavedAddressId(savedAddrId));
+        } else {
+          dispatch(checkLocationAndCalculateDistances(restaurants));
+        }
+      } else {
+        // Location is OFF or not permitted: Show Deliver To modal (unless user has active order)
+        if (!hasActiveOrder) {
+          setShowDeliverToModal(true);
+        } else {
+          setShowDeliverToModal(false);
+        }
+        if (savedAddrId) {
+          dispatch(setSelectedSavedAddressId(savedAddrId));
+        }
       }
 
       // Asynchronously verify addresses & active order status in background without delaying UI
@@ -342,7 +409,21 @@ export default function RestaurantListScreen() {
     };
 
     initLocationFlow();
-  }, [dispatch]);
+  }, [dispatch, restaurants]);
+
+  // When restaurants list loads from network/cache and location is already determined, calculate distances
+  useEffect(() => {
+    if (restaurants && restaurants.length > 0 && userLocation && !selectedSavedAddressId) {
+      const sampleId = restaurants[0]?._id || restaurants[0]?.restId || restaurants[0]?.id;
+      if (sampleId && !roadDistances[String(sampleId)] && !hasTriggeredDistanceCalc.current) {
+        hasTriggeredDistanceCalc.current = true;
+        dispatch(checkLocationAndCalculateDistances({
+          restaurantsList: restaurants,
+          customCoords: userLocation
+        }));
+      }
+    }
+  }, [restaurants, userLocation, roadDistances, selectedSavedAddressId, dispatch]);
 
   const lastBackPressTime = useRef(0);
 
@@ -504,6 +585,34 @@ export default function RestaurantListScreen() {
         offerTitle: item.offerTitle || ''
       }
     });
+  };
+
+  const handlePressCarousel = (item) => {
+    if (!item || !item.restaurantId || !item.restaurantId.trim()) {
+      return;
+    }
+    const targetRestId = item.restaurantId.trim();
+    const foundRestaurant = restaurants.find(
+      (r) => String(r.restId) === String(targetRestId) || String(r._id) === String(targetRestId)
+    );
+
+    if (foundRestaurant) {
+      handlePressRestaurant(foundRestaurant, foundRestaurant.name || item.title || 'Restaurant');
+    } else {
+      dispatch(fetchRestaurantMenu(targetRestId));
+      router.push({
+        pathname: `/restaurentlist/${targetRestId}`,
+        params: {
+          restId: targetRestId,
+          name: item.title || 'Restaurant',
+          logoUrl: '',
+          address: '',
+          openTime: '',
+          closeTime: '',
+          offerTitle: '',
+        },
+      });
+    }
   };
 
   // States
@@ -1070,21 +1179,29 @@ export default function RestaurantListScreen() {
                 offset: CAROUSEL_WIDTH * index,
                 index,
               })}
-              renderItem={({ item }) => (
-                <View style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}>
-                  <CarouselImage
-                    uri={item.imageUrl}
-                    style={styles.carouselImage}
-                  />
-                  {/* Render text overlay ONLY if title or tag exists in MongoDB item */}
-                  {!!(item.tag || item.title) && (
-                    <View style={styles.carouselOverlay}>
-                      {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
-                      {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
-                    </View>
-                  )}
-                </View>
-              )}
+              renderItem={({ item }) => {
+                const hasTargetRest = !!(item.restaurantId && item.restaurantId.trim());
+                return (
+                  <TouchableOpacity
+                    activeOpacity={hasTargetRest ? 0.85 : 1}
+                    onPress={() => handlePressCarousel(item)}
+                    disabled={!hasTargetRest}
+                    style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}
+                  >
+                    <CarouselImage
+                      uri={item.imageUrl}
+                      style={styles.carouselImage}
+                    />
+                    {/* Render text overlay ONLY if title or tag exists in MongoDB item */}
+                    {!!(item.tag || item.title) && (
+                      <View style={styles.carouselOverlay}>
+                        {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
+                        {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              }}
             />
             {/* Carousel Dot Indicators */}
             <View style={styles.paginationContainer}>
@@ -1378,7 +1495,11 @@ export default function RestaurantListScreen() {
           const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
           return (
-            <View key={item._id || item.restId}>
+            <AnimatedCardWrapper
+              key={item._id || item.restId}
+              index={cardIdx}
+              filterKey={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
+            >
               <TouchableOpacity
                 style={[
                   styles.restaurantCard,
@@ -1540,7 +1661,7 @@ export default function RestaurantListScreen() {
                   ) : null}
                 </View>
               </TouchableOpacity>
-            </View>
+            </AnimatedCardWrapper>
           );
         })}
       </ScrollView>
@@ -1567,10 +1688,10 @@ export default function RestaurantListScreen() {
 
       {/* Fetching Location Overlay Modal */}
       <Modal transparent visible={showFetchingModal} animationType="fade">
-        <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
-          <View style={styles.modalContent}>
-            <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
-            <Text style={styles.modalTitle}>Fetching Location</Text>
+        <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0, 0, 0, 0.4)' }]}>
+          <View style={[styles.modalContent, { backgroundColor: '#F9F9F6' }]}>
+            <ActivityIndicator size="large" color="#1E3545" style={{ marginBottom: 16 }} />
+            <Text style={styles.modalTitle}>Fetching Location & Distance</Text>
             <Text style={styles.modalSub}>
               Retrieving your coordinates and calculating delivery distances...
             </Text>

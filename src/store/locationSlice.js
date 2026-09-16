@@ -423,11 +423,9 @@ const locationSlice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(checkLocationAndCalculateDistances.pending, (state, action) => {
+      .addCase(checkLocationAndCalculateDistances.pending, (state) => {
         state.locationStatus = 'requesting';
-        if (!state.userLocation || (action.meta && action.meta.arg && action.meta.arg.forceModal)) {
-          state.showFetchingModal = true;
-        }
+        state.showFetchingModal = true;
         state.showLocationModal = false;
         state.showOutOfZoneModal = false;
         state.locationError = null;

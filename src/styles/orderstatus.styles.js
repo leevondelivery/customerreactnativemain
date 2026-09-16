@@ -116,7 +116,7 @@ export const styles = StyleSheet.create({
 
   // Main Card
   mainCard: {
-    backgroundColor: '#EDE8DC',
+    backgroundColor: 'rgb(224, 214, 188)', // matching navbar background color
     borderRadius: 26,
     padding: 16,
     gap: 12,

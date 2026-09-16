@@ -3,7 +3,7 @@ import { Platform, StyleSheet } from 'react-native';
 export const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)', // half-white / cream background
+    backgroundColor: '#F9F9F6', // half-white / cream background
   },
   scrollView: {
     flex: 1,
@@ -51,7 +51,7 @@ export const styles = StyleSheet.create({
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)',
+    backgroundColor: '#F9F9F6',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -96,7 +96,7 @@ export const styles = StyleSheet.create({
     marginBottom: 16,
   },
   experienceBox: {
-    backgroundColor: 'rgb(247, 247, 235)', // theme background color
+    backgroundColor: '#F9F9F6', // half-white / cream background
     borderWidth: 1,
     borderColor: '#E6DFCE',
     borderRadius: 18,

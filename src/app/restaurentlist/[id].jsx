@@ -69,6 +69,60 @@ const SMOOTH_LAYOUT_ANIMATION = {
 
 const EMPTY_ARRAY = [];
 
+// Ultra-fast smooth animated wrapper for card transitions when filtering/sorting
+function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
+  const [animValue] = useState(() => new Animated.Value(1)); // Start at 1 for instant smooth initial open
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    animValue.setValue(0);
+    const delay = Math.min(index * 6, 25);
+    const timer = setTimeout(() => {
+      Animated.spring(animValue, {
+        toValue: 1,
+        tension: 260,
+        friction: 18,
+        useNativeDriver: true,
+      }).start();
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [filterKey, animValue, index]);
+
+  const translateY = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [10, 0],
+  });
+
+  const scale = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.98, 1],
+  });
+
+  const opacity = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.2, 1],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity,
+          transform: [{ translateY }, { scale }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
 const getClosingSoonStatus = (closeTimeStr, now) => {
   if (!closeTimeStr) return null;
   
@@ -471,31 +525,27 @@ export default function RestaurantMenuScreen() {
   const offerTitle = restaurantDetail?.offerTitle || passedOfferTitle;
   const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
-  // Always show loading view when opening restaurant menu until fetch and presentation ready
-  const [loading, setLoading] = useState(true);
+  // Show loading view only if menu items are not yet loaded in cache/Redux
+  const [loading, setLoading] = useState(() => menuItems.length === 0);
   const hasFetchedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
-    const minDelayPromise = new Promise((resolve) => setTimeout(resolve, 450));
     const targetId = restId || paramRestId || urlId;
 
-    let fetchPromise = Promise.resolve();
     if (targetId && !hasFetchedRef.current) {
       hasFetchedRef.current = true;
-      fetchPromise = dispatch(fetchRestaurantMenu(targetId));
+      dispatch(fetchRestaurantMenu(targetId)).finally(() => {
+        if (isMounted) setLoading(false);
+      });
+    } else if (menuItems.length > 0) {
+      setLoading(false);
     }
-
-    Promise.all([minDelayPromise, fetchPromise]).finally(() => {
-      if (isMounted) {
-        setLoading(false);
-      }
-    });
 
     return () => {
       isMounted = false;
     };
-  }, [dispatch, restId, paramRestId, urlId]);
+  }, [dispatch, restId, paramRestId, urlId, menuItems.length]);
 
   // Background polling for menu items status (every 10 minutes)
   useEffect(() => {
@@ -916,18 +966,20 @@ const isItemAvailable = (item) => {
         {/* 2-Column Cards Grid */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
           {group.items.map((foodItem, idx) => (
-            <View
+            <AnimatedCardWrapper
               key={foodItem._id || foodItem.itemId || `food_${group.title}_${idx}`}
+              index={idx}
+              filterKey={`${filterType}_${selectedCategory || ''}_${searchQuery}_${sortBy}`}
               style={{ width: '48%' }}
             >
               {renderItemCard({ item: foodItem })}
-            </View>
+            </AnimatedCardWrapper>
           ))}
           {group.items.length % 2 !== 0 && <View style={{ width: '48%' }} />}
         </View>
       </View>
     );
-  }, [renderItemCard]);
+  }, [renderItemCard, filterType, selectedCategory, searchQuery, sortBy]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';
@@ -949,9 +1001,9 @@ const isItemAvailable = (item) => {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }]}
         onScroll={handleScroll}
         scrollEventThrottle={16}
-        initialNumToRender={15}
-        maxToRenderPerBatch={15}
-        windowSize={11}
+        initialNumToRender={30}
+        maxToRenderPerBatch={30}
+        windowSize={15}
         removeClippedSubviews={false}
         ListHeaderComponent={
           <>

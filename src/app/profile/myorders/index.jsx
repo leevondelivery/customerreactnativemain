@@ -1,12 +1,13 @@
 import { Feather } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   Text,
   TouchableOpacity,
@@ -275,26 +276,34 @@ export default function MyOrdersScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
 
+  const handleBack = useCallback(() => {
+    try {
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/profile');
+      }
+    } catch (_e) {
+      router.replace('/profile');
+    }
+    return true;
+  }, [router]);
+
   useFocusEffect(
     useCallback(() => {
-      const onBackPress = () => {
-        if (router.canGoBack()) {
-          router.back();
-        } else {
-          router.replace('/profile');
-        }
-        return true;
-      };
-
-      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      const subscription = BackHandler.addEventListener('hardwareBackPress', handleBack);
       return () => subscription.remove();
-    }, [router])
+    }, [handleBack])
   );
 
   const orders = useSelector((state) => state.restaurants.orders || []);
   const profileLoaded = useSelector((state) => state.restaurants.profileLoaded);
+  const profileLoadedUserId = useSelector((state) => state.restaurants.profileLoadedUserId);
+  const profileLoading = useSelector((state) => state.restaurants.profileLoading);
 
-  const [loading, setLoading] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState('');
+  const [screenLoading, setScreenLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [printingOrderId, setPrintingOrderId] = useState(null);
 
   // Invoice Preview Modal states
@@ -372,23 +381,48 @@ export default function MyOrdersScreen() {
     }
   };
 
-  useEffect(() => {
-    let isMounted = true;
-    const checkAndFetch = async () => {
-      try {
-        const userid = await AsyncStorage.getItem('userid');
-        if (userid && !profileLoaded) {
-          await dispatch(fetchProfileData(userid));
-        }
-      } catch (err) {
-        console.error('Error fetching orders in background:', err);
-      } finally {
-        if (isMounted) setLoading(false);
+  // Always check current logged-in user and fetch their specific orders
+  const loadUserOrders = useCallback(async (isPullToRefresh = false) => {
+    if (isPullToRefresh) setRefreshing(true);
+    try {
+      const userid = await AsyncStorage.getItem('userid');
+      if (userid) {
+        const uidStr = String(userid).trim();
+        setCurrentUserId(uidStr);
+        // Unblock UI immediately on frame 0
+        setScreenLoading(false);
+        // Fetch fresh orders in background
+        dispatch(fetchProfileData(uidStr)).finally(() => {
+          setRefreshing(false);
+        });
+      } else {
+        setCurrentUserId('');
+        setScreenLoading(false);
+        setRefreshing(false);
       }
-    };
-    checkAndFetch();
-    return () => { isMounted = false; };
+    } catch (err) {
+      console.error('[MyOrders] Error fetching orders:', err);
+      setScreenLoading(false);
+      setRefreshing(false);
+    }
   }, [dispatch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadUserOrders(false);
+    }, [loadUserOrders])
+  );
+
+  const displayOrders = useMemo(() => {
+    if (!Array.isArray(orders)) return [];
+    const activeUid = currentUserId || profileLoadedUserId || '';
+    return orders.filter((o) => {
+      if (!o) return false;
+      const oUid = String(o.userId || o.user_id || o.userid || o.customerId || o.customer_id || '').trim();
+      if (!oUid || !activeUid) return true; // keep if backend omits field in response
+      return oUid === activeUid;
+    });
+  }, [orders, currentUserId, profileLoadedUserId]);
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -408,19 +442,20 @@ export default function MyOrdersScreen() {
     if (!dateStr) return '';
     try {
       const date = new Date(dateStr);
-      return date.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
+      if (!isNaN(date.getTime())) {
+        return date.toLocaleDateString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+        });
+      }
+      return String(dateStr).split(',')[0];
     } catch {
-      return dateStr;
+      return String(dateStr);
     }
   };
 
-  if (loading) {
-    return <LoadingView />;
-  }
+  const isInitialLoading = (!profileLoaded || profileLoading || screenLoading) && displayOrders.length === 0;
 
   return (
     <View style={styles.container}>
@@ -430,10 +465,18 @@ export default function MyOrdersScreen() {
         showsVerticalScrollIndicator={false}
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => loadUserOrders(true)}
+            colors={['#1E3545']}
+            tintColor="#1E3545"
+          />
+        }
       >
         {/* Custom Header */}
         <View style={styles.header}>
-          <TouchableOpacity style={[styles.backButton, styles.shadow]} onPress={() => router.replace('/profile')} activeOpacity={0.8}>
+          <TouchableOpacity style={[styles.backButton, styles.shadow]} onPress={handleBack} activeOpacity={0.8}>
             <Feather name="chevron-left" size={24} color="#000000" />
           </TouchableOpacity>
 
@@ -445,14 +488,21 @@ export default function MyOrdersScreen() {
           <View style={styles.placeholderRight} />
         </View>
 
-        {/* Orders List */}
-        {orders.length === 0 ? (
+        {/* Orders List or Loader */}
+        {isInitialLoading ? (
+          <View style={{ paddingVertical: 60, alignItems: 'center', justifyContent: 'center' }}>
+            <ActivityIndicator size="large" color="#1E3545" />
+            <Text style={{ marginTop: 14, fontSize: 14, color: '#666666', fontWeight: '600' }}>
+              Loading your orders...
+            </Text>
+          </View>
+        ) : displayOrders.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Feather name="inbox" size={48} color="#C8C7CC" />
             <Text style={styles.emptyText}>No completed orders yet</Text>
           </View>
         ) : (
-          orders.map((order) => (
+          displayOrders.map((order) => (
             <View key={order._id || order.orderId} style={[styles.orderCard, styles.shadow]}>
               {/* Header */}
               <View style={styles.orderCardHeader}>
