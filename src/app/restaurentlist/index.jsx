@@ -34,7 +34,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
 import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, setSavedAddressesRedux, skipLocation } from '../../store/locationSlice';
-import { fetchAllRestaurantMenus, fetchRestaurants, loadCachedRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
+import { fetchAllRestaurantMenus, fetchRestaurantMenu, fetchRestaurants, loadCachedRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/restaurentlist.styles';
 import { useTabBar } from '../_layout';
 
@@ -65,69 +65,19 @@ const isTextMatchingQuery = (text, query) => {
 
 // Layout animation preset for seamless layout reflows on filter / sort
 const SMOOTH_LAYOUT_ANIMATION = {
-  duration: 300,
+  duration: 200,
   create: {
     type: LayoutAnimation.Types.easeInEaseOut,
     property: LayoutAnimation.Properties.opacity,
   },
   update: {
-    type: LayoutAnimation.Types.spring,
-    springDamping: 0.8,
+    type: LayoutAnimation.Types.easeInEaseOut,
   },
   delete: {
     type: LayoutAnimation.Types.easeInEaseOut,
     property: LayoutAnimation.Properties.opacity,
   },
 };
-
-// Smooth & responsive animated wrapper for card transitions when filtering/sorting
-function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const [animValue] = useState(() => new Animated.Value(0));
-
-  useEffect(() => {
-    animValue.setValue(0);
-    const delay = Math.min(index * 30, 150);
-    const timer = setTimeout(() => {
-      Animated.spring(animValue, {
-        toValue: 1,
-        tension: 100,
-        friction: 9,
-        useNativeDriver: true,
-      }).start();
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [filterKey, animValue, index]);
-
-  const translateY = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [20, 0],
-  });
-
-  const scale = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.95, 1],
-  });
-
-  const opacity = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
-
-  return (
-    <Animated.View
-      style={[
-        style,
-        {
-          opacity,
-          transform: [{ translateY }, { scale }],
-        },
-      ]}
-    >
-      {children}
-    </Animated.View>
-  );
-}
 
 // A cross-platform image component to bypass React Native Web's CORS checks on web
 function CarouselImage({ uri, style }) {
@@ -241,7 +191,7 @@ export default function RestaurantListScreen() {
   useEffect(() => {
     const timer = setInterval(() => {
       setNowTime(new Date());
-    }, 5000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -538,6 +488,10 @@ export default function RestaurantListScreen() {
       triggerToast('THIS RESTAURANT IS CURRENTLY CLOSED!', 'warning');
       return;
     }
+    const targetId = item._id || item.restId;
+    if (targetId) {
+      dispatch(fetchRestaurantMenu(targetId));
+    }
     router.push({
       pathname: `/restaurentlist/${item._id || item.restId}`,
       params: {
@@ -670,12 +624,12 @@ export default function RestaurantListScreen() {
   // Scroll handler for hiding/showing floating tab bar
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
-    const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
+    const diff = currentOffset - lastOffsetY.current;
 
-    if (Math.abs(currentOffset - lastOffsetY.current) > 15) {
-      if (direction === 'down' && currentOffset > 60) {
+    if (Math.abs(diff) > 3) {
+      if (diff > 0 && currentOffset > 25) {
         hideTabBar();
-      } else if (direction === 'up') {
+      } else if (diff < 0) {
         showTabBar();
       }
       lastOffsetY.current = currentOffset;
@@ -693,12 +647,12 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Background Menu Prefetching for Instant Item Search (deferred to prevent screen transition lag)
+  // Background Menu Prefetching for Instant Item Search & Instant Menu Open
   useEffect(() => {
     if (restaurants && restaurants.length > 0) {
       const timer = setTimeout(() => {
         dispatch(fetchAllRestaurantMenus(restaurants));
-      }, 1200);
+      }, 200);
       return () => clearTimeout(timer);
     }
   }, [dispatch, restaurants]);
@@ -1424,11 +1378,7 @@ export default function RestaurantListScreen() {
           const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
           return (
-            <AnimatedCardWrapper
-              key={item._id || item.restId}
-              index={cardIdx}
-              filterKey={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
-            >
+            <View key={item._id || item.restId}>
               <TouchableOpacity
                 style={[
                   styles.restaurantCard,
@@ -1590,7 +1540,7 @@ export default function RestaurantListScreen() {
                   ) : null}
                 </View>
               </TouchableOpacity>
-            </AnimatedCardWrapper>
+            </View>
           );
         })}
       </ScrollView>

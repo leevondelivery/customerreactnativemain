@@ -6,6 +6,7 @@ import { useTabBar } from '../_layout';
 import {
   Alert,
   Animated,
+  Easing,
   FlatList,
   Image,
   LayoutAnimation,
@@ -52,69 +53,19 @@ const isTextMatchingQuery = (text, query) => {
 
 // Layout animation preset for seamless layout reflows on filter / sort
 const SMOOTH_LAYOUT_ANIMATION = {
-  duration: 300,
+  duration: 200,
   create: {
     type: LayoutAnimation.Types.easeInEaseOut,
     property: LayoutAnimation.Properties.opacity,
   },
   update: {
-    type: LayoutAnimation.Types.spring,
-    springDamping: 0.8,
+    type: LayoutAnimation.Types.easeInEaseOut,
   },
   delete: {
     type: LayoutAnimation.Types.easeInEaseOut,
     property: LayoutAnimation.Properties.opacity,
   },
 };
-
-// Smooth & responsive animated wrapper for card transitions when filtering/sorting
-function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const [animValue] = useState(() => new Animated.Value(0));
-
-  useEffect(() => {
-    animValue.setValue(0);
-    const delay = Math.min(index * 30, 150);
-    const timer = setTimeout(() => {
-      Animated.spring(animValue, {
-        toValue: 1,
-        tension: 100,
-        friction: 9,
-        useNativeDriver: true,
-      }).start();
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [filterKey, animValue, index]);
-
-  const translateY = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [20, 0],
-  });
-
-  const scale = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.95, 1],
-  });
-
-  const opacity = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
-
-  return (
-    <Animated.View
-      style={[
-        style,
-        {
-          opacity,
-          transform: [{ translateY }, { scale }],
-        },
-      ]}
-    >
-      {children}
-    </Animated.View>
-  );
-}
 
 const EMPTY_ARRAY = [];
 
@@ -151,29 +102,36 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
 export default function RestaurantMenuScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
+  const isBannerHidden = useRef(false);
   const bannerAnimY = useRef(new Animated.Value(0)).current;
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
-    const direction = currentOffset > lastOffsetY.current ? 'down' : 'up';
+    const diff = currentOffset - lastOffsetY.current;
 
-    if (Math.abs(currentOffset - lastOffsetY.current) > 8) {
-      if (direction === 'down' && currentOffset > 40) {
-        hideTabBar();
-        Animated.spring(bannerAnimY, {
-          toValue: 72,
-          tension: 160,
-          friction: 14,
-          useNativeDriver: true,
-        }).start();
-      } else if (direction === 'up') {
-        showTabBar();
-        Animated.spring(bannerAnimY, {
-          toValue: 0,
-          tension: 160,
-          friction: 14,
-          useNativeDriver: true,
-        }).start();
+    if (Math.abs(diff) > 3) {
+      if (diff > 0 && currentOffset > 25) {
+        if (!isBannerHidden.current) {
+          isBannerHidden.current = true;
+          hideTabBar();
+          Animated.timing(bannerAnimY, {
+            toValue: 80,
+            duration: 130,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start();
+        }
+      } else if (diff < 0) {
+        if (isBannerHidden.current) {
+          isBannerHidden.current = false;
+          showTabBar();
+          Animated.timing(bannerAnimY, {
+            toValue: 0,
+            duration: 130,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }).start();
+        }
       }
       lastOffsetY.current = currentOffset;
     }
@@ -181,11 +139,12 @@ export default function RestaurantMenuScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      isBannerHidden.current = false;
       showTabBar();
-      Animated.spring(bannerAnimY, {
+      Animated.timing(bannerAnimY, {
         toValue: 0,
-        tension: 160,
-        friction: 14,
+        duration: 130,
+        easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }).start();
     }, [showTabBar, bannerAnimY])
@@ -196,7 +155,7 @@ export default function RestaurantMenuScreen() {
   useEffect(() => {
     const timer = setInterval(() => {
       setNowTime(new Date());
-    }, 5000);
+    }, 30000);
     return () => clearInterval(timer);
   }, []);
 
@@ -221,6 +180,35 @@ export default function RestaurantMenuScreen() {
   const [allScale] = useState(() => new Animated.Value(1));
   const [vegScale] = useState(() => new Animated.Value(1));
   const [nonVegScale] = useState(() => new Animated.Value(1));
+
+  // Animated values for smooth Category Drawer & Tab Handle
+  const [sidebarAnim] = useState(() => new Animated.Value(0)); // 0: closed, 1: open
+  const [tabHandleScale] = useState(() => new Animated.Value(1));
+
+  const chevronRotate = sidebarAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '180deg'],
+  });
+
+  const animateSidebar = (open) => {
+    setIsSidebarOpen(open);
+    Animated.spring(sidebarAnim, {
+      toValue: open ? 1 : 0,
+      tension: 65,
+      friction: 11,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handleSelectCategoryFromDrawer = (cat) => {
+    if (Platform.OS === 'ios' || Platform.OS === 'android') {
+      try {
+        LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
+      } catch (_e) {}
+    }
+    setSelectedCategory(cat);
+    animateSidebar(false);
+  };
 
   const animateButtonPress = (scaleAnim) => {
     Animated.sequence([
@@ -278,50 +266,92 @@ export default function RestaurantMenuScreen() {
   const [pendingItemToAdd, setPendingItemToAdd] = useState(null);
   const [previousRestaurantName, setPreviousRestaurantName] = useState('');
 
-  // Toast state and animated values
-  const [toastConfig, setToastConfig] = useState({ visible: false, message: '', type: 'success' });
+  // Toast state and animated values (smooth spring entrance & pulse on repeat clicks)
+  const [toastConfig, setToastConfig] = useState({ message: 'ADDED TO CART SUCCESSFULLY!', type: 'success' });
   const [toastOpacity] = useState(() => new Animated.Value(0));
-  const [toastTranslateY] = useState(() => new Animated.Value(30));
+  const [toastTranslateY] = useState(() => new Animated.Value(18));
+  const [toastScale] = useState(() => new Animated.Value(0.96));
   const toastTimeoutRef = useRef(null);
+  const isToastActiveRef = useRef(false);
+
+  // Smooth entrance and exit animation for fixed cart banner
+  const [cartBannerAnim] = useState(() => new Animated.Value(0));
 
   const triggerToast = (message = 'ADDED TO CART SUCCESSFULLY!', type = 'success') => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
 
-    toastOpacity.setValue(0);
-    toastTranslateY.setValue(30);
-    setToastConfig({ visible: true, message, type });
+    setToastConfig({ message, type });
 
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 1,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    if (isToastActiveRef.current) {
+      // Gentle micro-lift if toast is already active on screen
+      Animated.sequence([
+        Animated.timing(toastTranslateY, {
+          toValue: -6,
+          duration: 100,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+        Animated.spring(toastTranslateY, {
+          toValue: 0,
+          friction: 8,
+          tension: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      isToastActiveRef.current = true;
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(18);
+      toastScale.setValue(0.96);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 260,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 360,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(toastScale, {
+          toValue: 1,
+          friction: 8,
+          tension: 160,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
 
     toastTimeoutRef.current = setTimeout(() => {
       Animated.parallel([
         Animated.timing(toastOpacity, {
           toValue: 0,
-          duration: 250,
+          duration: 220,
+          easing: Easing.in(Easing.cubic),
           useNativeDriver: true,
         }),
         Animated.timing(toastTranslateY, {
-          toValue: 30,
-          duration: 250,
+          toValue: 12,
+          duration: 220,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastScale, {
+          toValue: 0.96,
+          duration: 220,
+          easing: Easing.in(Easing.cubic),
           useNativeDriver: true,
         }),
       ]).start(() => {
-        setToastConfig({ visible: false, message: '', type: 'success' });
+        isToastActiveRef.current = false;
       });
-    }, type === 'warning' ? 3000 : 2000);
+    }, type === 'warning' ? 2800 : 2000);
   };
 
   const formatTimeAMPM = (timeStr) => {
@@ -377,7 +407,7 @@ export default function RestaurantMenuScreen() {
   };
 
   useEffect(() => {
-    const interval = setInterval(checkActiveOrderStatus, 5000);
+    const interval = setInterval(checkActiveOrderStatus, 20000);
     return () => clearInterval(interval);
   }, []);
 
@@ -403,23 +433,69 @@ export default function RestaurantMenuScreen() {
   );
 
   // Redux store
-  const menuItems = useSelector((state) => state.restaurants.menus[restId] || EMPTY_ARRAY);
-  const menuLoading = useSelector((state) => state.restaurants.menuLoading[restId] || false);
-  const restaurants = useSelector((state) => state.restaurants.list);
-  const restaurantDetail = restaurants.find(r => r.restId === restId || r._id === restId);
+  const restaurants = useSelector((state) => state.restaurants.list || EMPTY_ARRAY);
+  const restaurantDetail = restaurants.find(r => 
+    (restId && (r.restId === restId || r._id === restId)) ||
+    (paramRestId && (r.restId === paramRestId || r._id === paramRestId)) ||
+    (urlId && (r.restId === urlId || r._id === urlId))
+  );
+
+  const menuItems = useSelector((state) => {
+    const menus = state.restaurants?.menus || {};
+    return (
+      (restId && menus[restId]?.length ? menus[restId] : null) ||
+      (paramRestId && menus[paramRestId]?.length ? menus[paramRestId] : null) ||
+      (urlId && menus[urlId]?.length ? menus[urlId] : null) ||
+      (restaurantDetail?.restId && menus[restaurantDetail.restId]?.length ? menus[restaurantDetail.restId] : null) ||
+      (restaurantDetail?._id && menus[restaurantDetail._id]?.length ? menus[restaurantDetail._id] : null) ||
+      EMPTY_ARRAY
+    );
+  });
+
+  const menuLoading = useSelector((state) => {
+    const ml = state.restaurants?.menuLoading || {};
+    return Boolean(
+      (restId && ml[restId]) ||
+      (paramRestId && ml[paramRestId]) ||
+      (urlId && ml[urlId]) ||
+      (restaurantDetail?.restId && ml[restaurantDetail.restId]) ||
+      (restaurantDetail?._id && ml[restaurantDetail._id])
+    );
+  });
+
   const roadDistances = useSelector((state) => state.location.roadDistances);
   const distanceText = roadDistances[restaurantDetail?._id || restaurantDetail?.restId || restId];
+  const displayAddress = passedAddress || restaurantDetail?.address || '';
   const openTime = restaurantDetail?.openTime || passedOpenTime;
   const closeTime = restaurantDetail?.closeTime || passedCloseTime;
   const offerTitle = restaurantDetail?.offerTitle || passedOfferTitle;
   const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
-  // Fetch restaurant menu on mount
+  // Always show loading view when opening restaurant menu until fetch and presentation ready
+  const [loading, setLoading] = useState(true);
+  const hasFetchedRef = useRef(false);
+
   useEffect(() => {
-    if (restId) {
-      dispatch(fetchRestaurantMenu(restId));
+    let isMounted = true;
+    const minDelayPromise = new Promise((resolve) => setTimeout(resolve, 450));
+    const targetId = restId || paramRestId || urlId;
+
+    let fetchPromise = Promise.resolve();
+    if (targetId && !hasFetchedRef.current) {
+      hasFetchedRef.current = true;
+      fetchPromise = dispatch(fetchRestaurantMenu(targetId));
     }
-  }, [dispatch, restId]);
+
+    Promise.all([minDelayPromise, fetchPromise]).finally(() => {
+      if (isMounted) {
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [dispatch, restId, paramRestId, urlId]);
 
   // Background polling for menu items status (every 10 minutes)
   useEffect(() => {
@@ -432,14 +508,7 @@ export default function RestaurantMenuScreen() {
     return () => clearInterval(interval);
   }, [dispatch, restId]);
 
-  const [initialLoading, setInitialLoading] = useState(true);
 
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setInitialLoading(false);
-    }, 600);
-    return () => clearTimeout(timer);
-  }, []);
 
 
 
@@ -497,6 +566,24 @@ const isItemAvailable = (item) => {
     return insets.bottom > 0 ? insets.bottom + 94 : (Platform.OS === 'ios' ? 120 : 114);
   }, [insets.bottom]);
 
+  useEffect(() => {
+    if (cartItemCount > 0) {
+      Animated.spring(cartBannerAnim, {
+        toValue: 1,
+        tension: 180,
+        friction: 14,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      Animated.timing(cartBannerAnim, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [cartItemCount, cartBannerAnim]);
+
   // Memoized filter and sort items for ultra-fast instant filter toggling
   const sortedItems = useMemo(() => {
     if (!menuItems || menuItems.length === 0) return EMPTY_ARRAY;
@@ -504,7 +591,7 @@ const isItemAvailable = (item) => {
     const query = searchQuery.trim();
     const hasQuery = Boolean(query);
     const filterAll = filterType === 'All';
-    const catAll = selectedCategory === 'All';
+    const catAll = !selectedCategory || selectedCategory === 'All';
     const selectedCatLower = catAll ? '' : selectedCategory.toLowerCase();
 
     const checkMatch = (item) => {
@@ -521,30 +608,33 @@ const isItemAvailable = (item) => {
 
     return menuItems
       .filter((item) => {
-        // Step 1: Filter by Veg/Non-Veg type first
+        // Step 1: Filter by Veg/Non-Veg type
         if (!filterAll) {
           const itemVegType = (item.vegOrNonVeg || 'Veg').toLowerCase();
           if (filterType === 'Veg' && itemVegType !== 'veg') return false;
           if (filterType === 'Non-Veg' && itemVegType !== 'non-veg') return false;
         }
 
-        // Step 2: Filter by category
-        if (!catAll) {
-          const itemCat = (item.category || '').toLowerCase();
-          if (itemCat !== selectedCatLower) return false;
-        }
-
+        // Keep all items so all other categories are shown below
         return true;
       })
       .sort((a, b) => {
-        // Priority 1: Available items before out-of-stock items
+        // Priority 1: If a category is selected, items belonging to it are placed at the top (UP)
+        if (!catAll) {
+          const catA = (a.category || '').toLowerCase() === selectedCatLower;
+          const catB = (b.category || '').toLowerCase() === selectedCatLower;
+          if (catA && !catB) return -1;
+          if (!catA && catB) return 1;
+        }
+
+        // Priority 2: Available items before out-of-stock items
         const availA = isItemAvailable(a);
         const availB = isItemAvailable(b);
 
         if (availA && !availB) return -1;
         if (!availA && availB) return 1;
 
-        // Priority 2: Search query matching items at top
+        // Priority 3: Search query matching items at top
         if (hasQuery) {
           const matchA = checkMatch(a);
           const matchB = checkMatch(b);
@@ -552,7 +642,7 @@ const isItemAvailable = (item) => {
           if (!matchA && matchB) return 1;
         }
 
-        // Priority 3: Price sorting
+        // Priority 4: Price sorting
         if (sortBy === 'Low to High') {
           return (a.price || 0) - (b.price || 0);
         }
@@ -612,10 +702,12 @@ const isItemAvailable = (item) => {
       }
 
       setCart(currentCart);
-      await AsyncStorage.setItem('cart', JSON.stringify(currentCart));
       if (change > 0) {
         triggerToast();
       }
+      AsyncStorage.setItem('cart', JSON.stringify(currentCart)).catch((err) => {
+        console.error('Error saving cart to storage:', err);
+      });
     } catch (error) {
       console.error('Error updating quantity:', error);
       Alert.alert('Error', 'Failed to update item quantity.');
@@ -757,8 +849,19 @@ const isItemAvailable = (item) => {
       groupMap[catTitle].push(item);
     }
 
+    if (selectedCategory && selectedCategory !== 'All') {
+      const selCatLower = selectedCategory.toLowerCase().trim();
+      groups.sort((a, b) => {
+        const isASel = a.title.toLowerCase().trim() === selCatLower;
+        const isBSel = b.title.toLowerCase().trim() === selCatLower;
+        if (isASel && !isBSel) return -1;
+        if (!isASel && isBSel) return 1;
+        return 0;
+      });
+    }
+
     return groups;
-  }, [sortedItems]);
+  }, [sortedItems, selectedCategory]);
 
   const renderCategoryGroup = useCallback(({ item: group }) => {
     return (
@@ -810,30 +913,28 @@ const isItemAvailable = (item) => {
           }} />
         </View>
 
-        {/* 2-Column Cards Grid with smooth fast entrance animation */}
+        {/* 2-Column Cards Grid */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
           {group.items.map((foodItem, idx) => (
-            <AnimatedCardWrapper
-              key={foodItem._id || foodItem.itemId}
-              index={idx}
-              filterKey={`${filterType}_${sortBy}_${selectedCategory}_${searchQuery}`}
+            <View
+              key={foodItem._id || foodItem.itemId || `food_${group.title}_${idx}`}
               style={{ width: '48%' }}
             >
               {renderItemCard({ item: foodItem })}
-            </AnimatedCardWrapper>
+            </View>
           ))}
           {group.items.length % 2 !== 0 && <View style={{ width: '48%' }} />}
         </View>
       </View>
     );
-  }, [renderItemCard, filterType, sortBy, selectedCategory, searchQuery]);
+  }, [renderItemCard]);
 
   const isWarningToast = toastConfig.type === 'warning';
-  const toastBgColor = isWarningToast ? '#D32F2F' : '#008000';
-  const toastIconColor = isWarningToast ? '#D32F2F' : '#008000';
+  const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';
+  const toastIconColor = isWarningToast ? '#D32F2F' : '#2B783E';
   const toastIconName = isWarningToast ? 'alert' : 'checkmark';
 
-  if (initialLoading || (menuLoading && menuItems.length === 0)) {
+  if (loading) {
     return <LoadingView />;
   }
 
@@ -848,18 +949,23 @@ const isItemAvailable = (item) => {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }]}
         onScroll={handleScroll}
         scrollEventThrottle={16}
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={5}
-        removeClippedSubviews={Platform.OS !== 'web'}
+        initialNumToRender={15}
+        maxToRenderPerBatch={15}
+        windowSize={11}
+        removeClippedSubviews={false}
         ListHeaderComponent={
           <>
             {/* Restaurant Hero Card (redesigned) */}
             <View style={styles.heroCard}>
               <View style={styles.heroInfoCard}>
-                <Text style={styles.heroNameText}>{passedName || 'Restaurant'}</Text>
-                {passedAddress ? (
-                  <Text style={styles.heroAddressText}>{passedAddress}</Text>
+                <Text style={styles.heroNameText}>{passedName || restaurantDetail?.name || 'Restaurant'}</Text>
+                {displayAddress ? (
+                  <View style={styles.heroAddressContainer}>
+                    <Ionicons name="location-sharp" size={13} color="#E05A47" style={{ marginTop: 1 }} />
+                    <Text style={styles.heroAddressText} numberOfLines={2}>
+                      {displayAddress}
+                    </Text>
+                  </View>
                 ) : null}
                 <View style={styles.heroSpecsRow}>
                   <View style={styles.heroSpecRating}>
@@ -1079,8 +1185,42 @@ const isItemAvailable = (item) => {
         }
       />
 
+      {/* Dimmed Backdrop overlay behind drawer */}
+      <Animated.View
+        pointerEvents={isSidebarOpen ? 'auto' : 'none'}
+        style={[
+          styles.drawerBackdrop,
+          {
+            opacity: sidebarAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 0.45],
+            }),
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={StyleSheet.absoluteFill}
+          activeOpacity={1}
+          onPress={() => animateSidebar(false)}
+        />
+      </Animated.View>
+
       {/* Category Drawer Sidebar */}
-      <View style={[styles.drawerContainer, isSidebarOpen ? styles.drawerOpen : styles.drawerClosed]}>
+      <Animated.View
+        style={[
+          styles.drawerContainer,
+          {
+            transform: [
+              {
+                translateX: sidebarAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [240, 0],
+                }),
+              },
+            ],
+          },
+        ]}
+      >
         {/* Header: FIND OUT */}
         <View style={styles.drawerHeaderContainer}>
           <Text style={styles.drawerHeaderTitle}>FIND OUT</Text>
@@ -1088,7 +1228,7 @@ const isItemAvailable = (item) => {
 
           <TouchableOpacity
             style={styles.drawerCloseButton}
-            onPress={() => setIsSidebarOpen(false)}
+            onPress={() => animateSidebar(false)}
             activeOpacity={0.7}
           >
             <Feather name="x" size={20} color="#1E3545" />
@@ -1103,10 +1243,7 @@ const isItemAvailable = (item) => {
               <TouchableOpacity
                 key={cat}
                 style={[styles.categoryNavItem, isActive && styles.categoryNavItemActive]}
-                onPress={() => {
-                  setSelectedCategory(cat);
-                  setIsSidebarOpen(false); // Close sidebar after selecting category
-                }}
+                onPress={() => handleSelectCategoryFromDrawer(cat)}
                 activeOpacity={0.8}
               >
                 <Text style={[styles.categoryNavText, isActive && styles.categoryNavTextActive]}>
@@ -1118,72 +1255,95 @@ const isItemAvailable = (item) => {
         </ScrollView>
 
         {/* Categories floating handle tab (attached to the left edge of right sidebar) */}
-        <TouchableOpacity
-          style={styles.categoriesTabHandle}
-          onPress={() => setIsSidebarOpen(!isSidebarOpen)}
-          activeOpacity={0.85}
-        >
-          <View style={{
-            width: 26,
-            height: 26,
-            borderRadius: 13,
-            backgroundColor: '#FFFFFF',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginBottom: 6,
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.25,
-            shadowRadius: 2,
-            elevation: 3,
-          }}>
-            <Ionicons
-              name={isSidebarOpen ? "close" : "restaurant-outline"}
-              size={14}
-              color="#1E3545"
-            />
-          </View>
-          <Text style={styles.categoriesTabHandleText}>
-            {"C\nA\nT\nE\nG\nO\nR\nI\nE\nS"}
-          </Text>
-          <Feather
-            name={isSidebarOpen ? "chevron-right" : "chevron-left"}
-            size={14}
-            color="#FFFFFF"
-            style={{ marginTop: 6 }}
-          />
-        </TouchableOpacity>
-      </View>
-
-      {/* Toast Notification Banner */}
-      {toastConfig.visible && (
-        <Animated.View
-          style={[
-            styles.toastContainer,
-            {
-              bottom: cartItemCount > 0 ? bannerBottom + 65 : 100,
-              opacity: toastOpacity,
-              transform: [{ translateY: Animated.add(toastTranslateY, bannerAnimY) }],
-            },
-          ]}
-        >
-          <View style={[styles.toastContent, { backgroundColor: toastBgColor }]}>
-            <View style={styles.toastIconContainer}>
-              <Ionicons name={toastIconName} size={12} color={toastIconColor} />
+        <Animated.View style={[styles.categoriesTabHandleWrapper, { transform: [{ scale: tabHandleScale }] }]}>
+          <TouchableOpacity
+            style={styles.categoriesTabHandle}
+            onPress={() => {
+              animateButtonPress(tabHandleScale);
+              animateSidebar(!isSidebarOpen);
+            }}
+            activeOpacity={0.85}
+          >
+            <View style={styles.categoriesTabHandleIconWrap}>
+              <Ionicons
+                name={isSidebarOpen ? "close" : "restaurant-outline"}
+                size={14}
+                color="#1E3545"
+              />
             </View>
-            <Text style={styles.toastText}>{toastConfig.message}</Text>
-          </View>
+            <Text style={styles.categoriesTabHandleText}>
+              {"C\nA\nT\nE\nG\nO\nR\nI\nE\nS"}
+            </Text>
+            <Animated.View style={{ transform: [{ rotate: chevronRotate }] }}>
+              <Feather
+                name="chevron-left"
+                size={14}
+                color="#FFFFFF"
+                style={{ marginTop: 6 }}
+              />
+            </Animated.View>
+          </TouchableOpacity>
         </Animated.View>
-      )}
+      </Animated.View>
+
+      {/* Toast Notification Banner (Persistent Pre-allocated Native Surface) */}
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.toastContainer,
+          {
+            bottom: bannerBottom + 58,
+            opacity: toastOpacity,
+            transform: [
+              { translateY: bannerAnimY },
+              { translateY: toastTranslateY },
+              { scale: toastScale },
+            ],
+          },
+        ]}
+      >
+        <View style={[styles.toastContent, { backgroundColor: toastBgColor }]}>
+          <View style={styles.toastIconContainer}>
+            <Ionicons name={toastIconName} size={13} color={toastIconColor} />
+          </View>
+          <Text style={styles.toastText}>{toastConfig.message || 'ADDED TO CART SUCCESSFULLY!'}</Text>
+        </View>
+      </Animated.View>
 
       {/* Fixed Green Cart Banner */}
-      {cartItemCount > 0 && (
+      <Animated.View
+        pointerEvents={cartItemCount > 0 && !isSidebarOpen ? 'auto' : 'none'}
+        style={[
+          styles.fixedCartBannerWrapper,
+          {
+            bottom: bannerBottom,
+            opacity: sidebarAnim.interpolate({
+              inputRange: [0, 0.4, 1],
+              outputRange: [1, 0, 0],
+            }),
+            transform: [{ translateY: bannerAnimY }],
+          },
+        ]}
+      >
         <Animated.View
           style={[
             styles.fixedCartBanner,
             {
-              bottom: bannerBottom,
-              transform: [{ translateY: bannerAnimY }],
+              opacity: cartBannerAnim,
+              transform: [
+                {
+                  translateY: cartBannerAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [30, 0],
+                  }),
+                },
+                {
+                  scale: cartBannerAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.94, 1],
+                  }),
+                },
+              ],
             },
           ]}
         >
@@ -1199,7 +1359,7 @@ const isItemAvailable = (item) => {
           >
             <View style={styles.cartBannerLeft}>
               <View style={styles.cartBannerIconBadge}>
-                <Feather name="shopping-bag" size={18} color="#27AE60" />
+                <Feather name="shopping-bag" size={14} color="#2B783E" />
               </View>
               <View>
                 <Text style={styles.cartBannerTitle}>
@@ -1210,11 +1370,11 @@ const isItemAvailable = (item) => {
 
             <View style={styles.cartBannerRight}>
               <Text style={styles.cartBannerBtnText}>View Cart</Text>
-              <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 4 }} />
+              <Feather name="arrow-right" size={13} color="#FFFFFF" style={{ marginLeft: 3 }} />
             </View>
           </TouchableOpacity>
         </Animated.View>
-      )}
+      </Animated.View>
       {/* Custom Replace Cart Confirmation Modal */}
       <Modal transparent visible={showReplaceCartModal} animationType="fade">
         <View style={styles.modalOverlay}>
@@ -1274,8 +1434,10 @@ const isItemAvailable = (item) => {
                         restaurantName: passedName,
                       }];
                       setCart(newCart);
-                      await AsyncStorage.setItem('cart', JSON.stringify(newCart));
                       triggerToast();
+                      AsyncStorage.setItem('cart', JSON.stringify(newCart)).catch(err => {
+                        console.error('Error saving replaced cart:', err);
+                      });
                     } catch (err) {
                       console.error('Error replacing cart:', err);
                     }
@@ -1356,15 +1518,26 @@ const styles = StyleSheet.create({
     marginRight: 16,
   },
   heroNameText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: '#1E3545',
-    marginBottom: 6,
+    marginBottom: 4,
+    letterSpacing: -0.3,
+  },
+  heroAddressContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 4,
+    marginBottom: 10,
+    marginTop: 1,
+    paddingRight: 4,
   },
   heroAddressText: {
-    fontSize: 14,
-    color: '#6C7A84',
-    marginBottom: 12,
+    fontSize: 12.5,
+    fontWeight: '500',
+    color: '#5A6B78',
+    lineHeight: 16,
+    flexShrink: 1,
   },
   heroSpecsRow: {
     flexDirection: 'row',
@@ -1641,26 +1814,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#1E3545',
   },
+  drawerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000000',
+    zIndex: 99990,
+    elevation: 20,
+  },
   drawerContainer: {
     position: 'absolute',
     top: 0,
     bottom: 0,
-    width: 220,
-    backgroundColor: 'rgb(247, 247, 235)',
-    zIndex: 1000,
+    right: 0,
+    width: 240,
+    backgroundColor: '#F9F9F6',
+    zIndex: 100000,
     shadowColor: '#000',
-    shadowOffset: { width: -3, height: 0 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowOffset: { width: -4, height: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 25,
     borderLeftWidth: 1,
     borderLeftColor: '#E8E2D4',
-  },
-  drawerOpen: {
-    right: 0,
-  },
-  drawerClosed: {
-    right: -220,
   },
   drawerHeaderContainer: {
     paddingTop: 50,
@@ -1715,25 +1889,41 @@ const styles = StyleSheet.create({
   categoryNavTextActive: {
     color: '#FFFFFF',
   },
-  categoriesTabHandle: {
+  categoriesTabHandleWrapper: {
     position: 'absolute',
-    left: -42,
-    top: '30%',
-    width: 42,
+    left: -44,
+    top: '28%',
+  },
+  categoriesTabHandle: {
+    width: 44,
     backgroundColor: '#1E3545',
     borderTopLeftRadius: 16,
     borderBottomLeftRadius: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#1E3545',
     shadowOffset: { width: -4, height: 2 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.4,
     shadowRadius: 6,
     elevation: 8,
     borderWidth: 1.5,
     borderColor: '#FFFFFF',
     borderRightWidth: 0,
+  },
+  categoriesTabHandleIconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 3,
   },
   categoriesTabHandleText: {
     fontSize: 10,
@@ -1746,31 +1936,31 @@ const styles = StyleSheet.create({
   toastContainer: {
     position: 'absolute',
     bottom: 110,
-    left: 16,
-    right: 16,
+    left: 20,
+    right: 20,
     zIndex: 9999,
     alignItems: 'center',
     justifyContent: 'center',
   },
   toastContent: {
-    backgroundColor: '#008000',
-    borderRadius: 25,
+    backgroundColor: '#2B783E',
+    borderRadius: 30,
     paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 22,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 6,
-    width: '100%',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 8,
+    maxWidth: '92%',
   },
   toastIconContainer: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1779,8 +1969,9 @@ const styles = StyleSheet.create({
   toastText: {
     color: '#FFFFFF',
     fontSize: 12,
-    fontWeight: 'bold',
-    letterSpacing: 0.5,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textAlign: 'center',
   },
   modalOverlay: {
     flex: 1,
@@ -1822,46 +2013,48 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
-  fixedCartBanner: {
+  fixedCartBannerWrapper: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 105 : 100,
     left: 16,
     right: 16,
-    backgroundColor: '#27AE60',
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    zIndex: 900,
+  },
+  fixedCartBanner: {
+    backgroundColor: '#2B783E',
+    borderRadius: 14,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 8,
-    zIndex: 9998,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.2,
+    shadowRadius: 5,
+    elevation: 6,
+    width: '100%',
   },
   cartBannerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 9,
   },
   cartBannerIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   cartBannerTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
   cartBannerSubtitle: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
     color: '#E8F5E9',
     marginTop: 1,
@@ -1870,12 +2063,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.22)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
   },
   cartBannerBtnText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#FFFFFF',
   },

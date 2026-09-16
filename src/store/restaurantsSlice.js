@@ -38,7 +38,9 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
 
       const missingRestaurants = restaurantsList.filter((rest) => {
         const id = rest.restId || rest._id;
-        return id && (!existingMenus[id] || existingMenus[id].length === 0);
+        const id2 = rest._id;
+        return (!existingMenus[id] || existingMenus[id].length === 0) &&
+               (!id2 || !existingMenus[id2] || existingMenus[id2].length === 0);
       });
 
       if (missingRestaurants.length === 0) return {};
@@ -51,10 +53,14 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
           const res = await fetch(`${API_URL}/restaurants/${id}/menu`);
           if (res.ok) {
             const data = await res.json();
-            newMenus[id] = data.items || [];
+            const items = data.items || [];
+            if (rest.restId) newMenus[rest.restId] = items;
+            if (rest._id) newMenus[rest._id] = items;
+            newMenus[id] = items;
           }
         } catch (e) {
-          newMenus[id] = [];
+          if (rest.restId) newMenus[rest.restId] = [];
+          if (rest._id) newMenus[rest._id] = [];
         }
       });
       await Promise.all(fetchPromises);
@@ -137,12 +143,59 @@ export const fetchRestaurants = createAsyncThunk(
 
 export const fetchRestaurantMenu = createAsyncThunk(
   'restaurants/fetchRestaurantMenu',
-  async (restaurantId, { rejectWithValue }) => {
+  async (restaurantId, { getState, rejectWithValue }) => {
     try {
-      const response = await fetch(`${API_URL}/restaurants/${restaurantId}/menu`);
-      if (!response.ok) return { restaurantId, items: [] };
-      const data = await response.json();
-      return { restaurantId, items: data.items || [] };
+      const state = getState();
+      const restaurants = state.restaurants?.list || [];
+      const rest = restaurants.find(r => r.restId === restaurantId || r._id === restaurantId);
+
+      const candidateIds = [
+        restaurantId,
+        rest?.restId,
+        rest?._id
+      ].filter(Boolean).filter((id, idx, arr) => arr.indexOf(id) === idx);
+
+      let items = [];
+      let fetchSuccess = false;
+
+      for (const id of candidateIds) {
+        try {
+          const response = await fetch(`${API_URL}/restaurants/${id}/menu`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+              items = data.items;
+              fetchSuccess = true;
+              break;
+            } else if (data.items && Array.isArray(data.items)) {
+              items = data.items;
+              fetchSuccess = true;
+            }
+          }
+        } catch (_e) {}
+      }
+
+      if (!fetchSuccess || items.length === 0) {
+        const existing = state.restaurants?.menus?.[restaurantId] ||
+                         (rest?.restId && state.restaurants?.menus?.[rest.restId]) ||
+                         (rest?._id && state.restaurants?.menus?.[rest._id]) ||
+                         [];
+        if (existing.length > 0) {
+          return { restaurantId, rest, items: existing };
+        }
+      }
+
+      if (items.length > 0) {
+        try {
+          const existingMenus = state.restaurants?.menus || {};
+          const updated = { ...existingMenus, [restaurantId]: items };
+          if (rest?.restId) updated[rest.restId] = items;
+          if (rest?._id) updated[rest._id] = items;
+          AsyncStorage.setItem('cached_menus_data', JSON.stringify(updated)).catch(() => {});
+        } catch (_e) {}
+      }
+
+      return { restaurantId, rest, items };
     } catch (err) {
       return { restaurantId, items: [] };
     }
@@ -151,14 +204,27 @@ export const fetchRestaurantMenu = createAsyncThunk(
 
 export const pollRestaurantMenu = createAsyncThunk(
   'restaurants/pollRestaurantMenu',
-  async (restaurantId, { rejectWithValue }) => {
+  async (restaurantId, { getState }) => {
     try {
-      const response = await fetch(`${API_URL}/restaurants/${restaurantId}/menu`);
-      if (!response.ok) return { restaurantId, items: [] };
-      const data = await response.json();
-      return { restaurantId, items: data.items || [] };
+      const state = getState();
+      const restaurants = state.restaurants?.list || [];
+      const rest = restaurants.find(r => r.restId === restaurantId || r._id === restaurantId);
+      const candidateIds = [restaurantId, rest?.restId, rest?._id].filter(Boolean);
+
+      for (const id of candidateIds) {
+        try {
+          const response = await fetch(`${API_URL}/restaurants/${id}/menu`);
+          if (response.ok) {
+            const data = await response.json();
+            if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+              return { restaurantId, rest, items: data.items };
+            }
+          }
+        } catch (_e) {}
+      }
+      return { restaurantId, rest, items: null };
     } catch (err) {
-      return { restaurantId, items: [] };
+      return { restaurantId, items: null };
     }
   }
 );
@@ -283,9 +349,19 @@ const restaurantsSlice = createSlice({
         state.menuLoading[restaurantId] = true;
       })
       .addCase(fetchRestaurantMenu.fulfilled, (state, action) => {
-        const { restaurantId, items } = action.payload;
-        state.menus[restaurantId] = items;
+        const { restaurantId, rest, items } = action.payload;
+        if (items && items.length > 0) {
+          state.menus[restaurantId] = items;
+          if (rest?.restId) state.menus[rest.restId] = items;
+          if (rest?._id) state.menus[rest._id] = items;
+        } else if (!state.menus[restaurantId] || state.menus[restaurantId].length === 0) {
+          state.menus[restaurantId] = items || [];
+          if (rest?.restId && !state.menus[rest.restId]) state.menus[rest.restId] = items || [];
+          if (rest?._id && !state.menus[rest._id]) state.menus[rest._id] = items || [];
+        }
         state.menuLoading[restaurantId] = false;
+        if (rest?.restId) state.menuLoading[rest.restId] = false;
+        if (rest?._id) state.menuLoading[rest._id] = false;
         state.error = null;
       })
       .addCase(fetchRestaurantMenu.rejected, (state, action) => {
@@ -308,8 +384,12 @@ const restaurantsSlice = createSlice({
         state.error = action.payload;
       })
       .addCase(pollRestaurantMenu.fulfilled, (state, action) => {
-        const { restaurantId, items } = action.payload;
-        state.menus[restaurantId] = items;
+        const { restaurantId, rest, items } = action.payload;
+        if (items && items.length > 0) {
+          state.menus[restaurantId] = items;
+          if (rest?.restId) state.menus[rest.restId] = items;
+          if (rest?._id) state.menus[rest._id] = items;
+        }
         state.error = null;
       });
   },

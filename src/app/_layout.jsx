@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Slot, usePathname, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { Alert, Animated, AppState, Dimensions, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View, StatusBar as RNStatusBar } from 'react-native';
+import { Alert, Animated, AppState, Dimensions, Easing, Modal, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View, StatusBar as RNStatusBar } from 'react-native';
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
@@ -442,10 +442,10 @@ export default function Layout() {
   const showTabBar = useCallback((force = false) => {
     if (isTabBarVisible.current && !force) return;
     isTabBarVisible.current = true;
-    Animated.spring(translateY, {
+    Animated.timing(translateY, {
       toValue: 0,
-      tension: 160,
-      friction: 14,
+      duration: 130,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
   }, [translateY]);
@@ -453,10 +453,10 @@ export default function Layout() {
   const hideTabBar = useCallback(() => {
     if (!isTabBarVisible.current) return;
     isTabBarVisible.current = false;
-    Animated.spring(translateY, {
+    Animated.timing(translateY, {
       toValue: 120, // offset down off-screen
-      tension: 160,
-      friction: 14,
+      duration: 130,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
   }, [translateY]);
