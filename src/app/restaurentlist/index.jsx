@@ -747,13 +747,13 @@ export default function RestaurantListScreen() {
         if (isCancelled) return;
         const hasAnyDistance = restaurants.some(r => roadDistances && (roadDistances[r._id] || roadDistances[r.restId] || roadDistances[r.id] || roadDistances[r.name]));
         if (!hasAnyDistance) {
-          hasTriggeredDistanceCalc.current = true;
           if (selectedSavedAddressId) {
             const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
             const selectedAddr = addrList.find(a => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId));
             const sLat = selectedAddr?.lat ?? selectedAddr?.latitude;
             const sLng = selectedAddr?.lng ?? selectedAddr?.longitude;
             if (sLat && sLng) {
+              hasTriggeredDistanceCalc.current = true;
               dispatch(checkLocationAndCalculateDistances({
                 restaurantsList: restaurants,
                 customCoords: { latitude: Number(sLat), longitude: Number(sLng) }
@@ -761,7 +761,24 @@ export default function RestaurantListScreen() {
               return;
             }
           }
-          dispatch(checkLocationAndCalculateDistances(restaurants));
+
+          // Only auto-dispatch GPS distance calculation if location services are already enabled and permission is granted.
+          // If location is OFF, do not prompt system turn-on here; the user will choose from Deliver To modal first.
+          let isLocationActive = false;
+          try {
+            const servicesEnabled = await Location.hasServicesEnabledAsync();
+            const permission = await Location.getForegroundPermissionsAsync();
+            if (servicesEnabled && permission.status === 'granted') {
+              isLocationActive = true;
+            }
+          } catch (locErr) {
+            console.warn('[RestaurantList] Error checking location status in triggerDistance:', locErr);
+          }
+
+          if (isLocationActive) {
+            hasTriggeredDistanceCalc.current = true;
+            dispatch(checkLocationAndCalculateDistances(restaurants));
+          }
         }
       }
     };
