@@ -45,7 +45,7 @@ export default function LoadingView() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgb(247, 247, 235)',
+    backgroundColor: '#F9F9F6',
     justifyContent: 'center',
     alignItems: 'center',
   },

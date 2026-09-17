@@ -37,36 +37,44 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
       const existingMenus = state.restaurants?.menus || {};
 
       const missingRestaurants = restaurantsList.filter((rest) => {
-        const id = rest.restId || rest._id;
+        const id1 = rest.restId;
         const id2 = rest._id;
-        return (!existingMenus[id] || existingMenus[id].length === 0) &&
-               (!id2 || !existingMenus[id2] || existingMenus[id2].length === 0);
+        const has1 = id1 && existingMenus[id1] && existingMenus[id1].length > 0;
+        const has2 = id2 && existingMenus[id2] && existingMenus[id2].length > 0;
+        return !has1 && !has2;
       });
 
       if (missingRestaurants.length === 0) return {};
 
       const newMenus = {};
-      const fetchPromises = missingRestaurants.map(async (rest) => {
-        const id = rest.restId || rest._id;
-        if (!id) return;
-        try {
-          const res = await fetch(`${API_URL}/restaurants/${id}/menu`);
-          if (res.ok) {
-            const data = await res.json();
-            const items = data.items || [];
-            if (rest.restId) newMenus[rest.restId] = items;
-            if (rest._id) newMenus[rest._id] = items;
-            newMenus[id] = items;
-          }
-        } catch (e) {
-          if (rest.restId) newMenus[rest.restId] = [];
-          if (rest._id) newMenus[rest._id] = [];
+      const fetchMenuForRest = async (rest) => {
+        const candidateIds = [rest.restId, rest._id].filter(Boolean);
+        for (const id of candidateIds) {
+          try {
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
+            const res = await fetch(`${API_URL}/restaurants/${id}/menu`, {
+              signal: controller?.signal,
+            });
+            if (timeoutId) clearTimeout(timeoutId);
+            if (res.ok) {
+              const data = await res.json();
+              const items = data.items || [];
+              if (Array.isArray(items) && items.length > 0) {
+                if (rest.restId) newMenus[rest.restId] = items;
+                if (rest._id) newMenus[rest._id] = items;
+                newMenus[id] = items;
+                return;
+              }
+            }
+          } catch (_e) {}
         }
-      });
-      await Promise.all(fetchPromises);
+      };
+
+      await Promise.all(missingRestaurants.map(rest => fetchMenuForRest(rest)));
       AsyncStorage.setItem('cached_menus_data', JSON.stringify({ ...existingMenus, ...newMenus })).catch(() => {});
       return newMenus;
-    } catch (err) {
+    } catch (_err) {
       return {};
     }
   }
@@ -155,35 +163,33 @@ export const fetchRestaurantMenu = createAsyncThunk(
         rest?._id
       ].filter(Boolean).filter((id, idx, arr) => arr.indexOf(id) === idx);
 
-      let items = [];
-      let fetchSuccess = false;
+      const existing = state.restaurants?.menus?.[restaurantId] ||
+                       (rest?.restId && state.restaurants?.menus?.[rest.restId]) ||
+                       (rest?._id && state.restaurants?.menus?.[rest._id]) ||
+                       [];
 
-      for (const id of candidateIds) {
+      // Helper to fetch menu for a single candidate ID with 4s timeout
+      const fetchMenuForId = async (id) => {
         try {
-          const response = await fetch(`${API_URL}/restaurants/${id}/menu`);
-          if (response.ok) {
-            const data = await response.json();
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+          const res = await fetch(`${API_URL}/restaurants/${id}/menu`, {
+            signal: controller ? controller.signal : undefined,
+          });
+          if (timeoutId) clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
             if (data.items && Array.isArray(data.items) && data.items.length > 0) {
-              items = data.items;
-              fetchSuccess = true;
-              break;
-            } else if (data.items && Array.isArray(data.items)) {
-              items = data.items;
-              fetchSuccess = true;
+              return data.items;
             }
           }
         } catch (_e) {}
-      }
+        return null;
+      };
 
-      if (!fetchSuccess || items.length === 0) {
-        const existing = state.restaurants?.menus?.[restaurantId] ||
-                         (rest?.restId && state.restaurants?.menus?.[rest.restId]) ||
-                         (rest?._id && state.restaurants?.menus?.[rest._id]) ||
-                         [];
-        if (existing.length > 0) {
-          return { restaurantId, rest, items: existing };
-        }
-      }
+      // Fetch all candidate IDs in parallel for maximum speed
+      const results = await Promise.all(candidateIds.map(id => fetchMenuForId(id)));
+      const items = results.find(res => Array.isArray(res) && res.length > 0) || existing;
 
       if (items.length > 0) {
         try {
@@ -283,8 +289,8 @@ export const fetchProfileData = createAsyncThunk(
         console.warn('[Restaurants] Local reviews load error:', e);
       }
 
-      // Helper to create independent AbortController with 5s timeout
-      const createController = (ms = 5000) => {
+      // Helper to create independent AbortController with 4s timeout
+      const createController = (ms = 4000) => {
         if (typeof AbortController !== 'undefined') {
           const c = new AbortController();
           const t = setTimeout(() => c.abort(), ms);
@@ -293,8 +299,8 @@ export const fetchProfileData = createAsyncThunk(
         return { signal: undefined, clear: () => {} };
       };
 
-      const ordersCtrl = createController(5000);
-      const reviewsCtrl = createController(5000);
+      const ordersCtrl = createController(4000);
+      const reviewsCtrl = createController(4000);
 
       // 2 & 3. Fetch orders and reviews in parallel
       const [ordersResSettled, reviewsResSettled] = await Promise.allSettled([

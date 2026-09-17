@@ -90,59 +90,65 @@ export default function ProfileScreen() {
         return;
       }
 
-      // Fetch global toggle status for coins
+      // Fetch global toggle status and live user coins in parallel with a timeout
       try {
-        const feesRes = await fetch(`${API_URL}/fees-config`);
-        if (feesRes.ok) {
-          const feesData = await feesRes.json();
-          if (feesData.success && feesData.config) {
-            setIsCoinsActive(feesData.config.isCoinsActive !== false);
-          }
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+
+        const [feesResSettled, userResSettled] = await Promise.allSettled([
+          fetch(`${API_URL}/fees-config`, { signal: controller?.signal }),
+          fetch(`${API_URL}/user/${userid}`, { signal: controller?.signal })
+        ]);
+        if (timeoutId) clearTimeout(timeoutId);
+
+        if (feesResSettled.status === 'fulfilled' && feesResSettled.value.ok) {
+          try {
+            const feesData = await feesResSettled.value.json();
+            if (feesData.success && feesData.config) {
+              setIsCoinsActive(feesData.config.isCoinsActive !== false);
+            }
+          } catch (_e) {}
         }
-      } catch (feesErr) {
-        console.warn('[Profile] Error loading fees configuration:', feesErr);
-      }
 
-      // Fetch live user coins balance
-      try {
-        const userRes = await fetch(`${API_URL}/user/${userid}`);
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          if (userData.success && userData.user) {
-            const dbUser = userData.user;
-            const dbPhoneStr = dbUser.phone !== undefined && dbUser.phone !== null ? String(dbUser.phone) : '';
-            const dbNameStr = dbUser.name !== undefined && dbUser.name !== null ? String(dbUser.name) : '';
-            const dbEmailStr = dbUser.email !== undefined && dbUser.email !== null ? String(dbUser.email) : '';
+        if (userResSettled.status === 'fulfilled' && userResSettled.value.ok) {
+          try {
+            const userData = await userResSettled.value.json();
+            if (userData.success && userData.user) {
+              const dbUser = userData.user;
+              const dbPhoneStr = dbUser.phone !== undefined && dbUser.phone !== null ? String(dbUser.phone) : '';
+              const dbNameStr = dbUser.name !== undefined && dbUser.name !== null ? String(dbUser.name) : '';
+              const dbEmailStr = dbUser.email !== undefined && dbUser.email !== null ? String(dbUser.email) : '';
 
-            const liveCoins = String(dbUser.coins ?? 0);
-            const liveName = dbNameStr && dbNameStr.toLowerCase() !== 'n/a' ? dbNameStr : cachedName;
-            const isLiveTemp = dbPhoneStr && (dbPhoneStr.startsWith('google_temp_') || dbPhoneStr.startsWith('temp_google_'));
-            const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
-            const livePhone = dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp ? dbPhoneStr : (cachedPhone && !isCachedTemp ? cachedPhone : '');
+              const liveCoins = String(dbUser.coins ?? 0);
+              const liveName = dbNameStr && dbNameStr.toLowerCase() !== 'n/a' ? dbNameStr : cachedName;
+              const isLiveTemp = dbPhoneStr && (dbPhoneStr.startsWith('google_temp_') || dbPhoneStr.startsWith('temp_google_'));
+              const isCachedTemp = cachedPhone && (cachedPhone.startsWith('google_temp_') || cachedPhone.startsWith('temp_google_'));
+              const livePhone = dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp ? dbPhoneStr : (cachedPhone && !isCachedTemp ? cachedPhone : '');
 
-            await AsyncStorage.setItem('coins', liveCoins);
-            if (dbNameStr && dbNameStr.toLowerCase() !== 'n/a') {
-              await AsyncStorage.setItem('name', dbNameStr);
-            }
-            if (dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp) {
-              await AsyncStorage.setItem('phone', dbPhoneStr);
-            } else if (isLiveTemp) {
-              await AsyncStorage.setItem('phone', '');
-            }
-            if (dbEmailStr && dbEmailStr.toLowerCase() !== 'n/a') {
-              await AsyncStorage.setItem('email', dbEmailStr);
-            }
-            if (dbUser.isPhoneVerified !== undefined) {
-              await AsyncStorage.setItem('isPhoneVerified', String(dbUser.isPhoneVerified));
-            }
+              await AsyncStorage.setItem('coins', liveCoins);
+              if (dbNameStr && dbNameStr.toLowerCase() !== 'n/a') {
+                await AsyncStorage.setItem('name', dbNameStr);
+              }
+              if (dbPhoneStr && dbPhoneStr.toLowerCase() !== 'n/a' && !isLiveTemp) {
+                await AsyncStorage.setItem('phone', dbPhoneStr);
+              } else if (isLiveTemp) {
+                await AsyncStorage.setItem('phone', '');
+              }
+              if (dbEmailStr && dbEmailStr.toLowerCase() !== 'n/a') {
+                await AsyncStorage.setItem('email', dbEmailStr);
+              }
+              if (dbUser.isPhoneVerified !== undefined) {
+                await AsyncStorage.setItem('isPhoneVerified', String(dbUser.isPhoneVerified));
+              }
 
-            setUser(prev => ({
-              ...prev,
-              coins: liveCoins,
-              name: liveName,
-              phone: livePhone
-            }));
-          }
+              setUser(prev => ({
+                ...prev,
+                coins: liveCoins,
+                name: liveName,
+                phone: livePhone
+              }));
+            }
+          } catch (_e) {}
         }
       } catch (profileErr) {
         console.warn('[Profile] Error syncing live profile details:', profileErr);

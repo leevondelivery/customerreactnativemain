@@ -38,9 +38,6 @@ import { fetchAllRestaurantMenus, fetchRestaurantMenu, fetchRestaurants, loadCac
 import { styles } from '../../styles/restaurentlist.styles';
 import { useTabBar } from '../_layout';
 
-
-let globalHasShownDeliverToModalThisAppSession = false;
-
 const { width: screenWidth } = Dimensions.get('window');
 const CAROUSEL_WIDTH = Math.min(screenWidth, 500) - 32;
 
@@ -63,33 +60,38 @@ const isTextMatchingQuery = (text, query) => {
   });
 };
 
-// Layout animation preset for seamless layout reflows on filter / sort
+// Layout animation preset for seamless layout reflows on filter / sort without opacity masks
 const SMOOTH_LAYOUT_ANIMATION = {
-  duration: 200,
+  duration: 180,
   create: {
     type: LayoutAnimation.Types.easeInEaseOut,
-    property: LayoutAnimation.Properties.opacity,
+    property: LayoutAnimation.Properties.scaleXY,
   },
   update: {
     type: LayoutAnimation.Types.easeInEaseOut,
   },
   delete: {
     type: LayoutAnimation.Types.easeInEaseOut,
-    property: LayoutAnimation.Properties.opacity,
+    property: LayoutAnimation.Properties.scaleXY,
   },
 };
 
-// Ultra-fast smooth animated wrapper for card transitions when filtering/sorting
+// Ultra-fast smooth animated wrapper for card transitions when filtering/sorting (clean spring physics with 100% solid cards, no dimming mask)
 function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const [animValue] = useState(() => new Animated.Value(0));
+  const [animValue] = useState(() => new Animated.Value(1));
+  const isInitialMount = useRef(true);
 
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     animValue.setValue(0);
-    const delay = Math.min(index * 6, 25);
+    const delay = Math.min(index * 4, 16);
     const timer = setTimeout(() => {
       Animated.spring(animValue, {
         toValue: 1,
-        tension: 260,
+        tension: 280,
         friction: 18,
         useNativeDriver: true,
       }).start();
@@ -100,7 +102,7 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
 
   const translateY = animValue.interpolate({
     inputRange: [0, 1],
-    outputRange: [10, 0],
+    outputRange: [6, 0],
   });
 
   const scale = animValue.interpolate({
@@ -108,17 +110,11 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
     outputRange: [0.98, 1],
   });
 
-  const opacity = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.2, 1],
-  });
-
   return (
     <Animated.View
       style={[
         style,
         {
-          opacity,
           transform: [{ translateY }, { scale }],
         },
       ]}
@@ -233,6 +229,8 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
 
 // Track location modal display per app session to avoid re-opening when navigating back
 let globalHasShownDeliverToModal = false;
+let globalHasCheckedInitialLocation = false;
+let globalHasPrefetchedMenus = false;
 
 export default function RestaurantListScreen() {
   const [nowTime, setNowTime] = useState(new Date());
@@ -270,7 +268,7 @@ export default function RestaurantListScreen() {
     showOutOfZoneModal,
     locationError,
     selectedSavedAddressId,
-    savedAddresses: reduxSavedAddresses = [],
+    savedAddresses = [],
   } = useSelector((state) => state.location);
 
   const handleEnableLocation = async () => {
@@ -295,23 +293,14 @@ export default function RestaurantListScreen() {
   };
 
   const [userid, setUserid] = useState(null);
-  const [savedAddresses, setSavedAddresses] = useState(reduxSavedAddresses);
-
-  useEffect(() => {
-    if (reduxSavedAddresses && reduxSavedAddresses.length > 0) {
-      setSavedAddresses(reduxSavedAddresses);
-    }
-  }, [reduxSavedAddresses]);
-
   const [showDeliverToModal, setShowDeliverToModal] = useState(false);
-  const hasInitialLocationChecked = useRef(false);
   const hasTriggeredDistanceCalc = useRef(false);
 
   useEffect(() => {
     const initLocationFlow = async () => {
-      if (hasInitialLocationChecked.current || globalHasShownDeliverToModalThisAppSession) return;
-      hasInitialLocationChecked.current = true;
-      globalHasShownDeliverToModalThisAppSession = true;
+      if (globalHasCheckedInitialLocation || globalHasShownDeliverToModal) return;
+      globalHasCheckedInitialLocation = true;
+      globalHasShownDeliverToModal = true;
 
       const uid = await AsyncStorage.getItem('userid');
       setUserid(uid);
@@ -325,7 +314,6 @@ export default function RestaurantListScreen() {
           const cachedAddr = await AsyncStorage.getItem(`saved_addresses_${uid}`);
           if (cachedAddr) {
             const parsed = JSON.parse(cachedAddr) || [];
-            setSavedAddresses(parsed);
             dispatch(setSavedAddressesRedux(parsed));
           }
 
@@ -374,7 +362,6 @@ export default function RestaurantListScreen() {
           .then(res => res.json())
           .then(async (data) => {
             if (data.success && data.addresses) {
-              setSavedAddresses(data.addresses);
               dispatch(setSavedAddressesRedux(data.addresses));
               await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
             }
@@ -506,23 +493,17 @@ export default function RestaurantListScreen() {
             }
 
             const savedAddrId = await AsyncStorage.getItem('selected_saved_address_id');
-            if (savedAddrId) {
+            if (savedAddrId && savedAddrId !== selectedSavedAddressId) {
               dispatch(setSelectedSavedAddressId(savedAddrId));
             }
 
-            const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
-            if (cached && isMounted) {
-              const parsed = JSON.parse(cached) || [];
-              setSavedAddresses(parsed);
-              dispatch(setSavedAddressesRedux(parsed));
-            }
-
-            const response = await fetch(`${API_URL}/user/${uid}/addresses`);
-            const data = await response.json();
-            if (data.success && data.addresses && isMounted) {
-              setSavedAddresses(data.addresses);
-              dispatch(setSavedAddressesRedux(data.addresses));
-              await AsyncStorage.setItem(`saved_addresses_${uid}`, JSON.stringify(data.addresses));
+            // Only load cached addresses if Redux state is empty
+            if ((!savedAddresses || savedAddresses.length === 0) && isMounted) {
+              const cached = await AsyncStorage.getItem(`saved_addresses_${uid}`);
+              if (cached) {
+                const parsed = JSON.parse(cached) || [];
+                dispatch(setSavedAddressesRedux(parsed));
+              }
             }
           } catch (err) {
             console.warn('[RestaurantList] Error loading addresses on focus:', err);
@@ -563,7 +544,7 @@ export default function RestaurantListScreen() {
     return item.isActive !== false && item.isActive !== 'false' && item.isactive !== false && item.isactive !== 'false' && item.isActive !== 0 && item.isactive !== 0 && item.status !== 'closed' && item.status !== 'INACTIVE';
   };
 
-  const handlePressRestaurant = (item, displayName) => {
+  const handlePressRestaurant = useCallback((item, displayName) => {
     const isActive = isRestActive(item);
     if (!isActive) {
       triggerToast('THIS RESTAURANT IS CURRENTLY CLOSED!', 'warning');
@@ -585,9 +566,9 @@ export default function RestaurantListScreen() {
         offerTitle: item.offerTitle || ''
       }
     });
-  };
+  }, [dispatch, router, triggerToast]);
 
-  const handlePressCarousel = (item) => {
+  const handlePressCarousel = useCallback((item) => {
     if (!item || !item.restaurantId || !item.restaurantId.trim()) {
       return;
     }
@@ -613,7 +594,7 @@ export default function RestaurantListScreen() {
         },
       });
     }
-  };
+  }, [restaurants, handlePressRestaurant, dispatch, router]);
 
   // States
   const [searchQuery, setSearchQuery] = useState('');
@@ -626,30 +607,25 @@ export default function RestaurantListScreen() {
   const [canScrollCatRight, setCanScrollCatRight] = useState(true);
   const currentCatScrollX = useRef(0);
 
-  const handleCategoryScroll = (event) => {
+  const handleCategoryScroll = useCallback((event) => {
     const { contentOffset } = event.nativeEvent;
     const x = contentOffset?.x || 0;
     currentCatScrollX.current = x;
     const isScrolled = x > 15;
     
-    if (isScrolled) {
-      if (!canScrollCatLeft) setCanScrollCatLeft(true);
-      if (canScrollCatRight) setCanScrollCatRight(false);
-    } else {
-      if (canScrollCatLeft) setCanScrollCatLeft(false);
-      if (!canScrollCatRight) setCanScrollCatRight(true);
-    }
-  };
+    setCanScrollCatLeft((prev) => (prev !== isScrolled ? isScrolled : prev));
+    setCanScrollCatRight((prev) => (prev === isScrolled ? !isScrolled : prev));
+  }, []);
 
-  const handleScrollCatLeft = () => {
+  const handleScrollCatLeft = useCallback(() => {
     const newX = Math.max(0, currentCatScrollX.current - 240);
     categoryScrollRef.current?.scrollTo({ x: newX, animated: true });
-  };
+  }, []);
 
-  const handleScrollCatRight = () => {
+  const handleScrollCatRight = useCallback(() => {
     const newX = currentCatScrollX.current + 240;
     categoryScrollRef.current?.scrollTo({ x: newX, animated: true });
-  };
+  }, []);
 
   // Animated values for filter pills (sliding indicator + button spring scale micro-animations)
   const [filterTranslateX] = useState(() => new Animated.Value(0));
@@ -657,7 +633,7 @@ export default function RestaurantListScreen() {
   const [vegScale] = useState(() => new Animated.Value(1));
   const [nonVegScale] = useState(() => new Animated.Value(1));
 
-  const animateButtonPress = (scaleAnim) => {
+  const animateButtonPress = useCallback((scaleAnim) => {
     Animated.sequence([
       Animated.timing(scaleAnim, {
         toValue: 0.92,
@@ -671,9 +647,9 @@ export default function RestaurantListScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  };
+  }, []);
 
-  const handleActiveTypeChange = (type) => {
+  const handleActiveTypeChange = useCallback((type) => {
     if (activeType === type) return;
 
     if (Platform.OS === 'ios' || Platform.OS === 'android') {
@@ -694,26 +670,18 @@ export default function RestaurantListScreen() {
     }).start();
 
     setActiveType(type);
-  };
+  }, [activeType, filterTranslateX]);
 
-  const handleSelectCategory = (catName) => {
+  const handleSelectCategory = useCallback((catName) => {
     if (Platform.OS === 'ios' || Platform.OS === 'android') {
       try {
         LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
       } catch (_e) {}
     }
     setSelectedCategory(catName);
-  };
-
-  // Progressive rendering for instant screen mount (render first 4 visible cards on frame 1, then expand)
-  const [displayLimit, setDisplayLimit] = useState(4);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDisplayLimit(999);
-    }, 40);
-    return () => clearTimeout(timer);
   }, []);
+
+
 
   useEffect(() => {
     return () => {
@@ -756,13 +724,11 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Background Menu Prefetching for Instant Item Search & Instant Menu Open
+  // Background Menu Prefetching for Instant Item Search & Instant Menu Open (runs immediately once restaurants are loaded)
   useEffect(() => {
-    if (restaurants && restaurants.length > 0) {
-      const timer = setTimeout(() => {
-        dispatch(fetchAllRestaurantMenus(restaurants));
-      }, 200);
-      return () => clearTimeout(timer);
+    if (restaurants && restaurants.length > 0 && !globalHasPrefetchedMenus) {
+      globalHasPrefetchedMenus = true;
+      dispatch(fetchAllRestaurantMenus(restaurants));
     }
   }, [dispatch, restaurants]);
 
@@ -783,9 +749,7 @@ export default function RestaurantListScreen() {
         if (!hasAnyDistance) {
           hasTriggeredDistanceCalc.current = true;
           if (selectedSavedAddressId) {
-            const addrList = (Array.isArray(savedAddresses) && savedAddresses.length > 0)
-              ? savedAddresses
-              : (Array.isArray(reduxSavedAddresses) ? reduxSavedAddresses : []);
+            const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
             const selectedAddr = addrList.find(a => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId));
             const sLat = selectedAddr?.lat ?? selectedAddr?.latitude;
             const sLng = selectedAddr?.lng ?? selectedAddr?.longitude;
@@ -805,15 +769,22 @@ export default function RestaurantListScreen() {
     return () => {
       isCancelled = true;
     };
-  }, [restaurants, roadDistances, dispatch, selectedSavedAddressId, savedAddresses, reduxSavedAddresses, locationStatus]);
+  }, [restaurants, roadDistances, dispatch, selectedSavedAddressId, savedAddresses, locationStatus]);
 
-  // Focus Effect: Re-fetch fresh restaurant statuses silently after transition completes
+  const lastStatusFetchTimeRef = useRef(0);
+
+  // Focus Effect: Re-fetch fresh restaurant statuses silently in background (at most once every 30s)
   useFocusEffect(
     useCallback(() => {
       let isMounted = true;
+      const now = Date.now();
+      if (now - lastStatusFetchTimeRef.current < 30000) {
+        return;
+      }
+      lastStatusFetchTimeRef.current = now;
+
       const timer = setTimeout(async () => {
         try {
-          console.log('[RestaurantList] Home screen focused. Re-fetching fresh restaurant statuses from DB...');
           const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
           const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
 
@@ -833,7 +804,7 @@ export default function RestaurantListScreen() {
         } catch (error) {
           console.warn('[RestaurantList] Error updating status on focus:', error);
         }
-      }, 400);
+      }, 1000);
 
       return () => {
         isMounted = false;
@@ -940,6 +911,21 @@ export default function RestaurantListScreen() {
     const hasQuery = Boolean(query);
     const isAllType = activeType === 'All';
     const hasCatFilter = Boolean(selectedCategory);
+
+    // Fast-path: Default home view with no filters applied executes in ~0.1ms
+    if (!hasQuery && !hasCatFilter && isAllType) {
+      const sorted = [...restaurants].sort((a, b) => {
+        const aActive = isRestActive(a);
+        const bActive = isRestActive(b);
+        if (aActive && !bActive) return -1;
+        if (!aActive && bActive) return 1;
+
+        const posA = a.position !== undefined ? Number(a.position) : 999999;
+        const posB = b.position !== undefined ? Number(b.position) : 999999;
+        return (isNaN(posA) ? 999999 : posA) - (isNaN(posB) ? 999999 : posB);
+      });
+      return { filteredList: sorted, matchingItemsMap: matchingMap };
+    }
 
     let normalSelected = '';
     let singularSelected = '';
@@ -1089,582 +1075,610 @@ export default function RestaurantListScreen() {
     return { filteredList: list, matchingItemsMap: matchingMap };
   }, [restaurants, searchQuery, activeType, selectedCategory, menus]);
 
-  if (initialLoadingTimeout && !initialLoaded && reduxLoading) {
-    return <LoadingView />;
-  }
-
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#008000';
   const toastIconColor = isWarningToast ? '#D32F2F' : '#008000';
   const toastIconName = isWarningToast ? 'alert' : 'checkmark';
 
-  return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
-        }
+  const renderHeader = useMemo(() => (
+    <View>
+      {/* Top Location Selection Bar */}
+      <TouchableOpacity
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          backgroundColor: 'rgb(224, 214, 188)',
+          marginHorizontal: 0,
+          marginTop: 0,
+          marginBottom: 16,
+          paddingVertical: 12,
+          paddingHorizontal: 16,
+          borderRadius: 14,
+          gap: 10,
+        }}
+        activeOpacity={0.75}
+        onPress={() => setShowDeliverToModal(true)}
       >
-        {/* Top Location Selection Bar */}
-        <TouchableOpacity
-          style={{
+        <Feather name="map-pin" size={18} color="#FA4D56" />
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: 10, color: '#808C94', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            Deliver to
+          </Text>
+          <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
+            {(() => {
+              if (selectedSavedAddressId) {
+                const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
+                const selectedAddr = addrList.find(
+                  (a) => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId)
+                );
+                if (selectedAddr) {
+                  const tagLabel = selectedAddr.tag || selectedAddr.label || 'Saved Address';
+                  const detailStr = [selectedAddr.flatNo, selectedAddr.street].filter(Boolean).join(', ');
+                  return detailStr ? `${tagLabel} - ${detailStr}` : tagLabel;
+                }
+                return 'Saved Address';
+              }
+              if (locationStatus === 'inside') {
+                if (userAddress && (userAddress.formattedAddress || userAddress.street)) {
+                  return userAddress.formattedAddress || [userAddress.street, userAddress.subregion || userAddress.city].filter(Boolean).join(', ');
+                }
+                return 'Current Location (GPS)';
+              }
+              if (locationStatus === 'skipped') {
+                return 'Skipped location (Explore only)';
+              }
+              return 'Select your location...';
+            })()}
+          </Text>
+        </View>
+        <Feather name="chevron-down" size={18} color="#1E3545" />
+      </TouchableOpacity>
+
+      {/* Fast CDN-mapped Carousel */}
+      {carouselItems.length > 0 && (
+        <View style={styles.carouselContainer}>
+          <FlatList
+            ref={flatListRef}
+            data={carouselItems}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(item) => item._id || item.carouselId}
+            onMomentumScrollEnd={onMomentumScrollEnd}
+            getItemLayout={(data, index) => ({
+              length: CAROUSEL_WIDTH,
+              offset: CAROUSEL_WIDTH * index,
+              index,
+            })}
+            renderItem={({ item }) => {
+              const hasTargetRest = !!(item.restaurantId && item.restaurantId.trim());
+              return (
+                <TouchableOpacity
+                  activeOpacity={hasTargetRest ? 0.85 : 1}
+                  onPress={() => handlePressCarousel(item)}
+                  disabled={!hasTargetRest}
+                  style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}
+                >
+                  <CarouselImage
+                    uri={item.imageUrl}
+                    style={styles.carouselImage}
+                  />
+                  {!!(item.tag || item.title) && (
+                    <View style={styles.carouselOverlay}>
+                      {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
+                      {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            }}
+          />
+          {/* Carousel Dot Indicators */}
+          <View style={styles.paginationContainer}>
+            {carouselItems.map((_, index) => (
+              <View
+                key={`dot-${index}`}
+                style={[
+                  styles.paginationDot,
+                  activeCarouselIndex === index && styles.paginationDotActive,
+                ]}
+              />
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Search Engine Bar */}
+      <View style={styles.searchBarContainer}>
+        <View style={styles.searchInputContainer}>
+          <Feather name="search" size={20} color="#1E3545" />
+          <TextInput
+            style={styles.searchPlaceholderText}
+            placeholder="Search restaurants or dishes..."
+            placeholderTextColor="#808C94"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCorrect={false}
+            numberOfLines={1}
+            multiline={false}
+            textAlignVertical="center"
+            returnKeyType="search"
+          />
+        </View>
+
+        <View style={styles.filterPillContainer}>
+          {/* Smooth Animated Sliding Active Pill Background */}
+          <Animated.View
+            style={[
+              styles.filterPillActiveBg,
+              {
+                transform: [{ translateX: filterTranslateX }],
+              },
+            ]}
+          />
+
+          {/* All segment */}
+          <Animated.View style={{ transform: [{ scale: allScale }] }}>
+            <TouchableOpacity
+              style={styles.filterButton}
+              activeOpacity={0.8}
+              onPress={() => {
+                animateButtonPress(allScale);
+                handleActiveTypeChange('All');
+              }}
+            >
+              <Text style={[
+                styles.allButtonText,
+                activeType !== 'All' && { color: '#666666' }
+              ]}>All</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Veg green square dot segment */}
+          <Animated.View style={{ transform: [{ scale: vegScale }] }}>
+            <TouchableOpacity
+              style={styles.filterButton}
+              activeOpacity={0.8}
+              onPress={() => {
+                animateButtonPress(vegScale);
+                handleActiveTypeChange('Veg');
+              }}
+            >
+              <View style={{
+                width: 20,
+                height: 20,
+                borderWidth: 2,
+                borderColor: '#0F8A65',
+                borderRadius: 4,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: activeType === 'Veg' ? '#E8F5E9' : '#FFF'
+              }}>
+                <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
+
+          {/* Non-veg red square dot segment */}
+          <Animated.View style={{ transform: [{ scale: nonVegScale }] }}>
+            <TouchableOpacity
+              style={styles.filterButton}
+              activeOpacity={0.8}
+              onPress={() => {
+                animateButtonPress(nonVegScale);
+                handleActiveTypeChange('Non-Veg');
+              }}
+            >
+              <View style={{
+                width: 20,
+                height: 20,
+                borderWidth: 2,
+                borderColor: '#E53935',
+                borderRadius: 4,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: activeType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
+              }}>
+                <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </View>
+
+      {/* Horizontal Category Filter List */}
+      {categories.length > 0 && (
+        <View style={styles.categoriesContainer}>
+          <View style={{
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: 'rgb(224, 214, 188)',
-            marginHorizontal: 0,
-            marginTop: 0,
-            marginBottom: 16,
-            paddingVertical: 12,
+            marginTop: 4,
+            marginBottom: 10,
             paddingHorizontal: 16,
-            borderRadius: 14,
-            gap: 10
-          }}
-          activeOpacity={0.75}
-          onPress={() => setShowDeliverToModal(true)}
-        >
-          <Feather name="map-pin" size={18} color="#FA4D56" />
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 10, color: '#808C94', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-              Deliver to
-            </Text>
-            <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
-              {(() => {
-                if (selectedSavedAddressId) {
-                  const addrList = (Array.isArray(savedAddresses) && savedAddresses.length > 0)
-                    ? savedAddresses
-                    : (Array.isArray(reduxSavedAddresses) ? reduxSavedAddresses : []);
-                  const selectedAddr = addrList.find(
-                    (a) => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId)
-                  );
-                  if (selectedAddr) {
-                    const tagLabel = selectedAddr.tag || selectedAddr.label || 'Saved Address';
-                    const detailStr = [selectedAddr.flatNo, selectedAddr.street].filter(Boolean).join(', ');
-                    return detailStr ? `${tagLabel} - ${detailStr}` : tagLabel;
-                  }
-                  return 'Saved Address';
-                }
-                if (locationStatus === 'inside') {
-                  if (userAddress && (userAddress.formattedAddress || userAddress.street)) {
-                    return userAddress.formattedAddress || [userAddress.street, userAddress.subregion || userAddress.city].filter(Boolean).join(', ');
-                  }
-                  return 'Current Location (GPS)';
-                }
-                if (locationStatus === 'skipped') {
-                  return 'Skipped location (Explore only)';
-                }
-                return 'Select your location...';
-              })()}
-            </Text>
+          }}>
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#1E3545',
+              paddingHorizontal: 12,
+              paddingVertical: 3.5,
+              borderRadius: 10,
+              gap: 7,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 1 },
+              shadowOpacity: 0.12,
+              shadowRadius: 3,
+              elevation: 2,
+            }}>
+              <View style={{
+                width: 7,
+                height: 7,
+                borderRadius: 3.5,
+                backgroundColor: '#0F8A65',
+              }} />
+              <Text style={{
+                fontSize: 12,
+                fontWeight: '800',
+                color: '#FFFFFF',
+                letterSpacing: 0.7,
+                textTransform: 'uppercase',
+              }}>
+                Most Popular Categories
+              </Text>
+            </View>
+            <View style={{
+              flex: 1,
+              height: 1.5,
+              backgroundColor: 'rgba(30, 53, 69, 0.15)',
+              marginLeft: 12,
+              borderRadius: 1,
+            }} />
           </View>
-          <Feather name="chevron-down" size={18} color="#1E3545" />
-        </TouchableOpacity>
-        {/* Fast CDN-mapped Carousel */}
-        {carouselItems.length > 0 && (
-          <View style={styles.carouselContainer}>
-            <FlatList
-              ref={flatListRef}
-              data={carouselItems}
+
+          <View style={{ position: 'relative' }}>
+            <ScrollView
+              ref={categoryScrollRef}
               horizontal
-              pagingEnabled
+              bounces={false}
+              overScrollMode="never"
+              directionalLockEnabled={true}
+              nestedScrollEnabled={true}
               showsHorizontalScrollIndicator={false}
-              keyExtractor={(item) => item._id || item.carouselId}
-              onMomentumScrollEnd={onMomentumScrollEnd}
-              getItemLayout={(data, index) => ({
-                length: CAROUSEL_WIDTH,
-                offset: CAROUSEL_WIDTH * index,
-                index,
-              })}
-              renderItem={({ item }) => {
-                const hasTargetRest = !!(item.restaurantId && item.restaurantId.trim());
+              contentContainerStyle={styles.categoriesScroll}
+              onScroll={handleCategoryScroll}
+              scrollEventThrottle={16}
+            >
+              {categories.map((cat) => {
+                const isSelected = selectedCategory === cat.name;
                 return (
                   <TouchableOpacity
-                    activeOpacity={hasTargetRest ? 0.85 : 1}
-                    onPress={() => handlePressCarousel(item)}
-                    disabled={!hasTargetRest}
-                    style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}
+                    key={cat._id}
+                    style={[
+                      styles.categoryCard,
+                      isSelected && styles.categoryCardActive
+                    ]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      handleSelectCategory(isSelected ? null : cat.name);
+                    }}
                   >
-                    <CarouselImage
-                      uri={item.imageUrl}
-                      style={styles.carouselImage}
+                    <Image
+                      source={{ uri: cat.imageUrl }}
+                      style={[styles.categoryImage, isSelected && styles.categoryImageActive]}
+                      contentFit="cover"
+                      onError={(e) => console.log(`[Category Image Error] Failed to load "${cat.name}" from ${cat.imageUrl}:`, e.nativeEvent.error)}
                     />
-                    {/* Render text overlay ONLY if title or tag exists in MongoDB item */}
-                    {!!(item.tag || item.title) && (
-                      <View style={styles.carouselOverlay}>
-                        {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
-                        {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
+                    <View style={[styles.categoryOverlay, isSelected && styles.categoryOverlayActive]}>
+                      <Text
+                        style={styles.categoryText}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit={true}
+                        minimumFontScale={0.7}
+                      >
+                        {cat.name}
+                      </Text>
+                    </View>
+                    {isSelected && (
+                      <View style={styles.categoryCloseBadge}>
+                        <Feather name="x" size={10} color="#FFF" />
                       </View>
                     )}
                   </TouchableOpacity>
                 );
-              }}
-            />
-            {/* Carousel Dot Indicators */}
-            <View style={styles.paginationContainer}>
-              {carouselItems.map((_, index) => (
-                <View
-                  key={`dot-${index}`}
-                  style={[
-                    styles.paginationDot,
-                    activeCarouselIndex === index && styles.paginationDotActive,
-                  ]}
-                />
-              ))}
-            </View>
-          </View>
-        )}
+              })}
+            </ScrollView>
 
-        {/* Search Engine Bar */}
-        <View style={styles.searchBarContainer}>
-          <View style={styles.searchInputContainer}>
-            <Feather name="search" size={20} color="#1E3545" />
-            <TextInput
-              style={styles.searchPlaceholderText}
-              placeholder="Search restaurants or dishes..."
-              placeholderTextColor="#808C94"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              autoCorrect={false}
-              numberOfLines={1}
-              multiline={false}
-              textAlignVertical="center"
-              returnKeyType="search"
-            />
-          </View>
-
-          <View style={styles.filterPillContainer}>
-            {/* Smooth Animated Sliding Active Pill Background */}
-            <Animated.View
-              style={[
-                styles.filterPillActiveBg,
-                {
-                  transform: [{ translateX: filterTranslateX }],
-                },
-              ]}
-            />
-
-            {/* All segment */}
-            <Animated.View style={{ transform: [{ scale: allScale }] }}>
+            {canScrollCatLeft && (
               <TouchableOpacity
-                style={styles.filterButton}
-                activeOpacity={0.8}
-                onPress={() => {
-                  animateButtonPress(allScale);
-                  handleActiveTypeChange('All');
-                }}
-              >
-                <Text style={[
-                  styles.allButtonText,
-                  activeType !== 'All' && { color: '#666666' }
-                ]}>All</Text>
-              </TouchableOpacity>
-            </Animated.View>
-
-            {/* Veg green square dot segment */}
-            <Animated.View style={{ transform: [{ scale: vegScale }] }}>
-              <TouchableOpacity
-                style={styles.filterButton}
-                activeOpacity={0.8}
-                onPress={() => {
-                  animateButtonPress(vegScale);
-                  handleActiveTypeChange('Veg');
-                }}
-              >
-                <View style={{
-                  width: 20,
-                  height: 20,
-                  borderWidth: 2,
-                  borderColor: '#0F8A65',
-                  borderRadius: 4,
-                  alignItems: 'center',
+                style={{
+                  position: 'absolute',
+                  left: 8,
+                  top: '50%',
+                  marginTop: -16,
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: '#FFFFFF',
                   justifyContent: 'center',
-                  backgroundColor: activeType === 'Veg' ? '#E8F5E9' : '#FFF'
-                }}>
-                  <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#0F8A65' }} />
-                </View>
-              </TouchableOpacity>
-            </Animated.View>
-
-            {/* Non-veg red square dot segment */}
-            <Animated.View style={{ transform: [{ scale: nonVegScale }] }}>
-              <TouchableOpacity
-                style={styles.filterButton}
-                activeOpacity={0.8}
-                onPress={() => {
-                  animateButtonPress(nonVegScale);
-                  handleActiveTypeChange('Non-Veg');
-                }}
-              >
-                <View style={{
-                  width: 20,
-                  height: 20,
-                  borderWidth: 2,
-                  borderColor: '#E53935',
-                  borderRadius: 4,
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: activeType === 'Non-Veg' ? '#FFEBEE' : '#FFF'
-                }}>
-                  <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#E53935' }} />
-                </View>
+                  elevation: 5,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.2,
+                  shadowRadius: 4,
+                  zIndex: 20,
+                  borderWidth: 1,
+                  borderColor: 'rgba(0, 0, 0, 0.08)',
+                }}
+                activeOpacity={0.8}
+                onPress={handleScrollCatLeft}
+              >
+                <Feather name="chevron-left" size={20} color="#1E3545" />
               </TouchableOpacity>
-            </Animated.View>
+            )}
+
+            {canScrollCatRight && (
+              <TouchableOpacity
+                style={{
+                  position: 'absolute',
+                  right: 8,
+                  top: '50%',
+                  marginTop: -16,
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: '#FFFFFF',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  elevation: 5,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.2,
+                  shadowRadius: 4,
+                  zIndex: 20,
+                  borderWidth: 1,
+                  borderColor: 'rgba(0, 0, 0, 0.08)',
+                }}
+                activeOpacity={0.8}
+                onPress={handleScrollCatRight}
+              >
+                <Feather name="chevron-right" size={20} color="#1E3545" />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
+      )}
+    </View>
+  ), [
+    selectedSavedAddressId,
+    savedAddresses,
+    locationStatus,
+    userAddress,
+    carouselItems,
+    activeCarouselIndex,
+    searchQuery,
+    filterTranslateX,
+    allScale,
+    activeType,
+    vegScale,
+    nonVegScale,
+    categories,
+    selectedCategory,
+    canScrollCatLeft,
+    canScrollCatRight,
+    handlePressCarousel,
+    handleActiveTypeChange,
+    handleCategoryScroll,
+    handleSelectCategory,
+    handleScrollCatLeft,
+    handleScrollCatRight,
+    animateButtonPress
+  ]);
 
-        {/* Horizontal Category Filter List */}
-        {categories.length > 0 && (
-          <View style={styles.categoriesContainer}>
-            {/* Category Header with stylish dark pill badge + subtle divider line (exact match with menu screen) */}
-            <View style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              marginTop: 4,
-              marginBottom: 10,
-              paddingHorizontal: 16,
-            }}>
-              <View style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: '#1E3545',
-                paddingHorizontal: 12,
-                paddingVertical: 3.5,
-                borderRadius: 10,
-                gap: 7,
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 1 },
-                shadowOpacity: 0.12,
-                shadowRadius: 3,
-                elevation: 2,
-              }}>
-                <View style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: 3.5,
-                  backgroundColor: '#0F8A65',
-                }} />
-                <Text style={{
-                  fontSize: 12,
-                  fontWeight: '800',
-                  color: '#FFFFFF',
-                  letterSpacing: 0.7,
-                  textTransform: 'uppercase',
-                }}>
-                  Most Popular Categories
-                </Text>
-              </View>
-              <View style={{
-                flex: 1,
-                height: 1.5,
-                backgroundColor: 'rgba(30, 53, 69, 0.15)',
-                marginLeft: 12,
-                borderRadius: 1,
-              }} />
-            </View>
+  const renderRestaurantCard = useCallback(({ item, index: cardIdx }) => {
+    const matchingDishes = matchingItemsMap[item._id || item.restId];
+    const isActive = isRestActive(item);
+    const imageUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
+    const rawName = item.name || item.email || 'Restaurant';
+    const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
-            <View style={{ position: 'relative' }}>
-              <ScrollView
-                ref={categoryScrollRef}
-                horizontal
-                bounces={false}
-                overScrollMode="never"
-                directionalLockEnabled={true}
-                nestedScrollEnabled={true}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.categoriesScroll}
-                onScroll={handleCategoryScroll}
-                scrollEventThrottle={16}
-              >
-                {categories.map((cat) => {
-                  const isSelected = selectedCategory === cat.name;
-                  return (
-                    <TouchableOpacity
-                      key={cat._id}
-                      style={[
-                        styles.categoryCard,
-                        isSelected && styles.categoryCardActive
-                      ]}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        handleSelectCategory(isSelected ? null : cat.name);
-                      }}
-                    >
-                      <Image
-                        source={{ uri: cat.imageUrl }}
-                        style={[styles.categoryImage, isSelected && styles.categoryImageActive]}
-                        contentFit="cover"
-                        onError={(e) => console.log(`[Category Image Error] Failed to load "${cat.name}" from ${cat.imageUrl}:`, e.nativeEvent.error)}
-                      />
-                      <View style={[styles.categoryOverlay, isSelected && styles.categoryOverlayActive]}>
-                        <Text
-                          style={styles.categoryText}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit={true}
-                          minimumFontScale={0.7}
-                        >
-                          {cat.name}
-                        </Text>
-                      </View>
-                      {isSelected && (
-                        <View style={styles.categoryCloseBadge}>
-                          <Feather name="x" size={10} color="#FFF" />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-
-              {/* Left side floating arrow scroll indicator badge (shows when scrolled right) */}
-              {canScrollCatLeft && (
-                <TouchableOpacity
-                  style={{
-                    position: 'absolute',
-                    left: 8,
-                    top: '50%',
-                    marginTop: -16,
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: '#FFFFFF',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    elevation: 5,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.2,
-                    shadowRadius: 4,
-                    zIndex: 20,
-                    borderWidth: 1,
-                    borderColor: 'rgba(0, 0, 0, 0.08)',
-                  }}
-                  activeOpacity={0.8}
-                  onPress={handleScrollCatLeft}
-                >
-                  <Feather name="chevron-left" size={20} color="#1E3545" />
-                </TouchableOpacity>
-              )}
-
-              {/* Right side floating arrow scroll indicator badge (directly disappears upon scrolling right) */}
-              {canScrollCatRight && (
-                <TouchableOpacity
-                  style={{
-                    position: 'absolute',
-                    right: 8,
-                    top: '50%',
-                    marginTop: -16,
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: '#FFFFFF',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    elevation: 5,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.2,
-                    shadowRadius: 4,
-                    zIndex: 20,
-                    borderWidth: 1,
-                    borderColor: 'rgba(0, 0, 0, 0.08)',
-                  }}
-                  activeOpacity={0.8}
-                  onPress={handleScrollCatRight}
-                >
-                  <Feather name="chevron-right" size={20} color="#1E3545" />
-                </TouchableOpacity>
-              )}
+    return (
+      <AnimatedCardWrapper
+        key={item._id || item.restId}
+        index={cardIdx}
+        filterKey={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
+      >
+        <TouchableOpacity
+          style={[
+            styles.restaurantCard,
+            !isActive && { backgroundColor: '#E4E1D8' }
+          ]}
+          activeOpacity={isActive ? 0.85 : 1}
+          onPress={() => handlePressRestaurant(item, displayName)}
+        >
+          <View style={styles.restaurantImageContainer}>
+            <Image
+              source={{ uri: imageUri }}
+              style={[
+                styles.restaurantImage,
+                !isActive && Platform.OS === 'web' && { filter: 'grayscale(100%)' }
+              ]}
+              contentFit="cover"
+            />
+            <View style={[styles.ratingBadge, { backgroundColor: isActive ? '#2B783E' : '#707070' }]}>
+              <FontAwesome name="star" size={10} color="#FFD200" />
+              <Text style={styles.ratingText}>
+                {((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
+              </Text>
             </View>
           </View>
-        )}
 
-        {/* Restaurant Cards */}
-        {filteredList.slice(0, (searchQuery || activeType !== 'All' || selectedCategory) ? 999 : displayLimit).map((item, cardIdx) => {
-          const matchingDishes = matchingItemsMap[item._id || item.restId];
-          // Retrieve isactive/isActive status
-          const isActive = isRestActive(item);
-
-          const imageUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
-
-          // Display name if available, otherwise fallback to capitalized email
-          const rawName = item.name || item.email || 'Restaurant';
-          const displayName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
-
-          return (
-            <AnimatedCardWrapper
-              key={item._id || item.restId}
-              index={cardIdx}
-              filterKey={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.restaurantCard,
-                  !isActive && { backgroundColor: '#E4E1D8' } // slightly grayer background to look desaturated
-                ]}
-                activeOpacity={isActive ? 0.85 : 1}
-                onPress={() => handlePressRestaurant(item, displayName)}
-              >
-                <View style={styles.restaurantImageContainer}>
-                  <Image
-                    source={{ uri: imageUri }}
-                    style={[
-                      styles.restaurantImage,
-                      !isActive && Platform.OS === 'web' && { filter: 'grayscale(100%)' }
-                    ]}
-                    contentFit="cover"
-                  />
-
-                  {/* Rating badge overlay */}
-                  <View style={[styles.ratingBadge, { backgroundColor: isActive ? '#2B783E' : '#707070' }]}>
-                    <FontAwesome name="star" size={10} color="#FFD200" />
-                    <Text style={styles.ratingText}>
-                      {((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
+          <View style={styles.restaurantInfo}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {(() => {
+                  if (!isActive) {
+                    return (
+                      <View style={{
+                        backgroundColor: '#DC2626',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 8,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4
+                      }}>
+                        <Feather name="clock" size={11} color="#FFF" />
+                        <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>
+                          {item.openTime ? `Opens at ${formatTimeAMPM(item.openTime)}` : 'Closed'}
+                        </Text>
+                      </View>
+                    );
+                  }
+                  const closingSoonText = getClosingSoonStatus(item.closeTime, nowTime);
+                  if (!closingSoonText) return null;
+                  return (
+                    <View style={{
+                      backgroundColor: '#D9534F',
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 8,
+                    }}>
+                      <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
+                        {closingSoonText}
+                      </Text>
+                    </View>
+                  );
+                })()}
+                {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
+                  <View style={{
+                    backgroundColor: '#FF6F00',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 8,
+                  }}>
+                    <Text style={{
+                      color: '#FFF',
+                      fontSize: 11,
+                      fontWeight: 'bold',
+                    }}>
+                      {item.offerTitle}
                     </Text>
                   </View>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+              {item.address ? (
+                <View style={[styles.locationContainer, { flex: 1, marginRight: 8, marginBottom: 0 }]}>
+                  <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
+                  <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
                 </View>
+              ) : null}
 
-                <View style={styles.restaurantInfo}>
-                  {/* Restaurant Name / Email & Offer Badge (aligned to right side) */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <Text style={[styles.restaurantName, !isActive && { color: '#606060' }, { marginBottom: 0, flex: 1, marginRight: 8 }]} numberOfLines={1}>{displayName}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {(() => {
-                        if (!isActive) {
-                          return (
-                            <View style={{
-                              backgroundColor: '#DC2626',
-                              paddingHorizontal: 8,
-                              paddingVertical: 3,
-                              borderRadius: 8,
-                              flexDirection: 'row',
-                              alignItems: 'center',
-                              gap: 4
-                            }}>
-                              <Feather name="clock" size={11} color="#FFF" />
-                              <Text style={{ color: '#FFF', fontSize: 11, fontWeight: 'bold' }}>
-                                {item.openTime ? `Opens at ${formatTimeAMPM(item.openTime)}` : 'Closed'}
-                              </Text>
-                            </View>
-                          );
-                        }
-                        const closingSoonText = getClosingSoonStatus(item.closeTime, nowTime);
-                        if (!closingSoonText) return null;
-                        return (
-                          <View style={{
-                            backgroundColor: '#D9534F',
-                            paddingHorizontal: 8,
-                            paddingVertical: 3,
-                            borderRadius: 8,
-                          }}>
-                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: 'bold' }}>
-                              {closingSoonText}
-                            </Text>
-                          </View>
-                        );
-                      })()}
-                      {item.offerTitle && item.offerTitle !== '0' && item.offerTitle !== 0 ? (
-                        <View style={{
-                          backgroundColor: '#FF6F00',
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                        }}>
-                          <Text style={{
-                            color: '#FFF',
-                            fontSize: 11,
-                            fontWeight: 'bold',
-                          }}>
-                            {item.offerTitle}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
+              {(() => {
+                const distVal = roadDistances && (
+                  roadDistances[item._id] ||
+                  roadDistances[item.restId] ||
+                  roadDistances[item.id] ||
+                  roadDistances[item.restaurantId] ||
+                  roadDistances[item.name]
+                );
+                if (!distVal) return null;
+                return (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
+                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
+                      {distVal}
+                    </Text>
                   </View>
+                );
+              })()}
+            </View>
 
-                  {/* Address Location & Distance */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-                    {item.address ? (
-                      <View style={[styles.locationContainer, { flex: 1, marginRight: 8, marginBottom: 0 }]}>
-                        <FontAwesome name="map-marker" size={14} color={isActive ? "#E05A47" : "#707070"} />
-                        <Text style={[styles.locationText, !isActive && { color: '#7E8A81' }, { flexShrink: 1 }]} numberOfLines={1}>{item.address}</Text>
-                      </View>
-                    ) : null}
-
-                    {(() => {
-                      const distVal = roadDistances && (
-                        roadDistances[item._id] ||
-                        roadDistances[item.restId] ||
-                        roadDistances[item.id] ||
-                        roadDistances[item.restaurantId] ||
-                        roadDistances[item.name]
-                      );
-                      if (!distVal) return null;
-                      return (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                          <FontAwesome5 name="motorcycle" size={12} color={isActive ? "#2B783E" : "#707070"} />
-                          <Text style={{ fontSize: 13, fontWeight: 'bold', color: isActive ? '#1E3545' : '#707070' }}>
-                            {distVal}
-                          </Text>
-                        </View>
-                      );
-                    })()}
+            {(searchQuery || selectedCategory) && matchingDishes && matchingDishes.length > 0 ? (
+              <View style={{
+                marginTop: 8,
+                paddingTop: 6,
+                borderTopWidth: 1,
+                borderTopColor: 'rgba(0, 0, 0, 0.08)',
+                flexDirection: 'row',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 6
+              }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E3545', flexShrink: 0 }}>
+                  Dishes:
+                </Text>
+                {matchingDishes.slice(0, 2).map((dish, idx) => (
+                  <View key={idx} style={{
+                    backgroundColor: '#E8F5E9',
+                    borderColor: '#2B783E',
+                    borderWidth: 1,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 8,
+                  }}>
+                    <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
+                      {dish.itemName || dish.name}
+                    </Text>
                   </View>
+                ))}
+                {matchingDishes.length > 2 && (
+                  <View style={{
+                    backgroundColor: '#2B783E',
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 8,
+                  }}>
+                    <Text style={{ fontSize: 11, color: '#FFFFFF', fontWeight: 'bold' }}>
+                      +{matchingDishes.length - 2} items
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+      </AnimatedCardWrapper>
+    );
+  }, [
+    matchingItemsMap,
+    roadDistances,
+    nowTime,
+    searchQuery,
+    selectedCategory,
+    activeType,
+    handlePressRestaurant
+  ]);
 
-                  {/* Matching Dishes Preview when searching or category filtering (2 green items + X remaining items badge) */}
-                  {(searchQuery || selectedCategory) && matchingDishes && matchingDishes.length > 0 ? (
-                    <View style={{
-                      marginTop: 8,
-                      paddingTop: 6,
-                      borderTopWidth: 1,
-                      borderTopColor: 'rgba(0, 0, 0, 0.08)',
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      flexWrap: 'wrap',
-                      gap: 6
-                    }}>
-                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E3545', flexShrink: 0 }}>
-                        Dishes:
-                      </Text>
-                      {matchingDishes.slice(0, 2).map((dish, idx) => (
-                        <View key={idx} style={{
-                          backgroundColor: '#E8F5E9',
-                          borderColor: '#2B783E',
-                          borderWidth: 1,
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                        }}>
-                          <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
-                            {dish.itemName || dish.name}
-                          </Text>
-                        </View>
-                      ))}
-                      {matchingDishes.length > 2 && (
-                        <View style={{
-                          backgroundColor: '#2B783E',
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                        }}>
-                          <Text style={{ fontSize: 11, color: '#FFFFFF', fontWeight: 'bold' }}>
-                            +{matchingDishes.length - 2} items
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  ) : null}
-                </View>
-              </TouchableOpacity>
-            </AnimatedCardWrapper>
-          );
-        })}
-      </ScrollView>
+  if (initialLoadingTimeout && !initialLoaded && reduxLoading && (!restaurants || restaurants.length === 0)) {
+    return <LoadingView />;
+  }
+
+  return (
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <FlatList
+        data={filteredList}
+        keyExtractor={(item) => item._id || item.restId}
+        ListHeaderComponent={renderHeader}
+        renderItem={renderRestaurantCard}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        initialNumToRender={5}
+        maxToRenderPerBatch={5}
+        windowSize={5}
+        removeClippedSubviews={Platform.OS === 'android'}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
+        }
+      />
 
       {/* Toast Notification Banner */}
       {toastConfig.visible && (
@@ -1788,9 +1802,7 @@ export default function RestaurantListScreen() {
 
               {/* Option B: Saved Addresses list */}
               {(() => {
-                const addrList = (Array.isArray(savedAddresses) && savedAddresses.length > 0)
-                  ? savedAddresses
-                  : (Array.isArray(reduxSavedAddresses) && reduxSavedAddresses.length > 0 ? reduxSavedAddresses : []);
+                const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
                 if (!addrList || addrList.length === 0) return null;
 
                 return (

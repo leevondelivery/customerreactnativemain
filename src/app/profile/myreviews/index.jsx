@@ -51,8 +51,8 @@ export default function MyReviewsScreen() {
   const profileLoadedUserId = useSelector((state) => state.restaurants.profileLoadedUserId);
   const profileLoading = useSelector((state) => state.restaurants.profileLoading);
 
-  const [currentUserId, setCurrentUserId] = useState('');
-  const [screenLoading, setScreenLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState(() => profileLoadedUserId || '');
+  const [screenLoading, setScreenLoading] = useState(() => !profileLoaded && (!reviews || reviews.length === 0));
   const [refreshing, setRefreshing] = useState(false);
 
   const handleScroll = (event) => {
@@ -65,7 +65,7 @@ export default function MyReviewsScreen() {
     }
   };
 
-  // Always check current logged-in user and fetch their specific reviews (Identical to MyOrders)
+  // Always check current logged-in user and fetch their specific reviews in the background
   const loadUserReviews = useCallback(async (isPullToRefresh = false) => {
     if (isPullToRefresh) setRefreshing(true);
     try {
@@ -73,11 +73,11 @@ export default function MyReviewsScreen() {
       if (userid) {
         const uidStr = String(userid).trim();
         setCurrentUserId(uidStr);
-        // Unblock UI immediately on frame 0
         setScreenLoading(false);
         // Fetch fresh reviews and orders in background
         dispatch(fetchProfileData(uidStr)).finally(() => {
           setRefreshing(false);
+          setScreenLoading(false);
         });
       } else {
         setCurrentUserId('');
@@ -105,6 +105,22 @@ export default function MyReviewsScreen() {
     if (!str || str === 'undefined' || str === 'null' || str === 'N/A') return '';
     return str;
   };
+
+  // Pre-index completed orders into a Map for instant O(1) lookups
+  const completedOrdersMap = useMemo(() => {
+    const map = new Map();
+    if (Array.isArray(completedOrders)) {
+      for (let i = 0; i < completedOrders.length; i++) {
+        const o = completedOrders[i];
+        if (!o) continue;
+        const oId = String(o.orderId || o._id || o.id || '').replace(/^ord-/i, '').trim();
+        if (oId) {
+          map.set(oId, o);
+        }
+      }
+    }
+    return map;
+  }, [completedOrders]);
 
   const displayReviews = useMemo(() => {
     if (!Array.isArray(reviews)) return [];
@@ -152,7 +168,7 @@ export default function MyReviewsScreen() {
     return isNaN(num) ? String(val) : `₹ ${num.toFixed(0)}`;
   };
 
-  const isInitialLoading = (!profileLoaded || profileLoading || screenLoading) && displayReviews.length === 0;
+  const isInitialLoading = screenLoading && !profileLoaded && displayReviews.length === 0;
 
   return (
     <View style={styles.container}>
@@ -212,13 +228,7 @@ export default function MyReviewsScreen() {
             const rawOrderId = review.orderId || review.order_id || getOrderIdFromReview(review);
             const rawOrderIdClean = String(rawOrderId || '').replace(/^ord-/i, '').trim();
 
-            const matchingCompletedOrder = Array.isArray(completedOrders)
-              ? completedOrders.find((o) => {
-                  if (!o) return false;
-                  const oId = String(o.orderId || o._id || o.id || '').replace(/^ord-/i, '').trim();
-                  return Boolean(oId && rawOrderIdClean && oId === rawOrderIdClean);
-                })
-              : null;
+            const matchingCompletedOrder = rawOrderIdClean ? completedOrdersMap.get(rawOrderIdClean) || null : null;
 
             const items = (orderDetailsObj && orderDetailsObj.items && Array.isArray(orderDetailsObj.items) && orderDetailsObj.items.length > 0)
               ? orderDetailsObj.items

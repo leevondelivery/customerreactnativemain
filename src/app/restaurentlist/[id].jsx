@@ -1,5 +1,6 @@
 import { Feather, FontAwesome, FontAwesome5, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTabBar } from '../_layout';
@@ -8,7 +9,6 @@ import {
   Animated,
   Easing,
   FlatList,
-  Image,
   LayoutAnimation,
   Platform,
   SafeAreaView,
@@ -51,27 +51,37 @@ const isTextMatchingQuery = (text, query) => {
   });
 };
 
-// Layout animation preset for seamless layout reflows on filter / sort
+// Layout animation preset for seamless layout reflows on filter / sort without opacity masks
 const SMOOTH_LAYOUT_ANIMATION = {
-  duration: 200,
+  duration: 180,
   create: {
     type: LayoutAnimation.Types.easeInEaseOut,
-    property: LayoutAnimation.Properties.opacity,
+    property: LayoutAnimation.Properties.scaleXY,
   },
   update: {
     type: LayoutAnimation.Types.easeInEaseOut,
   },
   delete: {
     type: LayoutAnimation.Types.easeInEaseOut,
-    property: LayoutAnimation.Properties.opacity,
+    property: LayoutAnimation.Properties.scaleXY,
   },
 };
 
 const EMPTY_ARRAY = [];
 
-// Ultra-fast smooth animated wrapper for card transitions when filtering/sorting
-function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const [animValue] = useState(() => new Animated.Value(1)); // Start at 1 for instant smooth initial open
+const isItemAvailable = (item) => {
+  if (!item) return false;
+  if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0) return false;
+  if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0) return false;
+  if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'OUT_OF_STOCK' || item.status === 'inactive' || item.status === 0) return false;
+  if (item.available === false || item.available === 'false' || item.available === 0) return false;
+  if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0) return false;
+  return true;
+};
+
+// Ultra-fast snappy animated wrapper for card transitions with ZERO start delay & smooth 60fps native spring
+function AnimatedCardWrapper({ filterKey, children, style }) {
+  const animValue = useRef(new Animated.Value(1)).current;
   const isFirstRender = useRef(true);
 
   useEffect(() => {
@@ -80,22 +90,17 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
       return;
     }
     animValue.setValue(0);
-    const delay = Math.min(index * 6, 25);
-    const timer = setTimeout(() => {
-      Animated.spring(animValue, {
-        toValue: 1,
-        tension: 260,
-        friction: 18,
-        useNativeDriver: true,
-      }).start();
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [filterKey, animValue, index]);
+    Animated.spring(animValue, {
+      toValue: 1,
+      tension: 380,
+      friction: 24,
+      useNativeDriver: true,
+    }).start();
+  }, [filterKey, animValue]);
 
   const translateY = animValue.interpolate({
     inputRange: [0, 1],
-    outputRange: [10, 0],
+    outputRange: [5, 0],
   });
 
   const scale = animValue.interpolate({
@@ -103,17 +108,11 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
     outputRange: [0.98, 1],
   });
 
-  const opacity = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.2, 1],
-  });
-
   return (
     <Animated.View
       style={[
         style,
         {
-          opacity,
           transform: [{ translateY }, { scale }],
         },
       ]}
@@ -122,6 +121,118 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
     </Animated.View>
   );
 }
+
+// High-performance memoized item card for instant 60fps filter switching & smooth rendering
+const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast }) {
+  const available = isItemAvailable(item);
+  const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
+  const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
+  const fallbackImage = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+
+  let displayItemName = item.itemName ? item.itemName.charAt(0).toUpperCase() + item.itemName.slice(1) : 'Food Item';
+  if (!displayItemName.toLowerCase().includes('(veg') && !displayItemName.toLowerCase().includes('(non-veg')) {
+    displayItemName += suffix;
+  }
+
+  const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+  const hasOffer = offerPercent > 0 && offerPercent <= 100;
+  const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
+
+  return (
+    <View style={[
+      styles.itemCard,
+      !available && {
+        opacity: 0.7,
+        backgroundColor: '#F2F2F7',
+        borderColor: '#D1D1D6',
+      }
+    ]}>
+      {/* Out of Stock Top Overlay Badge */}
+      {!available && (
+        <View style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          backgroundColor: 'rgba(50, 50, 50, 0.85)',
+          paddingHorizontal: 7,
+          paddingVertical: 3,
+          borderRadius: 4,
+          zIndex: 10,
+        }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 }}>
+            OUT OF STOCK
+          </Text>
+        </View>
+      )}
+
+      <Image
+        source={{ uri: item.photoUrl || fallbackImage }}
+        style={[
+          styles.itemImage,
+          !available && {
+            opacity: 0.45,
+            ...(Platform.OS === 'web' ? { filter: 'grayscale(100%)' } : {})
+          }
+        ]}
+        contentFit="cover"
+        cachePolicy="memory-disk"
+        transition={100}
+      />
+
+      <Text style={[styles.itemNameText, !available && { color: '#8E8E93' }]} numberOfLines={2}>
+        {displayItemName}
+      </Text>
+
+      <View style={styles.ratingAndOfferContainer}>
+        <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
+          <FontAwesome name="star" size={10} color={available ? "#FFD200" : "#8E8E93"} />
+          <Text style={[styles.itemRatingText, !available && { color: '#8E8E93' }]}>
+            {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
+          </Text>
+        </View>
+        {hasOffer && (
+          <View style={[styles.offerBadge, !available && { backgroundColor: '#8E8E93' }]}>
+            <Ionicons name="pricetag" size={9} color="#FFFFFF" />
+            <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
+          </View>
+        )}
+      </View>
+
+      {hasOffer ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+          <Text style={[styles.priceText, { marginBottom: 0 }, !available && { color: '#8E8E93' }]}>RS:{Math.round(offerPrice)}</Text>
+          <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: available ? '#FF5E00' : '#8E8E93', color: available ? '#FF5E00' : '#8E8E93', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
+        </View>
+      ) : (
+        <Text style={[styles.priceText, !available && { color: '#8E8E93' }]}>RS:{item.price || 0}</Text>
+      )}
+
+      {!available ? (
+        <TouchableOpacity
+          style={[styles.addButton, { backgroundColor: '#E5E5EA', borderColor: '#D1D1D6' }]}
+          activeOpacity={0.8}
+          onPress={() => onTriggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning')}
+        >
+          <Text style={[styles.addButtonText, { color: '#8E8E93', fontSize: 11 }]}>OUT OF STOCK</Text>
+        </TouchableOpacity>
+      ) : quantity > 0 ? (
+        <View style={styles.quantityContainer}>
+          <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, -1)}>
+            <Feather name="minus" size={12} color="#1E3545" />
+          </TouchableOpacity>
+          <Text style={styles.quantityText}>{quantity}</Text>
+          <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, 1)}>
+            <Feather name="plus" size={12} color="#1E3545" />
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <TouchableOpacity style={styles.addButton} activeOpacity={0.8} onPress={() => onUpdateQuantity(item, 1)}>
+          <Text style={styles.addButtonText}>ADD</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+});
 
 const getClosingSoonStatus = (closeTimeStr, now) => {
   if (!closeTimeStr) return null;
@@ -157,7 +268,7 @@ export default function RestaurantMenuScreen() {
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
   const isBannerHidden = useRef(false);
-  const bannerAnimY = useRef(new Animated.Value(0)).current;
+  const [bannerAnimY] = useState(() => new Animated.Value(0));
 
   const handleScroll = (event) => {
     const currentOffset = event.nativeEvent.contentOffset.y;
@@ -267,27 +378,22 @@ export default function RestaurantMenuScreen() {
   const animateButtonPress = (scaleAnim) => {
     Animated.sequence([
       Animated.timing(scaleAnim, {
-        toValue: 0.92,
-        duration: 50,
+        toValue: 0.93,
+        duration: 70,
+        easing: Easing.out(Easing.quad),
         useNativeDriver: true,
       }),
       Animated.spring(scaleAnim, {
         toValue: 1,
-        friction: 5,
-        tension: 240,
+        friction: 6,
+        tension: 260,
         useNativeDriver: true,
       }),
     ]).start();
   };
 
-  const handleFilterTypeChange = (type) => {
+  const handleFilterTypeChange = useCallback((type) => {
     if (filterType === type) return;
-
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
-      try {
-        LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
-      } catch (_e) {}
-    }
 
     let targetX = 0;
     if (type === 'Veg') targetX = 42;
@@ -295,25 +401,18 @@ export default function RestaurantMenuScreen() {
 
     Animated.spring(filterTranslateX, {
       toValue: targetX,
-      tension: 240,
-      friction: 18,
+      tension: 260,
+      friction: 22,
       useNativeDriver: true,
     }).start();
 
     setFilterType(type);
-  };
+  }, [filterType, filterTranslateX]);
 
-  const handleSortByChange = (sortOption) => {
+  const handleSortByChange = useCallback((sortOption) => {
     if (sortBy === sortOption) return;
-
-    if (Platform.OS === 'ios' || Platform.OS === 'android') {
-      try {
-        LayoutAnimation.configureNext(SMOOTH_LAYOUT_ANIMATION);
-      } catch (_e) {}
-    }
-
     setSortBy(sortOption);
-  };
+  }, [sortBy]);
 
   // Custom Replace Cart Modal States
   const [showReplaceCartModal, setShowReplaceCartModal] = useState(false);
@@ -331,7 +430,7 @@ export default function RestaurantMenuScreen() {
   // Smooth entrance and exit animation for fixed cart banner
   const [cartBannerAnim] = useState(() => new Animated.Value(0));
 
-  const triggerToast = (message = 'ADDED TO CART SUCCESSFULLY!', type = 'success') => {
+  const triggerToast = useCallback((message = 'ADDED TO CART SUCCESSFULLY!', type = 'success') => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
@@ -406,7 +505,7 @@ export default function RestaurantMenuScreen() {
         isToastActiveRef.current = false;
       });
     }, type === 'warning' ? 2800 : 2000);
-  };
+  }, [toastOpacity, toastTranslateY, toastScale]);
 
   const formatTimeAMPM = (timeStr) => {
     if (!timeStr) return '';
@@ -525,27 +624,22 @@ export default function RestaurantMenuScreen() {
   const offerTitle = restaurantDetail?.offerTitle || passedOfferTitle;
   const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
-  // Show loading view only if menu items are not yet loaded in cache/Redux
-  const [loading, setLoading] = useState(() => menuItems.length === 0);
+  const [hasFetched, setHasFetched] = useState(false);
   const hasFetchedRef = useRef(false);
 
   useEffect(() => {
-    let isMounted = true;
     const targetId = restId || paramRestId || urlId;
 
     if (targetId && !hasFetchedRef.current) {
       hasFetchedRef.current = true;
       dispatch(fetchRestaurantMenu(targetId)).finally(() => {
-        if (isMounted) setLoading(false);
+        setHasFetched(true);
       });
-    } else if (menuItems.length > 0) {
-      setLoading(false);
     }
+  }, [dispatch, restId, paramRestId, urlId]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [dispatch, restId, paramRestId, urlId, menuItems.length]);
+  // Stale-While-Revalidate: If items already exist in Redux/cache, display immediately without blocking UI
+  const loading = menuItems.length === 0 && (!hasFetched || menuLoading);
 
   // Background polling for menu items status (every 10 minutes)
   useEffect(() => {
@@ -560,17 +654,6 @@ export default function RestaurantMenuScreen() {
 
 
 
-
-
-const isItemAvailable = (item) => {
-  if (!item) return false;
-  if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0) return false;
-  if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0) return false;
-  if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'OUT_OF_STOCK' || item.status === 'inactive' || item.status === 0) return false;
-  if (item.available === false || item.available === 'false' || item.available === 0) return false;
-  if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0) return false;
-  return true;
-};
 
   // Extract all unique categories from database items
   const categories = useMemo(() => [
@@ -764,122 +847,6 @@ const isItemAvailable = (item) => {
     }
   }, [hasActiveOrder, restId, passedName, triggerToast]);
 
-  const renderItemCard = useCallback(({ item }) => {
-    const available = isItemAvailable(item);
-    const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
-    const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
-    const fallbackImage = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
-
-    let displayItemName = item.itemName ? item.itemName.charAt(0).toUpperCase() + item.itemName.slice(1) : 'Food Item';
-    if (!displayItemName.toLowerCase().includes('(veg') && !displayItemName.toLowerCase().includes('(non-veg')) {
-      displayItemName += suffix;
-    }
-
-    const quantity = (
-      (item._id && cartMap[String(item._id)]) ||
-      (item.itemId && cartMap[String(item.itemId)]) ||
-      (item.id && cartMap[String(item.id)]) ||
-      0
-    );
-
-    const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
-    const hasOffer = offerPercent > 0 && offerPercent <= 100;
-    const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
-
-    return (
-      <View style={[
-        styles.itemCard,
-        !available && {
-          opacity: 0.7,
-          backgroundColor: '#F2F2F7',
-          borderColor: '#D1D1D6',
-        }
-      ]}>
-        {/* Out of Stock Top Overlay Badge */}
-        {!available && (
-          <View style={{
-            position: 'absolute',
-            top: 8,
-            left: 8,
-            backgroundColor: 'rgba(50, 50, 50, 0.85)',
-            paddingHorizontal: 7,
-            paddingVertical: 3,
-            borderRadius: 4,
-            zIndex: 10,
-          }}>
-            <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 }}>
-              OUT OF STOCK
-            </Text>
-          </View>
-        )}
-
-        <Image
-          source={{ uri: item.photoUrl || fallbackImage }}
-          style={[
-            styles.itemImage,
-            !available && {
-              opacity: 0.45,
-              ...(Platform.OS === 'web' ? { filter: 'grayscale(100%)' } : {})
-            }
-          ]}
-          resizeMode="cover"
-        />
-
-        <Text style={[styles.itemNameText, !available && { color: '#8E8E93' }]} numberOfLines={2}>
-          {displayItemName}
-        </Text>
-
-        <View style={styles.ratingAndOfferContainer}>
-          <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
-            <FontAwesome name="star" size={10} color={available ? "#FFD200" : "#8E8E93"} />
-            <Text style={[styles.itemRatingText, !available && { color: '#8E8E93' }]}>
-              {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
-            </Text>
-          </View>
-          {hasOffer && (
-            <View style={[styles.offerBadge, !available && { backgroundColor: '#8E8E93' }]}>
-              <Ionicons name="pricetag" size={9} color="#FFFFFF" />
-              <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
-            </View>
-          )}
-        </View>
-
-        {hasOffer ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-            <Text style={[styles.priceText, { marginBottom: 0 }, !available && { color: '#8E8E93' }]}>RS:{Math.round(offerPrice)}</Text>
-            <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: available ? '#FF5E00' : '#8E8E93', color: available ? '#FF5E00' : '#8E8E93', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
-          </View>
-        ) : (
-          <Text style={[styles.priceText, !available && { color: '#8E8E93' }]}>RS:{item.price || 0}</Text>
-        )}
-
-        {!available ? (
-          <TouchableOpacity
-            style={[styles.addButton, { backgroundColor: '#E5E5EA', borderColor: '#D1D1D6' }]}
-            activeOpacity={0.8}
-            onPress={() => triggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning')}
-          >
-            <Text style={[styles.addButtonText, { color: '#8E8E93', fontSize: 11 }]}>OUT OF STOCK</Text>
-          </TouchableOpacity>
-        ) : quantity > 0 ? (
-          <View style={styles.quantityContainer}>
-            <TouchableOpacity style={styles.quantityBtn} onPress={() => handleUpdateQuantity(item, -1)}>
-              <Feather name="minus" size={12} color="#1E3545" />
-            </TouchableOpacity>
-            <Text style={styles.quantityText}>{quantity}</Text>
-            <TouchableOpacity style={styles.quantityBtn} onPress={() => handleUpdateQuantity(item, 1)}>
-              <Feather name="plus" size={12} color="#1E3545" />
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <TouchableOpacity style={styles.addButton} activeOpacity={0.8} onPress={() => handleUpdateQuantity(item, 1)}>
-            <Text style={styles.addButtonText}>ADD</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    );
-  }, [cartMap, handleUpdateQuantity, triggerToast]);
-
   // Group sorted items by category for section headings
   const groupedCategories = useMemo(() => {
     if (!sortedItems || sortedItems.length === 0) return EMPTY_ARRAY;
@@ -965,21 +932,33 @@ const isItemAvailable = (item) => {
 
         {/* 2-Column Cards Grid */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-          {group.items.map((foodItem, idx) => (
-            <AnimatedCardWrapper
-              key={foodItem._id || foodItem.itemId || `food_${group.title}_${idx}`}
-              index={idx}
-              filterKey={`${filterType}_${selectedCategory || ''}_${searchQuery}_${sortBy}`}
-              style={{ width: '48%' }}
-            >
-              {renderItemCard({ item: foodItem })}
-            </AnimatedCardWrapper>
-          ))}
+          {group.items.map((foodItem, idx) => {
+            const quantity = (
+              (foodItem._id && cartMap[String(foodItem._id)]) ||
+              (foodItem.itemId && cartMap[String(foodItem.itemId)]) ||
+              (foodItem.id && cartMap[String(foodItem.id)]) ||
+              0
+            );
+            return (
+              <AnimatedCardWrapper
+                key={foodItem._id || foodItem.itemId || `food_${group.title}_${idx}`}
+                filterKey={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}`}
+                style={{ width: '48%' }}
+              >
+                <ItemCard
+                  item={foodItem}
+                  quantity={quantity}
+                  onUpdateQuantity={handleUpdateQuantity}
+                  onTriggerToast={triggerToast}
+                />
+              </AnimatedCardWrapper>
+            );
+          })}
           {group.items.length % 2 !== 0 && <View style={{ width: '48%' }} />}
         </View>
       </View>
     );
-  }, [renderItemCard, filterType, selectedCategory, searchQuery, sortBy]);
+  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';
@@ -1001,10 +980,10 @@ const isItemAvailable = (item) => {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }]}
         onScroll={handleScroll}
         scrollEventThrottle={16}
-        initialNumToRender={30}
-        maxToRenderPerBatch={30}
-        windowSize={15}
-        removeClippedSubviews={false}
+        initialNumToRender={4}
+        maxToRenderPerBatch={4}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS === 'android'}
         ListHeaderComponent={
           <>
             {/* Restaurant Hero Card (redesigned) */}
@@ -1090,7 +1069,9 @@ const isItemAvailable = (item) => {
               <Image
                 source={{ uri: passedLogoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500' }}
                 style={styles.heroLogo}
-                resizeMode="cover"
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={100}
               />
             </View>
 
@@ -1679,11 +1660,6 @@ const styles = StyleSheet.create({
     height: 38,
     borderRadius: 19,
     backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    elevation: 3,
   },
   filterButton: {
     width: 38,
@@ -1721,6 +1697,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1E3545',
   },
   sortButtonText: {
     fontSize: 13,

@@ -69,19 +69,19 @@ export default function Layout() {
   const tabs = [
     {
       route: '/restaurentlist',
-      icon: (isActive) => <FontAwesome name="home" size={isActive ? 22 : 18} color="#000000" />,
+      icon: (isActive) => <FontAwesome name="home" size={20} color="#000000" />,
     },
     {
       route: '/orderstatus',
-      icon: (isActive) => <MaterialIcons name="directions-bike" size={isActive ? 22 : 18} color="#000000" />,
+      icon: (isActive) => <MaterialIcons name="directions-bike" size={22} color="#000000" />,
     },
     {
       route: '/cart',
-      icon: (isActive) => <FontAwesome name="shopping-bag" size={isActive ? 22 : 18} color="#000000" />,
+      icon: (isActive) => <FontAwesome name="shopping-bag" size={20} color="#000000" />,
     },
     {
       route: '/profile',
-      icon: (isActive) => <FontAwesome name="gear" size={isActive ? 22 : 18} color="#000000" />,
+      icon: (isActive) => <FontAwesome name="gear" size={20} color="#000000" />,
     },
   ];
 
@@ -613,6 +613,114 @@ function MainLayoutContent({
   );
 }
 
+function AnimatedBackgroundCircle({ left, isActive }) {
+  const [opacityAnim] = useState(() => new Animated.Value(isActive ? 0 : 1));
+
+  useEffect(() => {
+    Animated.timing(opacityAnim, {
+      toValue: isActive ? 0 : 1,
+      duration: 220,
+      easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+      useNativeDriver: true,
+    }).start();
+  }, [isActive, opacityAnim]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.inactiveCircleBackground,
+        {
+          left,
+          opacity: opacityAnim,
+        },
+      ]}
+    />
+  );
+}
+
+function AnimatedTabItem({
+  tab,
+  isActive,
+  onPress,
+  cartCount,
+  hasActiveOrder,
+}) {
+  const isCartTab = tab.route === '/cart';
+  const isOrderStatusTab = tab.route === '/orderstatus';
+
+  const [activeAnim] = useState(() => new Animated.Value(isActive ? 1 : 0));
+  const [pressScale] = useState(() => new Animated.Value(1));
+
+  useEffect(() => {
+    Animated.spring(activeAnim, {
+      toValue: isActive ? 1 : 0,
+      tension: 130,
+      friction: 13,
+      useNativeDriver: true,
+    }).start();
+  }, [isActive, activeAnim]);
+
+  const handlePressIn = () => {
+    Animated.spring(pressScale, {
+      toValue: 0.88,
+      tension: 280,
+      friction: 14,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(pressScale, {
+      toValue: 1,
+      tension: 180,
+      friction: 10,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const translateY = activeAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -15],
+  });
+
+  const scale = Animated.multiply(
+    pressScale,
+    activeAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: [1, 1.15],
+    })
+  );
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      activeOpacity={1}
+      style={styles.tabTouchArea}
+    >
+      <Animated.View
+        style={{
+          transform: [{ translateY }, { scale }],
+          position: 'relative',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {tab.icon(isActive)}
+        {isCartTab && cartCount > 0 && (
+          <View style={styles.badgeContainer}>
+            <Text style={styles.badgeText}>{cartCount}</Text>
+          </View>
+        )}
+        {isOrderStatusTab && hasActiveOrder && (
+          <View style={styles.dotBadge} />
+        )}
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
+
 function FloatingTabBar({
   tabs,
   pathname,
@@ -629,13 +737,16 @@ function FloatingTabBar({
 
   // Optimistic active route state for instant visual feedback on tab touch
   const [activeRoute, setActiveRoute] = useState(pathname);
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  const [bubbleMorph] = useState(() => new Animated.Value(0));
+  const prevIndexRef = useRef(0);
 
-  // Keep activeRoute in sync when pathname changes externally
-  useEffect(() => {
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
     setActiveRoute(pathname);
-  }, [pathname]);
+  }
 
-  // Animate tab indicator circle immediately when activeRoute or tabBarWidth changes
+  // Animate tab indicator circle smoothly with organic stretch physics
   useEffect(() => {
     let activeIndex = 0;
     if (activeRoute.startsWith('/restaurentlist')) activeIndex = 0;
@@ -647,15 +758,28 @@ function FloatingTabBar({
       const tabWidth = tabBarWidth / 4;
       const circleWidth = 60;
       const targetValue = activeIndex * tabWidth + (tabWidth - circleWidth) / 2;
+      const distance = Math.abs(activeIndex - prevIndexRef.current);
+      prevIndexRef.current = activeIndex;
+
+      // Organic fluid stretch morph when transitioning between tabs
+      if (distance > 0) {
+        bubbleMorph.setValue(1);
+        Animated.spring(bubbleMorph, {
+          toValue: 0,
+          tension: 140,
+          friction: 12,
+          useNativeDriver: true,
+        }).start();
+      }
 
       Animated.spring(translateX, {
         toValue: targetValue,
-        tension: 140, // responsive, immediate feel
-        friction: 12,
+        tension: 130,
+        friction: 13,
         useNativeDriver: true,
       }).start();
     }
-  }, [activeRoute, tabBarWidth, translateX]);
+  }, [activeRoute, tabBarWidth, translateX, bubbleMorph]);
 
   const handleTabPress = useCallback(
     (tabRoute) => {
@@ -665,7 +789,7 @@ function FloatingTabBar({
 
       if (isAlreadyOnTab) return;
 
-      // 1. Instant 0ms latency UI update: move white circle & highlight tab icon immediately
+      // 1. Instant UI update: move white circle & highlight tab icon immediately
       setActiveRoute(tabRoute);
 
       // 2. Immediate route navigation
@@ -673,6 +797,16 @@ function FloatingTabBar({
     },
     [activeRoute, router]
   );
+
+  const bubbleScaleX = bubbleMorph.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.15],
+  });
+
+  const bubbleScaleY = bubbleMorph.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.92],
+  });
 
   return (
     <Animated.View
@@ -682,7 +816,7 @@ function FloatingTabBar({
         {
           bottom: dynamicBottom,
           transform: [{ translateY }],
-        }
+        },
       ]}
       onLayout={(e) => {
         const newWidth = e.nativeEvent.layout.width;
@@ -691,22 +825,20 @@ function FloatingTabBar({
         }
       }}
     >
-      {/* Soft Background circles for all tabs */}
+      {/* Soft Background circles with smooth fade transitions */}
       {tabs.map((tab, idx) => {
         const isActive = activeRoute.startsWith(tab.route);
+        const leftPos = idx * (tabBarWidth / 4) + (tabBarWidth / 4 - 44) / 2;
         return (
-          <View
+          <AnimatedBackgroundCircle
             key={`bg-circle-${tab.route}`}
-            style={[
-              styles.inactiveCircleBackground,
-              { left: idx * (tabBarWidth / 4) + (tabBarWidth / 4 - 44) / 2 },
-              isActive && { opacity: 0 }
-            ]}
+            left={leftPos}
+            isActive={isActive}
           />
         );
       })}
 
-      {/* Animated Sliding White Background Circle */}
+      {/* Animated Sliding White Background Circle with organic squash & stretch */}
       {tabBarWidth > 0 && (
         <Animated.View
           style={[
@@ -715,37 +847,30 @@ function FloatingTabBar({
             {
               position: 'absolute',
               left: 0,
-              transform: [{ translateX }, { translateY: -15 }],
-            }
+              transform: [
+                { translateX },
+                { translateY: -15 },
+                { scaleX: bubbleScaleX },
+                { scaleY: bubbleScaleY },
+              ],
+            },
           ]}
         />
       )}
 
-      {/* Transparent Interactive Tab Items */}
+      {/* Animated Interactive Tab Items */}
       {tabs.map((tab) => {
         const isActive = activeRoute.startsWith(tab.route);
-        const isCartTab = tab.route === '/cart';
-        const isOrderStatusTab = tab.route === '/orderstatus';
 
         return (
-          <TouchableOpacity
+          <AnimatedTabItem
             key={tab.route}
+            tab={tab}
+            isActive={isActive}
             onPress={() => handleTabPress(tab.route)}
-            activeOpacity={0.8}
-            style={styles.tabTouchArea}
-          >
-            <View style={[isActive ? { transform: [{ translateY: -15 }] } : null, { position: 'relative' }]}>
-              {tab.icon(isActive)}
-              {isCartTab && cartCount > 0 && (
-                <View style={styles.badgeContainer}>
-                  <Text style={styles.badgeText}>{cartCount}</Text>
-                </View>
-              )}
-              {isOrderStatusTab && hasActiveOrder && (
-                <View style={styles.dotBadge} />
-              )}
-            </View>
-          </TouchableOpacity>
+            cartCount={cartCount}
+            hasActiveOrder={hasActiveOrder}
+          />
         );
       })}
     </Animated.View>
@@ -810,9 +935,11 @@ const styles = StyleSheet.create({
   },
   rootContainer: {
     flex: 1,
+    backgroundColor: '#F9F9F6',
   },
   contentArea: {
     flex: 1,
+    backgroundColor: '#F9F9F6',
   },
   tabBarContainer: {
     position: 'absolute',
