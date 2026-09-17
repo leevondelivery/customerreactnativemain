@@ -123,7 +123,7 @@ function AnimatedCardWrapper({ filterKey, children, style }) {
 }
 
 // High-performance memoized item card for instant 60fps filter switching & smooth rendering
-const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast }) {
+const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast, isBogo, categoryDiscountPercent }) {
   const available = isItemAvailable(item);
   const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
   const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
@@ -134,7 +134,9 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
     displayItemName += suffix;
   }
 
-  const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+  const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+  const catOffer = categoryDiscountPercent ? parseFloat(categoryDiscountPercent) : 0;
+  const offerPercent = Math.max(directOffer, catOffer);
   const hasOffer = offerPercent > 0 && offerPercent <= 100;
   const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
 
@@ -161,6 +163,29 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
         }}>
           <Text style={{ color: '#FFFFFF', fontSize: 9, fontWeight: '700', letterSpacing: 0.4 }}>
             OUT OF STOCK
+          </Text>
+        </View>
+      )}
+
+      {/* 1+1 BOGO Top Right Badge */}
+      {isBogo && available && (
+        <View style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          backgroundColor: '#008000',
+          paddingHorizontal: 7,
+          paddingVertical: 3,
+          borderRadius: 6,
+          zIndex: 10,
+          shadowColor: '#000',
+          shadowOffset: { width: 0, height: 1 },
+          shadowOpacity: 0.2,
+          shadowRadius: 2,
+          elevation: 2,
+        }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 }}>
+            1+1 FREE
           </Text>
         </View>
       )}
@@ -220,7 +245,7 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
           <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, -1)}>
             <Feather name="minus" size={12} color="#1E3545" />
           </TouchableOpacity>
-          <Text style={styles.quantityText}>{quantity}</Text>
+          <Text style={styles.quantityText}>{isBogo ? (quantity * 2) : quantity}</Text>
           <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, 1)}>
             <Feather name="plus" size={12} color="#1E3545" />
           </TouchableOpacity>
@@ -265,6 +290,7 @@ const getClosingSoonStatus = (closeTimeStr, now) => {
 };
 
 export default function RestaurantMenuScreen() {
+
   const { showTabBar, hideTabBar } = useTabBar();
   const lastOffsetY = useRef(0);
   const isBannerHidden = useRef(false);
@@ -655,6 +681,47 @@ export default function RestaurantMenuScreen() {
 
 
 
+  // Restaurant Offers (1+1 BOGO deals, Category % Discounts, Tiered Bill Discounts)
+  const [restaurantOffers, setRestaurantOffers] = useState(null);
+
+  useEffect(() => {
+    const fetchOffers = async () => {
+      const targetId = restId || restaurantDetail?.restId || restaurantDetail?._id || urlId || paramRestId;
+      if (!targetId) return;
+      try {
+        const res = await fetch(`${API_URL}/api/offers/restaurant/${targetId}`);
+        const data = await res.json();
+        if (data && data.success && data.data) {
+          setRestaurantOffers(data.data);
+        }
+      } catch (err) {
+        console.warn('Error fetching restaurant offers in menu:', err);
+      }
+    };
+    fetchOffers();
+  }, [restId, restaurantDetail, urlId, paramRestId]);
+
+  const checkIsBogo = useCallback((foodItem, categoryTitle) => {
+    if (!restaurantOffers?.bogoOffers || !restaurantOffers.bogoOffers.length) return false;
+    const itemCat = String(foodItem?.category || categoryTitle || '').trim().toLowerCase();
+    return restaurantOffers.bogoOffers.some((b) => {
+      if (b.isActive === false) return false;
+      const srcCat = String(b.sourceCategory || '').trim().toLowerCase();
+      return srcCat && (srcCat === itemCat || itemCat.includes(srcCat) || srcCat.includes(itemCat));
+    });
+  }, [restaurantOffers]);
+
+  const getCategoryDiscountPercent = useCallback((foodItem, categoryTitle) => {
+    if (!restaurantOffers?.categoryDiscounts || !restaurantOffers.categoryDiscounts.length) return 0;
+    const itemCat = String(foodItem?.category || categoryTitle || '').trim().toLowerCase();
+    const match = restaurantOffers.categoryDiscounts.find((d) => {
+      if (d.isActive === false) return false;
+      const targetCat = String(d.category || '').trim().toLowerCase();
+      return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
+    });
+    return match ? Number(match.discountPercentage || 0) : 0;
+  }, [restaurantOffers]);
+
   // Extract all unique categories from database items
   const categories = useMemo(() => [
     'All',
@@ -687,8 +754,12 @@ export default function RestaurantMenuScreen() {
   // Total cart item count and subtotal
   const cartItemCount = useMemo(() => {
     if (!cart || cart.length === 0) return 0;
-    return cart.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
-  }, [cart]);
+    return cart.reduce((sum, item) => {
+      const isBogo = item.isBogo || checkIsBogo(item, item.category);
+      const units = isBogo ? (Number(item.quantity) || 0) * 2 : (Number(item.quantity) || 0);
+      return sum + units;
+    }, 0);
+  }, [cart, checkIsBogo]);
 
   const cartSubtotal = useMemo(() => {
     if (!cart || cart.length === 0) return 0;
@@ -826,9 +897,13 @@ export default function RestaurantMenuScreen() {
           currentCart.splice(existingItemIndex, 1);
         }
       } else if (change > 0) {
+        const isBogoMatch = checkIsBogo(item, item.category);
+        const catDiscountPercent = getCategoryDiscountPercent(item, item.category);
         currentCart.push({
           ...item,
           quantity: 1,
+          isBogo: isBogoMatch,
+          categoryDiscountPercent: catDiscountPercent,
           restId: restId, // keep track of the restaurant ID
           restaurantName: passedName, // save restaurant name
         });
@@ -845,7 +920,7 @@ export default function RestaurantMenuScreen() {
       console.error('Error updating quantity:', error);
       Alert.alert('Error', 'Failed to update item quantity.');
     }
-  }, [hasActiveOrder, restId, passedName, triggerToast]);
+  }, [hasActiveOrder, restId, passedName, triggerToast, checkIsBogo, getCategoryDiscountPercent]);
 
   // Group sorted items by category for section headings
   const groupedCategories = useMemo(() => {
@@ -939,10 +1014,12 @@ export default function RestaurantMenuScreen() {
               (foodItem.id && cartMap[String(foodItem.id)]) ||
               0
             );
+            const isBogo = checkIsBogo(foodItem, group.title);
+            const catDiscountPercent = getCategoryDiscountPercent(foodItem, group.title);
             return (
               <AnimatedCardWrapper
-                key={foodItem._id || foodItem.itemId || `food_${group.title}_${idx}`}
-                filterKey={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}`}
+                key={foodItem._id || foodItem.itemId || ('food_' + group.title + '_' + idx)}
+                filterKey={(filterType + '_' + (selectedCategory || '') + '_' + sortBy + '_' + searchQuery)}
                 style={{ width: '48%' }}
               >
                 <ItemCard
@@ -950,6 +1027,8 @@ export default function RestaurantMenuScreen() {
                   quantity={quantity}
                   onUpdateQuantity={handleUpdateQuantity}
                   onTriggerToast={triggerToast}
+                  isBogo={isBogo}
+                  categoryDiscountPercent={catDiscountPercent}
                 />
               </AnimatedCardWrapper>
             );
@@ -958,7 +1037,7 @@ export default function RestaurantMenuScreen() {
         </View>
       </View>
     );
-  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery]);
+  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery, checkIsBogo, getCategoryDiscountPercent, restaurantOffers]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';

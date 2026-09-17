@@ -89,6 +89,27 @@ const loadRazorpayScript = () => {
 };
 
 export default function CartScreen() {
+
+  // Restaurant Offers (1+1 BOGO, Category % Discounts, Tiered Bill Discounts)
+  const [restaurantOffers, setRestaurantOffers] = useState(null);
+
+  useEffect(() => {
+    const fetchOffers = async () => {
+      const rId = cartItems[0]?.restId || cartItems[0]?.restaurantId || cartItems[0]?.id || '';
+      if (!rId) return;
+      try {
+        const res = await fetch(`${API_URL}/api/offers/restaurant/${rId}`);
+        const data = await res.json();
+        if (data && data.success && data.data) {
+          setRestaurantOffers(data.data);
+        }
+      } catch (err) {
+        console.warn('Error fetching restaurant offers in cart:', err);
+      }
+    };
+    fetchOffers();
+  }, [cartItems]);
+
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const dispatch = useDispatch();
@@ -103,13 +124,27 @@ export default function CartScreen() {
   useFocusEffect(
     useCallback(() => {
       const onBackPress = () => {
-        router.replace('/restaurentlist');
+        if (router.canGoBack()) {
+          router.back();
+        } else if (cartItems && cartItems.length > 0 && (cartItems[0]?.restId || cartItems[0]?.restaurantId)) {
+          const rId = cartItems[0].restId || cartItems[0].restaurantId;
+          router.replace({
+            pathname: `/restaurentlist/${rId}`,
+            params: {
+              id: rId,
+              restId: rId,
+              name: cartItems[0].restaurantName || '',
+            },
+          });
+        } else {
+          router.replace('/restaurentlist');
+        }
         return true;
       };
 
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
       return () => subscription.remove();
-    }, [router])
+    }, [router, cartItems])
   );
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -395,6 +430,21 @@ export default function CartScreen() {
           }
         } catch (e) {
           setAppliedCoupon(null);
+        }
+      }
+
+      // Load Restaurant Offers
+      if (Array.isArray(currentItems) && currentItems.length > 0) {
+        const rId = currentItems[0]?.restId || currentItems[0]?.restaurantId || currentItems[0]?.id || '';
+        if (rId) {
+          fetch(`${API_URL}/api/offers/restaurant/${rId}`)
+            .then(res => res.json())
+            .then(data => {
+              if (data && data.success && data.data) {
+                setRestaurantOffers(data.data);
+              }
+            })
+            .catch(err => console.warn('[Cart] Error loading offers in loadCart:', err));
         }
       }
 
@@ -1671,7 +1721,15 @@ export default function CartScreen() {
 
   const calculateTotal = () => {
     return cartItems.reduce((sum, item) => {
-      const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+      const itemCat = String(item.category || '').trim().toLowerCase();
+      const matchedCatDiscount = (restaurantOffers?.categoryDiscounts || []).find((d) => {
+        if (d.isActive === false) return false;
+        const targetCat = String(d.category || '').trim().toLowerCase();
+        return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
+      });
+      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+      const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+      const offerPercent = Math.max(directOffer, catDiscountPercent);
       const price = (offerPercent > 0 && offerPercent <= 100)
         ? (item.price - (item.price * (offerPercent / 100)))
         : (item.price || 0);
@@ -1706,6 +1764,29 @@ export default function CartScreen() {
     }
   }
 
+  // Tiered Bill Discount Calculation (supports % or Flat Money ₹)
+  const activeTiers = (restaurantOffers?.tieredDiscounts || [])
+    .filter(t => {
+      if (t.isActive === false || Number(t.minBillAmount) <= 0) return false;
+      const isFlat = t.discountType === 'flat' || (Number(t.discountAmount) > 0 && !t.discountPercentage);
+      return isFlat ? Number(t.discountAmount) > 0 : Number(t.discountPercentage) > 0;
+    })
+    .sort((a, b) => Number(b.minBillAmount) - Number(a.minBillAmount));
+
+  const activeTier = activeTiers.find(t => total >= Number(t.minBillAmount));
+  let restaurantTieredDiscount = 0;
+  if (activeTier) {
+    const isFlat = activeTier.discountType === 'flat' || (Number(activeTier.discountAmount) > 0 && !activeTier.discountPercentage);
+    if (isFlat) {
+      restaurantTieredDiscount = Math.min(Number(activeTier.discountAmount || 0), total);
+    } else {
+      restaurantTieredDiscount = Math.round(total * (Number(activeTier.discountPercentage || 0) / 100) * 100) / 100;
+    }
+  }
+
+  const ascendingTiers = [...activeTiers].sort((a, b) => Number(a.minBillAmount) - Number(b.minBillAmount));
+  const nextTier = ascendingTiers.find(t => total < Number(t.minBillAmount));
+
   const platformFee = 0.00; // Platform fee removed
   const restId = targetRestId;
   const distanceVal = parseFloat(distanceStr) || 0;
@@ -1719,7 +1800,7 @@ export default function CartScreen() {
   const foodGst = Math.round((total * 0.05) * 100) / 100; // 5% Food GST
   const deliveryGst = isLocationFetched ? Math.round((deliveryFee * 0.18) * 100) / 100 : 0; // 18% Delivery GST
   const gst = Math.round((foodGst + deliveryGst) * 100) / 100;
-  const grandTotal = Math.round(Math.max(0, total - discountAmount + gst + deliveryFee) * 100) / 100;
+  const grandTotal = Math.round(Math.max(0, total - discountAmount - restaurantTieredDiscount + gst + deliveryFee) * 100) / 100;
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
   const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1750,7 +1831,13 @@ export default function CartScreen() {
         </Text>
         <TouchableOpacity
           style={styles.orderButton}
-          onPress={() => router.replace('/restaurentlist')}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/restaurentlist');
+            }
+          }}
           activeOpacity={0.85}
         >
           <Text style={styles.orderButtonText}>Order Something Tasty</Text>
@@ -1769,7 +1856,7 @@ export default function CartScreen() {
       <StatusBar style="dark" backgroundColor="transparent" translucent={true} />
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: Math.max(160, insets.bottom + 140) }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Restaurant Title */}
@@ -1785,43 +1872,89 @@ export default function CartScreen() {
               displayItemName += suffix;
             }
 
-            const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+            const itemCat = String(item.category || '').trim().toLowerCase();
+            const matchedCatDiscount = (restaurantOffers?.categoryDiscounts || []).find((d) => {
+              if (d.isActive === false) return false;
+              const targetCat = String(d.category || '').trim().toLowerCase();
+              return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
+            });
+            const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+            const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+            const offerPercent = Math.max(directOffer, catDiscountPercent);
             const hasOffer = offerPercent > 0 && offerPercent <= 100;
             const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
 
+            const isBogo = Boolean(
+              item.isBogo ||
+              (restaurantOffers?.bogoOffers || []).some((b) => {
+                if (b.isActive === false) return false;
+                const srcCat = String(b.sourceCategory || '').trim().toLowerCase();
+                return srcCat && (srcCat === itemCat || itemCat.includes(srcCat) || srcCat.includes(itemCat));
+              })
+            );
+
             return (
-              <View key={item._id || item.itemId} style={styles.cartCard}>
-                <Text style={styles.itemName} numberOfLines={2}>
-                  {displayItemName}
-                </Text>
+              <View key={item._id || item.itemId} style={[styles.cartCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={styles.itemName} numberOfLines={2}>
+                    {displayItemName}
+                  </Text>
 
-                <View style={styles.controlsRow}>
-                  {/* Quantity Pill with Plus on Left and Minus on Right */}
-                  <View style={styles.quantityContainer}>
-                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
-                      <Feather name="plus" size={14} color="#1A1A1A" />
-                    </TouchableOpacity>
-                    <Text style={styles.quantityText}>{item.quantity}</Text>
-                    <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
-                      <Feather name="minus" size={14} color="#1A1A1A" />
+                  <View style={styles.controlsRow}>
+                    {/* Quantity Pill with Plus on Left and Minus on Right */}
+                    <View style={styles.quantityContainer}>
+                      <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
+                        <Feather name="plus" size={14} color="#1A1A1A" />
+                      </TouchableOpacity>
+                      <Text style={styles.quantityText}>{isBogo ? (item.quantity * 2) : item.quantity}</Text>
+                      <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
+                        <Feather name="minus" size={14} color="#1A1A1A" />
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Price */}
+                    <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
+                      <Text style={styles.itemPrice}>₹{(offerPrice * item.quantity).toFixed(2)}</Text>
+                      {hasOffer && (
+                        <Text style={[styles.itemPrice, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 11, fontWeight: 'normal', marginTop: 1, minWidth: 0 }]}>
+                          ₹{(item.price * item.quantity).toFixed(2)}
+                        </Text>
+                      )}
+                    </View>
+
+                    {/* Red Trash Icon */}
+                    <TouchableOpacity onPress={() => updateQuantity(item._id || item.itemId, -item.quantity)} activeOpacity={0.7}>
+                      <MaterialIcons name="delete" size={24} color="#FF5E5E" />
                     </TouchableOpacity>
                   </View>
-
-                  {/* Price */}
-                  <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
-                    <Text style={styles.itemPrice}>₹{(offerPrice * item.quantity).toFixed(2)}</Text>
-                    {hasOffer && (
-                      <Text style={[styles.itemPrice, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 11, fontWeight: 'normal', marginTop: 1, minWidth: 0 }]}>
-                        ₹{(item.price * item.quantity).toFixed(2)}
-                      </Text>
-                    )}
-                  </View>
-
-                  {/* Red Trash Icon */}
-                  <TouchableOpacity onPress={() => updateQuantity(item._id || item.itemId, -item.quantity)} activeOpacity={0.7}>
-                    <MaterialIcons name="delete" size={24} color="#FF5E5E" />
-                  </TouchableOpacity>
                 </View>
+
+                {isBogo && (
+                  <View style={{
+                    marginTop: 10,
+                    paddingTop: 8,
+                    borderTopWidth: 1,
+                    borderTopColor: 'rgba(0, 128, 0, 0.2)',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}>
+                    <View style={{
+                      backgroundColor: '#008000',
+                      paddingHorizontal: 7,
+                      paddingVertical: 2.5,
+                      borderRadius: 6,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}>
+                      <Text style={{ color: '#FFFFFF', fontSize: 10.5, fontWeight: '800' }}>1+1 OFFER</Text>
+                    </View>
+                    <Text style={{ color: '#008000', fontSize: 12, fontWeight: '700' }}>
+                      {item.quantity * 2} Items ({item.quantity} Paid + {item.quantity} Free)
+                    </Text>
+                  </View>
+                )}
               </View>
             );
           })}
@@ -1880,12 +2013,68 @@ export default function CartScreen() {
           ) : null}
         </View>
 
+
+        {/* Dynamic Tiered Discount Progress / Unlocked Banner (After Coupon Card) */}
+        {nextTier && (() => {
+          const neededAmount = Math.max(0, nextTier.minBillAmount - total);
+          const isNextFlat = nextTier.discountType === 'flat' || (Number(nextTier.discountAmount) > 0 && !nextTier.discountPercentage);
+          const nextDiscountText = isNextFlat ? `₹${nextTier.discountAmount} OFF!` : `${nextTier.discountPercentage}% OFF!`;
+          return (
+            <View style={{
+              backgroundColor: '#000000',
+              borderRadius: 20,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              marginBottom: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              shadowColor: '#000000',
+              shadowOffset: { width: 0, height: 3 },
+              shadowOpacity: 0.2,
+              shadowRadius: 5,
+              elevation: 3,
+            }}>
+              <Text style={{ fontSize: 16, marginRight: 8 }}>⚡</Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 13.5, fontWeight: '700', flex: 1 }}>
+                Just ₹{neededAmount.toFixed(0)} away from unlocking <Text style={{ color: '#FBBF24', fontWeight: '900' }}>{nextDiscountText}</Text>
+              </Text>
+            </View>
+          );
+        })()}
+        {!nextTier && activeTier && (() => {
+          const isActiveFlat = activeTier.discountType === 'flat' || (Number(activeTier.discountAmount) > 0 && !activeTier.discountPercentage);
+          const activeSavingsText = isActiveFlat ? `₹${activeTier.discountAmount} Instant Savings!` : `${activeTier.discountPercentage}% Instant Savings!`;
+          return (
+            <View style={{
+              backgroundColor: '#000000',
+              borderRadius: 20,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              marginBottom: 12,
+              flexDirection: 'row',
+              alignItems: 'center',
+              shadowColor: '#000000',
+              shadowOffset: { width: 0, height: 3 },
+              shadowOpacity: 0.2,
+              shadowRadius: 5,
+              elevation: 3,
+            }}>
+              <Text style={{ fontSize: 16, marginRight: 8 }}>🎉</Text>
+              <Text style={{ color: '#FFFFFF', fontSize: 13.5, fontWeight: '700', flex: 1 }}>
+                Big win! You unlocked <Text style={{ color: '#FBBF24', fontWeight: '900' }}>{activeSavingsText}</Text>
+              </Text>
+            </View>
+          );
+        })()}
+        
+
         {/* Bill Details Card */}
         <View style={styles.billCard}>
           <View style={styles.billRow}>
             <Text style={styles.billLabel}>Total</Text>
             <Text style={styles.billValue}>₹{total.toFixed(2)}</Text>
           </View>
+          
           <TouchableOpacity
             style={styles.billRow}
             onPress={() => setIsGstExpanded(!isGstExpanded)}
@@ -1959,12 +2148,28 @@ export default function CartScreen() {
               </Text>
             </View>
           )}
+          
+
+          {restaurantTieredDiscount > 0 ? (() => {
+            const isActiveFlat = activeTier?.discountType === 'flat' || (Number(activeTier?.discountAmount) > 0 && !activeTier?.discountPercentage);
+            const badgeLabel = isActiveFlat ? `₹${activeTier?.discountAmount}` : `${activeTier?.discountPercentage}%`;
+            return (
+              <View style={[styles.billRow, { backgroundColor: '#008000', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginVertical: 4 }]}>
+                <Text style={[styles.billLabel, { color: '#FFFFFF', fontWeight: '800', fontSize: 14.5 }]}>
+                  🎉 You have saved ({badgeLabel})
+                </Text>
+                <Text style={[styles.billValue, { color: '#FFFFFF', fontWeight: '900', fontSize: 16 }]}>
+                  -₹{restaurantTieredDiscount.toFixed(2)}
+                </Text>
+              </View>
+            );
+          })() : null}
           {discountAmount > 0 ? (
-            <View style={styles.billRow}>
-              <Text style={[styles.billLabel, { color: '#27AE60', fontWeight: '600' }]}>
+            <View style={[styles.billRow, { backgroundColor: '#008000', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20, marginVertical: 4 }]}>
+              <Text style={[styles.billLabel, { color: '#FFFFFF', fontWeight: '800', fontSize: 14.5 }]}>
                 Coupon Discount ({appliedCoupon?.couponCode})
               </Text>
-              <Text style={[styles.billValue, { color: '#27AE60', fontWeight: '600' }]}>
+              <Text style={[styles.billValue, { color: '#FFFFFF', fontWeight: '900', fontSize: 16 }]}>
                 -₹{discountAmount.toFixed(2)}
               </Text>
             </View>
@@ -2878,7 +3083,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingHorizontal: 20,
-    paddingBottom: 120, // push below tab bar
+    paddingBottom: 160, // ample padding to clear floating navbar
   },
   container: {
     flex: 1,
@@ -2993,7 +3198,7 @@ const styles = StyleSheet.create({
     height: 1,
   },
   coinsBadge: {
-    backgroundColor: '#4CD080',
+    backgroundColor: '#008000',
     borderRadius: 20,
     paddingVertical: 10,
     paddingHorizontal: 16,
@@ -3020,6 +3225,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 20,
+    marginBottom: 24,
     gap: 12,
   },
   clearButton: {
@@ -3042,13 +3248,13 @@ const styles = StyleSheet.create({
   },
   checkoutButton: {
     flex: 1.2,
-    backgroundColor: '#27AE60',
+    backgroundColor: '#008000',
     borderRadius: 32,
     paddingVertical: 16,
     paddingHorizontal: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#27AE60',
+    shadowColor: '#008000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
     shadowRadius: 6,
@@ -3226,7 +3432,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   confirmOrderButton: {
-    backgroundColor: '#27AE60',
+    backgroundColor: '#008000',
     borderRadius: 35,
     paddingVertical: 18,
     paddingHorizontal: 24,
@@ -3234,7 +3440,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 20,
-    shadowColor: '#27AE60',
+    marginBottom: 24,
+    shadowColor: '#008000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.35,
     shadowRadius: 10,

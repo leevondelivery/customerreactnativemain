@@ -1,4 +1,14 @@
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://customerbackendfile-production.up.railway.app';
+import { Platform } from 'react-native';
+
+// Your PC's Wi-Fi IP address for mobile devices to connect to your local backend server
+const LOCAL_PC_IP = '10.113.153.182';
+
+export const API_URL =
+  process.env.EXPO_PUBLIC_API_URL ||
+  (Platform.OS === 'web'
+    ? 'http://localhost:5000'
+    : `http://${LOCAL_PC_IP}:5000`);
+
 
 export const CONTACT_INFO = {
   phone: '7207610235',
