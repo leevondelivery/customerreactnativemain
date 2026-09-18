@@ -78,27 +78,22 @@ const SMOOTH_LAYOUT_ANIMATION = {
 
 // Ultra-fast smooth animated wrapper for card transitions when filtering/sorting (clean spring physics with 100% solid cards, no dimming mask)
 function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const [animValue] = useState(() => new Animated.Value(1));
-  const isInitialMount = useRef(true);
+  const animValue = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      return;
-    }
     animValue.setValue(0);
-    const delay = Math.min(index * 4, 16);
+    const delay = Math.min(index * 8, 40);
     const timer = setTimeout(() => {
       Animated.spring(animValue, {
         toValue: 1,
         tension: 280,
-        friction: 18,
+        friction: 20,
         useNativeDriver: true,
       }).start();
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [filterKey, animValue, index]);
+  }, [filterKey, index]);
 
   const translateY = animValue.interpolate({
     inputRange: [0, 1],
@@ -1681,6 +1676,7 @@ export default function RestaurantListScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <FlatList
         data={filteredList}
+        extraData={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
         keyExtractor={(item) => item._id || item.restId}
         ListHeaderComponent={renderHeader}
         renderItem={renderRestaurantCard}
@@ -1691,7 +1687,7 @@ export default function RestaurantListScreen() {
         initialNumToRender={5}
         maxToRenderPerBatch={5}
         windowSize={5}
-        removeClippedSubviews={Platform.OS === 'android'}
+        removeClippedSubviews={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
         }

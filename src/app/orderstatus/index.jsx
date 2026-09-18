@@ -1139,13 +1139,17 @@ export default function OrderStatusScreen() {
   const grandTotal = orderStatus.grandTotal ?? orderStatus.totalPrice ?? orderStatus.total ?? orderStatus.finalTotal ?? '';
   const discountAmount = orderStatus.discountAmount ?? orderStatus.discount_amount ?? orderStatus.discount ?? '';
   const couponCode = orderStatus.couponCode ?? orderStatus.coupon_code ?? orderStatus.promo_code ?? '';
+  const couponDiscount = Number(orderStatus.couponDiscount !== undefined ? orderStatus.couponDiscount : (orderStatus.couponCode ? discountAmount : 0)) || 0;
+  const tieredDiscount = Number(orderStatus.tieredDiscount || orderStatus.restaurantTieredDiscount || 0);
+  const tieredDiscountLabel = orderStatus.tieredDiscountLabel || (tieredDiscount > 0 ? 'Instant Bill Savings' : '');
+  const totalSavings = Number(orderStatus.totalSavings !== undefined ? orderStatus.totalSavings : ((couponDiscount + tieredDiscount) || discountAmount || 0)) || 0;
 
   if ((deliveryCharges === undefined || deliveryCharges === null || deliveryCharges === '') && grandTotal !== '' && subTotal !== '') {
     const calcSub = Number(subTotal) || 0;
     const calcGst = Number(gst) || 0;
     const calcPlat = Number(platformFee) || 0;
     const calcGrand = Number(grandTotal) || 0;
-    const calcDiscount = Number(orderStatus.discountAmount || orderStatus.discount || 0);
+    const calcDiscount = Number(totalSavings || orderStatus.discountAmount || orderStatus.discount || 0);
     const diff = calcGrand - (calcSub + calcGst + calcPlat - calcDiscount);
     if (!isNaN(diff) && diff >= 0) {
       deliveryCharges = diff;
@@ -1287,13 +1291,43 @@ export default function OrderStatusScreen() {
               <Text style={styles.tableHeaderText}>Cost</Text>
             </View>
 
-            {items.length > 0 ? items.map((item, idx) => (
-              <View key={idx} style={styles.tableRow}>
-                <Text style={styles.tableCellLeft}>{item.name || item.itemName || item.item || '-'}</Text>
-                <Text style={styles.tableCell}>{item.quantity || item.qty || 1}x</Text>
-                <Text style={styles.tableCell}>{formatCurrency(item.cost || item.price || item.amount)}</Text>
-              </View>
-            )) : (
+            {items.length > 0 ? items.map((item, idx) => {
+              const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0 || Number(item.amount) === 0);
+              const isBogo = Boolean(item.isBogo || item.bogoTag || isFree);
+              const bogoTag = item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer Applied' : null));
+              const itemName = item.name || item.itemName || item.item || '-';
+              const qty = item.quantity || item.qty || 1;
+              const costVal = item.cost !== undefined ? item.cost : (item.price !== undefined ? item.price : item.amount);
+
+              return (
+                <View 
+                  key={idx} 
+                  style={[
+                    styles.tableRow, 
+                    isFree ? { backgroundColor: '#F1F8E9', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 6, marginVertical: 3, borderLeftWidth: 3, borderLeftColor: '#2E7D32' } : null
+                  ]}
+                >
+                  <View style={{ flex: 3, paddingRight: 6 }}>
+                    <Text style={[styles.tableCellLeft, isFree ? { color: '#1B5E20', fontWeight: '700' } : null]}>
+                      {itemName}
+                    </Text>
+                    {bogoTag ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                        <View style={{ backgroundColor: isFree ? '#2E7D32' : '#008000', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                          <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '800' }}>🎁 {bogoTag}</Text>
+                        </View>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={[styles.tableCell, isFree ? { color: '#1B5E20', fontWeight: '700' } : null]}>
+                    {qty}x
+                  </Text>
+                  <Text style={[styles.tableCell, isFree ? { color: '#2E7D32', fontWeight: '800' } : null]}>
+                    {isFree ? 'FREE (₹0.00)' : formatCurrency(costVal)}
+                  </Text>
+                </View>
+              );
+            }) : (
               <View style={styles.tableRow}>
                 <Text style={[styles.tableCellLeft, { color: '#AEAEB2' }]}>No items found</Text>
               </View>
@@ -1383,20 +1417,65 @@ export default function OrderStatusScreen() {
               </>
             )}
 
-            {discountAmount !== '' && Number(discountAmount) > 0 && (
+            {tieredDiscount > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryLabel, { color: '#2E7D32', fontWeight: '700' }]}>
+                  🎉 Instant Bill Savings{tieredDiscountLabel ? ` (${tieredDiscountLabel})` : ''}
+                </Text>
+                <Text style={[styles.summaryValue, { color: '#2E7D32', fontWeight: '700' }]}>
+                  - {formatCurrency(tieredDiscount)}
+                </Text>
+              </View>
+            )}
+
+            {couponDiscount > 0 && (
               <View style={styles.summaryRow}>
                 <Text style={[styles.summaryLabel, { color: '#2B783E', fontWeight: '700' }]}>
                   🏷️ Coupon Discount{couponCode ? ` (${couponCode})` : ''}
+                </Text>
+                <Text style={[styles.summaryValue, { color: '#2B783E', fontWeight: '700' }]}>
+                  - {formatCurrency(couponDiscount)}
+                </Text>
+              </View>
+            )}
+
+            {(!tieredDiscount && !couponDiscount && discountAmount !== '' && Number(discountAmount) > 0) && (
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryLabel, { color: '#2B783E', fontWeight: '700' }]}>
+                  🏷️ Discount
                 </Text>
                 <Text style={[styles.summaryValue, { color: '#2B783E', fontWeight: '700' }]}>
                   - {formatCurrency(discountAmount)}
                 </Text>
               </View>
             )}
+
             {grandTotal !== '' && (
               <View style={styles.totalRow}>
                 <Text style={styles.totalLabel}>Total</Text>
                 <Text style={styles.totalValue}>{formatCurrency(grandTotal)}</Text>
+              </View>
+            )}
+
+            {totalSavings > 0 && (
+              <View style={{
+                backgroundColor: '#E8F5E9',
+                borderColor: '#A5D6A7',
+                borderWidth: 1,
+                borderRadius: 8,
+                paddingVertical: 9,
+                paddingHorizontal: 12,
+                marginTop: 10,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <Text style={{ color: '#1B5E20', fontSize: 13, fontWeight: '700' }}>
+                  🎉 Total Savings on this order
+                </Text>
+                <Text style={{ color: '#1B5E20', fontSize: 14, fontWeight: '800' }}>
+                  - {formatCurrency(totalSavings)}
+                </Text>
               </View>
             )}
           </View>

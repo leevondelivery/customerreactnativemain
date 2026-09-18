@@ -2,7 +2,7 @@ import { Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-ico
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -88,27 +88,49 @@ const loadRazorpayScript = () => {
   });
 };
 
+// Global In-Memory Offers Cache to guarantee instant 0ms zero-flicker loading across page switches
+const offersMemoryCache = new Map();
+
 export default function CartScreen() {
 
   // Restaurant Offers (1+1 BOGO, Category % Discounts, Tiered Bill Discounts)
   const [restaurantOffers, setRestaurantOffers] = useState(null);
 
-  useEffect(() => {
-    const fetchOffers = async () => {
-      const rId = cartItems[0]?.restId || cartItems[0]?.restaurantId || cartItems[0]?.id || '';
-      if (!rId) return;
+  const fetchOffersForRestaurant = useCallback(async (rId) => {
+    if (!rId) return;
+
+    // 1. Immediately apply from memory cache (0ms latency, zero flicker)
+    if (offersMemoryCache.has(rId)) {
+      setRestaurantOffers(offersMemoryCache.get(rId));
+    } else {
+      // 2. Read local disk cache if available
       try {
-        const res = await fetch(`${API_URL}/api/offers/restaurant/${rId}`);
-        const data = await res.json();
-        if (data && data.success && data.data) {
-          setRestaurantOffers(data.data);
+        const localCached = await AsyncStorage.getItem(`restaurant_offers_${rId}`);
+        if (localCached) {
+          const parsed = JSON.parse(localCached);
+          offersMemoryCache.set(rId, parsed);
+          setRestaurantOffers(parsed);
         }
-      } catch (err) {
-        console.warn('Error fetching restaurant offers in cart:', err);
+      } catch (e) {}
+    }
+
+    // 3. Fetch latest in background and update only if different
+    try {
+      const res = await fetch(`${API_URL}/api/offers/restaurant/${rId}`);
+      const data = await res.json();
+      if (data && data.success && data.data) {
+        const newJson = JSON.stringify(data.data);
+        const oldJson = JSON.stringify(offersMemoryCache.get(rId) || null);
+        if (newJson !== oldJson) {
+          offersMemoryCache.set(rId, data.data);
+          setRestaurantOffers(data.data);
+          await AsyncStorage.setItem(`restaurant_offers_${rId}`, newJson).catch(() => {});
+        }
       }
-    };
-    fetchOffers();
-  }, [cartItems]);
+    } catch (err) {
+      console.warn('[Cart] Error loading offers in background:', err);
+    }
+  }, []);
 
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -433,18 +455,11 @@ export default function CartScreen() {
         }
       }
 
-      // Load Restaurant Offers
+      // Load Restaurant Offers (Cached & Zero-Flicker)
       if (Array.isArray(currentItems) && currentItems.length > 0) {
         const rId = currentItems[0]?.restId || currentItems[0]?.restaurantId || currentItems[0]?.id || '';
         if (rId) {
-          fetch(`${API_URL}/api/offers/restaurant/${rId}`)
-            .then(res => res.json())
-            .then(data => {
-              if (data && data.success && data.data) {
-                setRestaurantOffers(data.data);
-              }
-            })
-            .catch(err => console.warn('[Cart] Error loading offers in loadCart:', err));
+          fetchOffersForRestaurant(rId);
         }
       }
 
@@ -1235,41 +1250,167 @@ export default function CartScreen() {
     setShowPaymentChoiceModal(true);
   };
 
+  const buildOrderData = () => {
+    const subTotal = calculateTotal();
+
+    // 1. Coupon Discount Calculation
+    let couponDiscountVal = 0;
+    if (appliedCoupon) {
+      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+      if (minOrder === 0 || subTotal >= minOrder) {
+        if (appliedCoupon.discountType === 'flat') {
+          couponDiscountVal = Math.min(appliedCoupon.discountValue, subTotal);
+        } else if (appliedCoupon.discountType === 'percentage') {
+          couponDiscountVal = subTotal * (appliedCoupon.discountValue / 100);
+        }
+        couponDiscountVal = Math.round(couponDiscountVal * 100) / 100;
+      }
+    }
+
+    // 2. Tiered Bill Discount Calculation
+    const activeTiers = (restaurantOffers?.tieredDiscounts || [])
+      .filter(t => {
+        if (t.isActive === false || Number(t.minBillAmount) <= 0) return false;
+        const isFlat = t.discountType === 'flat' || (Number(t.discountAmount) > 0 && !t.discountPercentage);
+        return isFlat ? Number(t.discountAmount) > 0 : Number(t.discountPercentage) > 0;
+      })
+      .sort((a, b) => Number(b.minBillAmount) - Number(a.minBillAmount));
+
+    const activeTier = activeTiers.find(t => subTotal >= Number(t.minBillAmount));
+    let tieredDiscountVal = 0;
+    let tieredDiscountLabel = '';
+    if (activeTier) {
+      const isFlat = activeTier.discountType === 'flat' || (Number(activeTier.discountAmount) > 0 && !activeTier.discountPercentage);
+      if (isFlat) {
+        tieredDiscountVal = Math.min(Number(activeTier.discountAmount || 0), subTotal);
+        tieredDiscountLabel = `₹${activeTier.discountAmount} Tier Discount`;
+      } else {
+        tieredDiscountVal = Math.round(subTotal * (Number(activeTier.discountPercentage || 0) / 100) * 100) / 100;
+        tieredDiscountLabel = `${activeTier.discountPercentage}% Instant Savings`;
+      }
+    }
+
+    const totalDiscount = Math.round((couponDiscountVal + tieredDiscountVal) * 100) / 100;
+
+    // 3. Build Prepared Cart Items including 1+1 Free Items
+    const preparedItems = [];
+    (cartItems || []).forEach((item) => {
+      const itemCat = String(item.category || '').trim().toLowerCase();
+      const itemId = String(item._id || item.itemId || item.id || '');
+      const itemName = String(item.name || item.itemName || '').trim().toLowerCase();
+
+      // Check item-wise 1+1
+      const itemBogoMatch = (restaurantOffers?.bogoOffers || []).find((b) => {
+        if (b.isActive === false) return false;
+        if (b.type === 'item') {
+          const srcId = String(b.sourceItemId || '');
+          const srcName = String(b.sourceItemName || '').trim().toLowerCase();
+          return (srcId && srcId === itemId) || (srcName && (srcName === itemName || itemName.includes(srcName) || srcName.includes(itemName)));
+        }
+        return false;
+      });
+
+      // Check category-wise 1+1
+      const catBogoMatch = (restaurantOffers?.bogoOffers || []).find((b) => {
+        if (b.isActive === false) return false;
+        if (!b.type || b.type === 'category') {
+          const srcCat = String(b.sourceCategory || '').trim().toLowerCase();
+          return srcCat && (srcCat === itemCat || itemCat.includes(srcCat) || srcCat.includes(itemCat));
+        }
+        return false;
+      });
+
+      const matchedBogo = itemBogoMatch || catBogoMatch || (item.bogoOffer || null);
+      const isBogo = Boolean(item.isBogo || matchedBogo);
+      const isCrossItem = matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName;
+
+      // Add Paid Item
+      preparedItems.push({
+        _id: item._id || item.itemId || item.id,
+        itemId: String(item._id || item.itemId || item.id),
+        name: item.itemName || item.name,
+        itemName: item.itemName || item.name,
+        price: Number(item.price || 0),
+        cost: Number(item.cost !== undefined ? item.cost : (item.price || 0)),
+        quantity: Number(item.quantity || 1),
+        category: item.category || '',
+        isFreeItem: false,
+        isBogo: isBogo,
+        bogoTag: isCrossItem 
+          ? null 
+          : (isBogo ? '1+1 Offer (1 Paid + 1 Free)' : null),
+      });
+
+      // If cross-item 1+1, add paired free item
+      if (isCrossItem && matchedBogo.targetItemName) {
+        preparedItems.push({
+          _id: `free_${item._id || item.itemId || Math.random()}`,
+          itemId: String(matchedBogo.targetItemId || `free_${item._id || item.itemId}`),
+          name: matchedBogo.targetItemName,
+          itemName: matchedBogo.targetItemName,
+          price: 0,
+          cost: 0,
+          quantity: Number(item.quantity || 1),
+          category: matchedBogo.targetCategory || 'Offer Item',
+          isFreeItem: true,
+          isBogo: true,
+          bogoTag: `Free with ${item.name || item.itemName}`,
+        });
+      }
+    });
+
+    const restId = cartItems[0]?.restId || '';
+    const distanceStr = roadDistances[restId] || '';
+    const distanceVal = parseFloat(distanceStr) || 0;
+    const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
+    const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+    const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
+    const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
+    const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
+    const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
+    const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
+    const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
+    const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
+    const gTotal = Math.round(Math.max(0, subTotal - totalDiscount + gstAmount + deliveryFee) * 100) / 100;
+
+    return {
+      subTotal,
+      couponDiscount: couponDiscountVal,
+      tieredDiscount: tieredDiscountVal,
+      tieredDiscountLabel,
+      totalDiscount,
+      preparedItems,
+      restId,
+      deliveryFee,
+      surgeFee,
+      foodGstAmount,
+      deliveryGstAmount,
+      gstAmount,
+      gTotal,
+    };
+  };
+
   const processCodPayment = async () => {
     if (isProcessingPayment) return;
     setShowPaymentChoiceModal(false);
     setIsProcessingPayment(true);
 
     try {
-      const subTotal = calculateTotal();
-      let discountValAmount = 0;
-      if (appliedCoupon) {
-        const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
-        if (minOrder === 0 || subTotal >= minOrder) {
-          if (appliedCoupon.discountType === 'flat') {
-            discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
-          } else if (appliedCoupon.discountType === 'percentage') {
-            discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
-          }
-          discountValAmount = Math.round(discountValAmount * 100) / 100;
-        } else {
-          discountValAmount = 0;
-        }
-      }
-
-      const restId = cartItems[0]?.restId || '';
-      const distanceStr = roadDistances[restId] || '';
-      const distanceVal = parseFloat(distanceStr) || 0;
-      const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
-      const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
-      const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
-      const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
-      const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
-      const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
-      const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
-      const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
-      const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
-      const gTotal = Math.round(Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee) * 100) / 100;
+      const {
+        subTotal,
+        couponDiscount,
+        tieredDiscount,
+        tieredDiscountLabel,
+        totalDiscount,
+        preparedItems,
+        restId,
+        deliveryFee,
+        surgeFee,
+        foodGstAmount,
+        deliveryGstAmount,
+        gstAmount,
+        gTotal,
+      } = buildOrderData();
 
       const activeUserId = await AsyncStorage.getItem('userid');
       const activeName = await AsyncStorage.getItem('name');
@@ -1321,7 +1462,7 @@ export default function CartScreen() {
 
       const codPayload = {
         userId: activeUserId,
-        cartItems: cartItems,
+        cartItems: preparedItems,
         restaurantId: restId,
         restaurantName: restName,
         totalPrice: subTotal,
@@ -1350,7 +1491,11 @@ export default function CartScreen() {
         surgeFee: surgeFee,
         couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
         influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
-        discountAmount: discountValAmount,
+        discountAmount: totalDiscount,
+        couponDiscount: couponDiscount,
+        tieredDiscount: tieredDiscount,
+        tieredDiscountLabel: tieredDiscountLabel,
+        totalSavings: totalDiscount,
         paymentMethod: 'UPI On Delivery',
         paymentStatus: 'Pending',
       };
@@ -1394,38 +1539,24 @@ export default function CartScreen() {
     if (isProcessingPayment) return;
     setShowPaymentChoiceModal(false);
     setIsProcessingPayment(true);
-    const subTotal = calculateTotal();
 
-    // Coupon Discount Calculation
-    let discountValAmount = 0;
-    if (appliedCoupon) {
-      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
-      if (minOrder === 0 || subTotal >= minOrder) {
-        if (appliedCoupon.discountType === 'flat') {
-          discountValAmount = Math.min(appliedCoupon.discountValue, subTotal);
-        } else if (appliedCoupon.discountType === 'percentage') {
-          discountValAmount = subTotal * (appliedCoupon.discountValue / 100);
-        }
-        discountValAmount = Math.round(discountValAmount * 100) / 100;
-      } else {
-        discountValAmount = 0;
-      }
-    }
+    const {
+      subTotal,
+      couponDiscount,
+      tieredDiscount,
+      tieredDiscountLabel,
+      totalDiscount,
+      preparedItems,
+      restId,
+      deliveryFee,
+      surgeFee,
+      foodGstAmount,
+      deliveryGstAmount,
+      gstAmount,
+      gTotal,
+    } = buildOrderData();
 
     const pFee = 0.00;
-    const restId = cartItems[0]?.restId || '';
-    const distanceStr = roadDistances[restId] || '';
-    const distanceVal = parseFloat(distanceStr) || 0;
-    const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
-    const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
-    const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
-    const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
-    const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
-    const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
-    const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
-    const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
-    const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
-    const gTotal = Math.round(Math.max(0, subTotal - discountValAmount + gstAmount + deliveryFee) * 100) / 100;
     // Dynamic Coins Calculation
     const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
     const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -1532,7 +1663,7 @@ export default function CartScreen() {
                   razorpay_payment_id: paymentResult.razorpay_payment_id,
                   razorpay_signature: paymentResult.razorpay_signature,
                   userId: activeUserId,
-                  cartItems: cartItems,
+                  cartItems: preparedItems,
                   restaurantId: restId,
                   restaurantName: restName,
                   totalPrice: subTotal,
@@ -1561,7 +1692,11 @@ export default function CartScreen() {
                   surgeFee: surgeFee,
                   couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                   influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
-                  discountAmount: discountValAmount,
+                  discountAmount: totalDiscount,
+                  couponDiscount: couponDiscount,
+                  tieredDiscount: tieredDiscount,
+                  tieredDiscountLabel: tieredDiscountLabel,
+                  totalSavings: totalDiscount,
                 }),
               });
 
@@ -1644,7 +1779,7 @@ export default function CartScreen() {
                     razorpay_payment_id: paymentResult.razorpay_payment_id,
                     razorpay_signature: paymentResult.razorpay_signature,
                     userId: activeUserId,
-                    cartItems: cartItems,
+                    cartItems: preparedItems,
                     restaurantId: restId,
                     restaurantName: restName,
                     totalPrice: subTotal,
@@ -1673,7 +1808,11 @@ export default function CartScreen() {
                     surgeFee: surgeFee,
                     couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                     influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
-                    discountAmount: discountValAmount,
+                    discountAmount: totalDiscount,
+                    couponDiscount: couponDiscount,
+                    tieredDiscount: tieredDiscount,
+                    tieredDiscountLabel: tieredDiscountLabel,
+                    totalSavings: totalDiscount,
                   }),
                 });
 
@@ -1864,7 +2003,7 @@ export default function CartScreen() {
 
         {/* Cart Items List */}
         <View style={styles.itemsListContainer}>
-          {cartItems.map((item) => {
+          {cartItems.map((item, idx) => {
             const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
             const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
             let displayItemName = item.itemName ? item.itemName.charAt(0).toUpperCase() + item.itemName.slice(1) : 'Food Item';
@@ -1884,78 +2023,147 @@ export default function CartScreen() {
             const hasOffer = offerPercent > 0 && offerPercent <= 100;
             const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
 
-            const isBogo = Boolean(
-              item.isBogo ||
-              (restaurantOffers?.bogoOffers || []).some((b) => {
-                if (b.isActive === false) return false;
+            const itemId = String(item._id || item.itemId || item.id || '');
+            const itemName = String(item.name || item.itemName || '').trim().toLowerCase();
+
+            // 1. Check item-wise 1+1 rule first
+            const itemBogoMatch = (restaurantOffers?.bogoOffers || []).find((b) => {
+              if (b.isActive === false) return false;
+              if (b.type === 'item') {
+                const srcId = String(b.sourceItemId || '');
+                const srcName = String(b.sourceItemName || '').trim().toLowerCase();
+                return (srcId && srcId === itemId) || (srcName && (srcName === itemName || itemName.includes(srcName) || srcName.includes(itemName)));
+              }
+              return false;
+            });
+
+            // 2. Check category-wise 1+1 rule
+            const catBogoMatch = (restaurantOffers?.bogoOffers || []).find((b) => {
+              if (b.isActive === false) return false;
+              if (!b.type || b.type === 'category') {
                 const srcCat = String(b.sourceCategory || '').trim().toLowerCase();
                 return srcCat && (srcCat === itemCat || itemCat.includes(srcCat) || srcCat.includes(itemCat));
-              })
-            );
+              }
+              return false;
+            });
+
+            const matchedBogo = itemBogoMatch || catBogoMatch || (item.bogoOffer || null);
+            const isBogo = Boolean(item.isBogo || matchedBogo);
+            const isCrossItem = matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName;
 
             return (
-              <View key={item._id || item.itemId} style={[styles.cartCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={styles.itemName} numberOfLines={2}>
-                    {displayItemName}
-                  </Text>
+              <React.Fragment key={item._id || item.itemId || `cart-item-${idx}`}>
+                {/* Paid Item Card */}
+                <View style={[styles.cartCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={styles.itemName} numberOfLines={2}>
+                      {displayItemName}
+                    </Text>
 
-                  <View style={styles.controlsRow}>
-                    {/* Quantity Pill with Plus on Left and Minus on Right */}
-                    <View style={styles.quantityContainer}>
-                      <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
-                        <Feather name="plus" size={14} color="#1A1A1A" />
-                      </TouchableOpacity>
-                      <Text style={styles.quantityText}>{isBogo ? (item.quantity * 2) : item.quantity}</Text>
-                      <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
-                        <Feather name="minus" size={14} color="#1A1A1A" />
+                    <View style={styles.controlsRow}>
+                      {/* Quantity Pill with Plus on Left and Minus on Right */}
+                      <View style={styles.quantityContainer}>
+                        <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
+                          <Feather name="plus" size={14} color="#1A1A1A" />
+                        </TouchableOpacity>
+                        <Text style={styles.quantityText}>{isCrossItem ? item.quantity : (isBogo ? (item.quantity * 2) : item.quantity)}</Text>
+                        <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
+                          <Feather name="minus" size={14} color="#1A1A1A" />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Price */}
+                      <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
+                        <Text style={styles.itemPrice}>₹{(offerPrice * item.quantity).toFixed(2)}</Text>
+                        {hasOffer && (
+                          <Text style={[styles.itemPrice, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 11, fontWeight: 'normal', marginTop: 1, minWidth: 0 }]}>
+                            ₹{(item.price * item.quantity).toFixed(2)}
+                          </Text>
+                        )}
+                      </View>
+
+                      {/* Red Trash Icon */}
+                      <TouchableOpacity onPress={() => updateQuantity(item._id || item.itemId, -item.quantity)} activeOpacity={0.7}>
+                        <MaterialIcons name="delete" size={24} color="#FF5E5E" />
                       </TouchableOpacity>
                     </View>
-
-                    {/* Price */}
-                    <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
-                      <Text style={styles.itemPrice}>₹{(offerPrice * item.quantity).toFixed(2)}</Text>
-                      {hasOffer && (
-                        <Text style={[styles.itemPrice, { textDecorationLine: 'line-through', textDecorationColor: '#FF5E00', color: '#FF5E00', fontSize: 11, fontWeight: 'normal', marginTop: 1, minWidth: 0 }]}>
-                          ₹{(item.price * item.quantity).toFixed(2)}
-                        </Text>
-                      )}
-                    </View>
-
-                    {/* Red Trash Icon */}
-                    <TouchableOpacity onPress={() => updateQuantity(item._id || item.itemId, -item.quantity)} activeOpacity={0.7}>
-                      <MaterialIcons name="delete" size={24} color="#FF5E5E" />
-                    </TouchableOpacity>
                   </View>
-                </View>
 
-                {isBogo && (
-                  <View style={{
-                    marginTop: 10,
-                    paddingTop: 8,
-                    borderTopWidth: 1,
-                    borderTopColor: 'rgba(0, 128, 0, 0.2)',
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                  }}>
+                  {/* Same-Item / Category 1+1 Banner */}
+                  {isBogo && !isCrossItem && (
                     <View style={{
-                      backgroundColor: '#008000',
-                      paddingHorizontal: 7,
-                      paddingVertical: 2.5,
-                      borderRadius: 6,
+                      marginTop: 10,
+                      paddingTop: 8,
+                      borderTopWidth: 1,
+                      borderTopColor: 'rgba(0, 128, 0, 0.2)',
                       flexDirection: 'row',
                       alignItems: 'center',
-                      gap: 4,
+                      justifyContent: 'space-between',
                     }}>
-                      <Text style={{ color: '#FFFFFF', fontSize: 10.5, fontWeight: '800' }}>1+1 OFFER</Text>
+                      <View style={{
+                        backgroundColor: '#008000',
+                        paddingHorizontal: 7,
+                        paddingVertical: 2.5,
+                        borderRadius: 6,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}>
+                        <Text style={{ color: '#FFFFFF', fontSize: 10.5, fontWeight: '800' }}>1+1 OFFER</Text>
+                      </View>
+                      <Text style={{ color: '#008000', fontSize: 12, fontWeight: '700' }}>
+                        {item.quantity * 2} Items ({item.quantity} Paid + {item.quantity} Free)
+                      </Text>
                     </View>
-                    <Text style={{ color: '#008000', fontSize: 12, fontWeight: '700' }}>
-                      {item.quantity * 2} Items ({item.quantity} Paid + {item.quantity} Free)
-                    </Text>
+                  )}
+                </View>
+
+                {/* Free Paired Item Card (Like a Normal Item Card with Price ₹0.00) */}
+                {isCrossItem && (
+                  <View style={[
+                    styles.cartCard,
+                    {
+                      marginTop: -4,
+                      marginBottom: 12,
+                      borderLeftWidth: 4,
+                      borderLeftColor: '#008000',
+                      backgroundColor: 'rgb(235, 243, 230)',
+                      flexDirection: 'column',
+                      alignItems: 'stretch'
+                    }
+                  ]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <View style={{ flex: 1, marginRight: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                          <View style={{ backgroundColor: '#008000', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                            <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '800' }}>1+1 FREE (+1)</Text>
+                          </View>
+                          <Text style={{ color: '#2E7D32', fontSize: 11, fontWeight: '700' }} numberOfLines={1}>
+                            Free with {item.name || item.itemName}
+                          </Text>
+                        </View>
+                        <Text style={[styles.itemName, { color: '#1B5E20', fontSize: 14.5, fontWeight: '800' }]} numberOfLines={2}>
+                          {matchedBogo.targetItemName}
+                        </Text>
+                      </View>
+
+                      <View style={styles.controlsRow}>
+                        {/* Quantity Pill */}
+                        <View style={[styles.quantityContainer, { backgroundColor: '#FFFFFF', borderColor: '#A5D6A7', borderWidth: 1, paddingHorizontal: 10 }]}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#2E7D32', marginRight: 4 }}>QTY</Text>
+                          <Text style={[styles.quantityText, { color: '#1B5E20', fontWeight: '900' }]}>{item.quantity}</Text>
+                        </View>
+
+                        {/* Price: ₹0.00 FREE */}
+                        <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
+                          <Text style={[styles.itemPrice, { color: '#008000', fontWeight: '900', fontSize: 15 }]}>₹0.00</Text>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#008000', letterSpacing: 0.5 }}>FREE</Text>
+                        </View>
+                      </View>
+                    </View>
                   </View>
                 )}
-              </View>
+              </React.Fragment>
             );
           })}
         </View>

@@ -40,21 +40,36 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
   const platformFee = order.platformFee ?? order.platform_fee ?? 0;
   const surgeFee = order.surgeFee ?? order.surge_fee ?? 0;
   const discountAmount = order.discountAmount ?? order.discount ?? 0;
+  const couponDiscount = Number(order.couponDiscount !== undefined ? order.couponDiscount : (order.couponCode ? discountAmount : 0)) || 0;
+  const tieredDiscount = Number(order.tieredDiscount || order.restaurantTieredDiscount || 0);
+  const tieredDiscountLabel = order.tieredDiscountLabel || (tieredDiscount > 0 ? 'Instant Bill Savings' : '');
+  const totalSavings = Number(order.totalSavings !== undefined ? order.totalSavings : ((couponDiscount + tieredDiscount) || discountAmount || 0)) || 0;
   const grandTotal = order.grandTotal ?? order.totalPrice ?? order.total ?? 0;
 
   const customerName = customerInfo.name || 'Customer';
   const customerPhone = customerInfo.phone || 'N/A';
   const deliveryAddress = order.deliveryAddress || customerInfo.address || 'Kurnool, Andhra Pradesh';
 
-  const itemsTableRows = items.map((item, idx) => `
-    <tr>
+  const itemsTableRows = items.map((item, idx) => {
+    const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0);
+    const bogoTag = item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer' : ''));
+    const itemName = item.name || item.itemName || 'Food Item';
+    const tagText = bogoTag ? ` <span style="font-size: 11px; color: #047857; font-weight: 600;">(${bogoTag})</span>` : '';
+    const itemCost = Number(item.cost !== undefined ? item.cost : (item.price || 0));
+    const qty = Number(item.quantity || item.qty || 1);
+    const unitPrice = isFree ? 'FREE (₹0.00)' : `₹${itemCost.toFixed(2)}`;
+    const lineTotal = isFree ? '₹0.00' : `₹${(itemCost * qty).toFixed(2)}`;
+
+    return `
+    <tr ${isFree ? 'style="background-color: #F0FDF4;"' : ''}>
       <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: center;">${idx + 1}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">${item.name || item.itemName || 'Food Item'}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: center;">${item.quantity || item.qty || 1}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: right;">₹${Number(item.price || item.cost || 0).toFixed(2)}</td>
-      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: right; font-weight: 600;">₹${(Number(item.price || item.cost || 0) * Number(item.quantity || item.qty || 1)).toFixed(2)}</td>
+      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; font-weight: 600;">${itemName}${tagText}</td>
+      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: center;">${qty}</td>
+      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: right;">${unitPrice}</td>
+      <td style="padding: 10px; border-bottom: 1px solid #E5E7EB; text-align: right; font-weight: 600;">${lineTotal}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   return `
     <!DOCTYPE html>
@@ -250,10 +265,29 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
                <td style="text-align: right; font-size: 11px; color: #6B7280;">₹${dHalf}</td>
              </tr>` : ''}`;
              })() : ''}
-            ${discountAmount ? `
+            ${tieredDiscount > 0 ? `
             <tr>
-              <td style="color: #10B981;">Discount:</td>
-              <td style="text-align: right; font-weight: 600; color: #10B981;">- ₹${Number(discountAmount).toFixed(2)}</td>
+              <td style="color: #047857;">Instant Bill Savings${tieredDiscountLabel ? ` (${tieredDiscountLabel})` : ''}:</td>
+              <td style="text-align: right; font-weight: 600; color: #047857;">- ₹${tieredDiscount.toFixed(2)}</td>
+            </tr>` : ''}
+            ${couponDiscount > 0 ? `
+            <tr>
+              <td style="color: #047857;">Coupon Discount${order.couponCode ? ` (${order.couponCode})` : ''}:</td>
+              <td style="text-align: right; font-weight: 600; color: #047857;">- ₹${couponDiscount.toFixed(2)}</td>
+            </tr>` : ''}
+            ${(!tieredDiscount && !couponDiscount && discountAmount > 0) ? `
+            <tr>
+              <td style="color: #047857;">Discount:</td>
+              <td style="text-align: right; font-weight: 600; color: #047857;">- ₹${Number(discountAmount).toFixed(2)}</td>
+            </tr>` : ''}
+            <tr class="total-row">
+              <td>Grand Total:</td>
+              <td style="text-align: right;">₹${Number(grandTotal).toFixed(2)}</td>
+            </tr>
+            ${totalSavings > 0 ? `
+            <tr>
+              <td style="color: #065F46; font-weight: 700; border-top: 1px dashed #D1D5DB; padding-top: 6px;">Total Savings on Order:</td>
+              <td style="text-align: right; font-weight: 700; color: #065F46; border-top: 1px dashed #D1D5DB; padding-top: 6px;">- ₹${totalSavings.toFixed(2)}</td>
             </tr>` : ''}
             <tr class="total-row">
               <td>Grand Total:</td>
@@ -524,19 +558,21 @@ export default function MyOrdersScreen() {
               {/* Items List */}
               <Text style={styles.itemsTitle}>Items</Text>
               {order.items && order.items.map((item, idx) => {
+                const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0);
+                const bogoTag = item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer' : null));
                 const iName = item.name || item.itemName || 'Food Item';
                 const iQty = item.quantity || item.qty || 1;
-                const iPrice = item.price || item.cost || 0;
+                const iPrice = Number(item.cost !== undefined ? item.cost : (item.price || 0));
                 return (
                   <View key={item._id || idx} style={styles.itemRow}>
-                    <Text style={styles.itemName} numberOfLines={1}>
-                      {iName}
+                    <Text style={[styles.itemName, isFree ? { color: '#15803D', fontWeight: '700' } : null]} numberOfLines={1}>
+                      {iName}{bogoTag ? ` (${bogoTag})` : ''}
                     </Text>
                     <Text style={styles.itemQty}>
                       x{iQty}
                     </Text>
-                    <Text style={styles.itemPrice}>
-                      ₹{iPrice * iQty}
+                    <Text style={[styles.itemPrice, isFree ? { color: '#15803D', fontWeight: '700' } : null]}>
+                      {isFree ? 'FREE (₹0.00)' : `₹${(iPrice * iQty).toFixed(0)}`}
                     </Text>
                   </View>
                 );
@@ -635,17 +671,24 @@ export default function MyOrdersScreen() {
                   {/* Items List */}
                   <Text style={styles.previewSectionTitle}>Items Ordered</Text>
                   {previewOrder.items && previewOrder.items.length > 0 ? (
-                    previewOrder.items.map((item, idx) => (
-                      <View key={item._id || idx} style={styles.previewItemRow}>
-                        <Text style={styles.previewItemName} numberOfLines={1}>
-                          {item.name || item.itemName || 'Item'}
-                        </Text>
-                        <Text style={styles.previewItemQty}>x{item.quantity || item.qty || 1}</Text>
-                        <Text style={styles.previewItemPrice}>
-                          ₹{(Number(item.price || item.cost || 0) * Number(item.quantity || item.qty || 1)).toFixed(0)}
-                        </Text>
-                      </View>
-                    ))
+                    previewOrder.items.map((item, idx) => {
+                      const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0);
+                      const bogoTag = item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer' : null));
+                      const iName = item.name || item.itemName || 'Item';
+                      const iQty = item.quantity || item.qty || 1;
+                      const iPrice = Number(item.cost !== undefined ? item.cost : (item.price || 0));
+                      return (
+                        <View key={item._id || idx} style={styles.previewItemRow}>
+                          <Text style={[styles.previewItemName, isFree ? { color: '#15803D', fontWeight: '700' } : null]} numberOfLines={1}>
+                            {iName}{bogoTag ? ` (${bogoTag})` : ''}
+                          </Text>
+                          <Text style={styles.previewItemQty}>x{iQty}</Text>
+                          <Text style={[styles.previewItemPrice, isFree ? { color: '#15803D', fontWeight: '700' } : null]}>
+                            {isFree ? 'FREE (₹0.00)' : `₹${(iPrice * iQty).toFixed(0)}`}
+                          </Text>
+                        </View>
+                      );
+                    })
                   ) : (
                     <Text style={{ fontSize: 12, color: '#9CA3AF' }}>Standard items list</Text>
                   )}
@@ -720,19 +763,54 @@ export default function MyOrdersScreen() {
                     );
                   })() : null}
 
+                  {(() => {
+                    const prevDiscount = previewOrder.discountAmount ?? previewOrder.discount ?? 0;
+                    const prevCouponDiscount = Number(previewOrder.couponDiscount !== undefined ? previewOrder.couponDiscount : (previewOrder.couponCode ? prevDiscount : 0)) || 0;
+                    const prevTieredDiscount = Number(previewOrder.tieredDiscount || previewOrder.restaurantTieredDiscount || 0);
+                    const prevTieredLabel = previewOrder.tieredDiscountLabel || (prevTieredDiscount > 0 ? 'Instant Bill Savings' : '');
+                    const prevTotalSavings = Number(previewOrder.totalSavings !== undefined ? previewOrder.totalSavings : ((prevCouponDiscount + prevTieredDiscount) || prevDiscount || 0)) || 0;
 
+                    return (
+                      <>
+                        {prevTieredDiscount > 0 ? (
+                          <View style={styles.previewPriceRow}>
+                            <Text style={[styles.previewPriceLabel, { color: '#16A34A' }]}>
+                              Instant Bill Savings{prevTieredLabel ? ` (${prevTieredLabel})` : ''}
+                            </Text>
+                            <Text style={[styles.previewPriceValue, { color: '#16A34A' }]}>-₹{prevTieredDiscount.toFixed(2)}</Text>
+                          </View>
+                        ) : null}
 
-                  {previewOrder.discountAmount && Number(previewOrder.discountAmount) > 0 ? (
-                    <View style={styles.previewPriceRow}>
-                      <Text style={[styles.previewPriceLabel, { color: '#16A34A' }]}>Discount</Text>
-                      <Text style={[styles.previewPriceValue, { color: '#16A34A' }]}>-₹{previewOrder.discountAmount}</Text>
-                    </View>
-                  ) : null}
+                        {prevCouponDiscount > 0 ? (
+                          <View style={styles.previewPriceRow}>
+                            <Text style={[styles.previewPriceLabel, { color: '#16A34A' }]}>
+                              Coupon Discount{previewOrder.couponCode ? ` (${previewOrder.couponCode})` : ''}
+                            </Text>
+                            <Text style={[styles.previewPriceValue, { color: '#16A34A' }]}>-₹{prevCouponDiscount.toFixed(2)}</Text>
+                          </View>
+                        ) : null}
 
-                  <View style={styles.previewTotalRow}>
-                    <Text style={styles.previewTotalLabel}>Total Paid</Text>
-                    <Text style={styles.previewTotalValue}>₹{previewOrder.grandTotal || previewOrder.totalPrice || 0}</Text>
-                  </View>
+                        {(!prevTieredDiscount && !prevCouponDiscount && prevDiscount > 0) ? (
+                          <View style={styles.previewPriceRow}>
+                            <Text style={[styles.previewPriceLabel, { color: '#16A34A' }]}>Discount</Text>
+                            <Text style={[styles.previewPriceValue, { color: '#16A34A' }]}>-₹{Number(prevDiscount).toFixed(2)}</Text>
+                          </View>
+                        ) : null}
+
+                        <View style={styles.previewTotalRow}>
+                          <Text style={styles.previewTotalLabel}>Total Paid</Text>
+                          <Text style={styles.previewTotalValue}>₹{previewOrder.grandTotal || previewOrder.totalPrice || 0}</Text>
+                        </View>
+
+                        {prevTotalSavings > 0 ? (
+                          <View style={[styles.previewPriceRow, { marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#E5E7EB' }]}>
+                            <Text style={[styles.previewPriceLabel, { color: '#15803D', fontWeight: '700' }]}>Total Savings on Order</Text>
+                            <Text style={[styles.previewPriceValue, { color: '#15803D', fontWeight: '700' }]}>-₹{prevTotalSavings.toFixed(2)}</Text>
+                          </View>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </View>
               </ScrollView>
             )}
