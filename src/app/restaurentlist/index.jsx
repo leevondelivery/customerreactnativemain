@@ -256,7 +256,15 @@ export default function RestaurantListScreen() {
       return (isNaN(posA) ? 999 : posA) - (isNaN(posB) ? 999 : posB);
     });
   }, [rawCarouselItems]);
-  const categories = useSelector((state) => state.restaurants.categories || []);
+  const rawCategories = useSelector((state) => state.restaurants.categories || []);
+  const categories = useMemo(() => {
+    if (!Array.isArray(rawCategories)) return [];
+    return [...rawCategories].sort((a, b) => {
+      const posA = parseInt(a.position ?? a.id ?? '999', 10);
+      const posB = parseInt(b.position ?? b.id ?? '999', 10);
+      return (isNaN(posA) ? 999 : posA) - (isNaN(posB) ? 999 : posB);
+    });
+  }, [rawCategories]);
   const initialLoaded = useSelector((state) => state.restaurants.initialLoaded);
   const reduxLoading = useSelector((state) => state.restaurants.loading);
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
@@ -666,25 +674,42 @@ export default function RestaurantListScreen() {
   const [canScrollCatLeft, setCanScrollCatLeft] = useState(false);
   const [canScrollCatRight, setCanScrollCatRight] = useState(true);
   const currentCatScrollX = useRef(0);
+  const catContentWidth = useRef(0);
+  const catLayoutWidth = useRef(0);
 
   const handleCategoryScroll = useCallback((event) => {
-    const { contentOffset } = event.nativeEvent;
+    const { contentOffset, layoutMeasurement, contentSize } = event.nativeEvent;
     const x = contentOffset?.x || 0;
     currentCatScrollX.current = x;
-    const isScrolled = x > 15;
-    
-    setCanScrollCatLeft((prev) => (prev !== isScrolled ? isScrolled : prev));
-    setCanScrollCatRight((prev) => (prev === isScrolled ? !isScrolled : prev));
+
+    const layoutW = layoutMeasurement?.width || catLayoutWidth.current || 0;
+    const contentW = contentSize?.width || catContentWidth.current || 0;
+
+    if (layoutW > 0) catLayoutWidth.current = layoutW;
+    if (contentW > 0) catContentWidth.current = contentW;
+
+    const canLeft = x > 15;
+    const canRight = contentW > 0 && layoutW > 0 
+      ? x + layoutW < contentW - 15 
+      : true;
+
+    setCanScrollCatLeft((prev) => (prev !== canLeft ? canLeft : prev));
+    setCanScrollCatRight((prev) => (prev !== canRight ? canRight : prev));
   }, []);
 
   const handleScrollCatLeft = useCallback(() => {
-    const newX = Math.max(0, currentCatScrollX.current - 240);
-    categoryScrollRef.current?.scrollTo({ x: newX, animated: true });
+    const step = 240;
+    const targetX = Math.max(0, currentCatScrollX.current - step);
+    categoryScrollRef.current?.scrollTo({ x: targetX, animated: true });
   }, []);
 
   const handleScrollCatRight = useCallback(() => {
-    const newX = currentCatScrollX.current + 240;
-    categoryScrollRef.current?.scrollTo({ x: newX, animated: true });
+    const step = 240;
+    const maxScroll = Math.max(0, (catContentWidth.current || 0) - (catLayoutWidth.current || 0));
+    const targetX = maxScroll > 0
+      ? Math.min(maxScroll, currentCatScrollX.current + step)
+      : currentCatScrollX.current + step;
+    categoryScrollRef.current?.scrollTo({ x: targetX, animated: true });
   }, []);
 
   // Animated values for filter pills (sliding indicator + button spring scale micro-animations)
@@ -1562,6 +1587,19 @@ export default function RestaurantListScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.categoriesScroll}
               onScroll={handleCategoryScroll}
+              onContentSizeChange={(w) => {
+                catContentWidth.current = w;
+                if (catLayoutWidth.current > 0) {
+                  setCanScrollCatRight(currentCatScrollX.current + catLayoutWidth.current < w - 15);
+                }
+              }}
+              onLayout={(e) => {
+                const w = e.nativeEvent.layout.width;
+                catLayoutWidth.current = w;
+                if (catContentWidth.current > 0) {
+                  setCanScrollCatRight(currentCatScrollX.current + w < catContentWidth.current - 15);
+                }
+              }}
               scrollEventThrottle={16}
             >
               {categories.map((cat) => {

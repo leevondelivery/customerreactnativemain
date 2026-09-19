@@ -11,6 +11,15 @@ const sortCarouselItems = (arr) => {
   });
 };
 
+const sortCategoryItems = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  return [...arr].sort((a, b) => {
+    const posA = parseInt(a.position ?? a.id ?? '999', 10);
+    const posB = parseInt(b.position ?? b.id ?? '999', 10);
+    return (isNaN(posA) ? 999 : posA) - (isNaN(posB) ? 999 : posB);
+  });
+};
+
 export const loadCachedRestaurants = createAsyncThunk(
   'restaurants/loadCachedRestaurants',
   async () => {
@@ -31,7 +40,7 @@ export const loadCachedRestaurants = createAsyncThunk(
         return {
           restaurants: parsed.restaurants || [],
           carousel: sortCarouselItems(parsed.carousel || []),
-          categories: parsed.categories || [],
+          categories: sortCategoryItems(parsed.categories || []),
           menus: menus || {},
           offers: offers || {}
         };
@@ -92,7 +101,7 @@ export const fetchRestaurants = createAsyncThunk(
         if (categoriesRes.ok) {
           const categoriesData = await categoriesRes.json();
           if (categoriesData.categories && Array.isArray(categoriesData.categories)) {
-            categories = categoriesData.categories;
+            categories = sortCategoryItems(categoriesData.categories);
           }
         }
       } catch (e) {
@@ -511,7 +520,7 @@ const restaurantsSlice = createSlice({
           if (action.payload.restaurants && action.payload.restaurants.length > 0 && !state.initialLoaded) {
             state.list = action.payload.restaurants;
             state.carousel = sortCarouselItems(action.payload.carousel);
-            state.categories = action.payload.categories;
+            state.categories = sortCategoryItems(action.payload.categories);
             state.initialLoaded = true;
           }
         }
@@ -534,7 +543,7 @@ const restaurantsSlice = createSlice({
       .addCase(fetchRestaurants.fulfilled, (state, action) => {
         state.list = action.payload.restaurants || [];
         state.carousel = sortCarouselItems(action.payload.carousel);
-        state.categories = action.payload.categories || [];
+        state.categories = sortCategoryItems(action.payload.categories);
         state.loading = false;
         state.initialLoaded = true;
         state.error = null;
