@@ -1006,14 +1006,14 @@ export default function OrderStatusScreen() {
           </Text>
 
           {recentRejectedOrder.orderId ? (
-            <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, marginVertical: 4 }}>
-              <Text style={{ fontSize: 13, color: '#4B5563', fontWeight: '600' }}>
+            <View style={{ backgroundColor: '#F3F4F6', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, marginVertical: 4 }}>
+              <Text style={{ fontSize: 15.5, color: '#4B5563', fontWeight: '700' }}>
                 Order ID: #{recentRejectedOrder.orderId}
               </Text>
             </View>
           ) : null}
 
-          <Text style={[styles.emptySubText, { fontSize: 12, color: '#6B7280' }]}>
+          <Text style={[styles.emptySubText, { fontSize: 14.5, color: '#6B7280', lineHeight: 21 }]}>
             If any payment was deducted, a full refund will be processed back to your original payment method.
           </Text>
 
@@ -1313,8 +1313,8 @@ export default function OrderStatusScreen() {
                     </Text>
                     {bogoTag ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
-                        <View style={{ backgroundColor: isFree ? '#2E7D32' : '#008000', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                          <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '800' }}>🎁 {bogoTag}</Text>
+                        <View style={{ backgroundColor: isFree ? '#2E7D32' : '#008000', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, alignSelf: 'flex-start' }}>
+                          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800' }}>🎁 {bogoTag}</Text>
                         </View>
                       </View>
                     ) : null}
@@ -1367,7 +1367,7 @@ export default function OrderStatusScreen() {
                     <Text style={[styles.summaryLabel, { flex: 0 }]}>GST</Text>
                     <Feather
                       name={isGstExpanded ? 'chevron-up' : 'chevron-down'}
-                      size={16}
+                      size={18}
                       color="#555"
                     />
                   </View>
@@ -1382,32 +1382,32 @@ export default function OrderStatusScreen() {
                   const dCgst = (deliveryGstVal / 2);
                   const dSgst = (deliveryGstVal / 2);
                   return (
-                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: 10, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                      <Text style={{ fontSize: 14.5, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
                         Food GST (5%): {formatCurrency(foodGstVal)}
                       </Text>
-                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
-                        <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (2.5%)</Text>
-                        <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(fCgst)}</Text>
+                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                        <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>CGST (2.5%)</Text>
+                        <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(fCgst)}</Text>
                       </View>
-                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
-                        <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>SGST (2.5%)</Text>
-                        <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(fSgst)}</Text>
+                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                        <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>SGST (2.5%)</Text>
+                        <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(fSgst)}</Text>
                       </View>
 
                       {deliveryGstVal > 0 && (
                         <>
                           <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 6 }} />
-                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 2 }}>
+                          <Text style={{ fontSize: 14.5, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
                             Delivery GST (18%): {formatCurrency(deliveryGstVal)}
                           </Text>
-                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
-                            <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>CGST (9.0%)</Text>
-                            <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(dCgst)}</Text>
+                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                            <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>CGST (9.0%)</Text>
+                            <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(dCgst)}</Text>
                           </View>
-                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 1 }]}>
-                            <Text style={[styles.summaryLabel, { fontSize: 12, color: '#64748B' }]}>SGST (9.0%)</Text>
-                            <Text style={[styles.summaryValue, { fontSize: 12, color: '#64748B' }]}>{formatCurrency(dSgst)}</Text>
+                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                            <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>SGST (9.0%)</Text>
+                            <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(dSgst)}</Text>
                           </View>
                         </>
                       )}
@@ -1462,18 +1462,21 @@ export default function OrderStatusScreen() {
                 backgroundColor: '#E8F5E9',
                 borderColor: '#A5D6A7',
                 borderWidth: 1,
-                borderRadius: 8,
-                paddingVertical: 9,
-                paddingHorizontal: 12,
-                marginTop: 10,
+                borderRadius: 12,
+                paddingVertical: 12,
+                paddingHorizontal: 16,
+                marginHorizontal: 10,
+                marginTop: 8,
+                marginBottom: 12,
                 flexDirection: 'row',
                 alignItems: 'center',
-                justifyContent: 'space-between'
+                justifyContent: 'space-between',
+                gap: 10,
               }}>
-                <Text style={{ color: '#1B5E20', fontSize: 13, fontWeight: '700' }}>
+                <Text style={{ color: '#1B5E20', fontSize: 15, fontWeight: '700', flex: 1 }}>
                   🎉 Total Savings on this order
                 </Text>
-                <Text style={{ color: '#1B5E20', fontSize: 14, fontWeight: '800' }}>
+                <Text style={{ color: '#1B5E20', fontSize: 16, fontWeight: '800', flexShrink: 0 }}>
                   - {formatCurrency(totalSavings)}
                 </Text>
               </View>
@@ -1496,8 +1499,8 @@ export default function OrderStatusScreen() {
               <Text style={styles.otpText}>OTP - {otp}</Text>
             </View>
           ) : !isPaid ? (
-            <View style={[styles.otpBox, { backgroundColor: '#FFF3E0', paddingHorizontal: 16 }]}>
-              <Text style={[styles.otpText, { fontSize: 13, letterSpacing: 0, color: '#E65100', textAlign: 'center' }]}>
+            <View style={[styles.otpBox, { backgroundColor: '#FFF3E0', paddingHorizontal: 18, paddingVertical: 16 }]}>
+              <Text style={[styles.otpText, { fontSize: 15.5, letterSpacing: 0, color: '#E65100', textAlign: 'center', lineHeight: 22 }]}>
                 Scan & Pay Delivery Partner via QR Code at doorstep to reveal your 5-digit OTP.
               </Text>
             </View>

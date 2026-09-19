@@ -247,10 +247,19 @@ export default function RestaurantListScreen() {
   const dispatch = useDispatch();
   const restaurants = useSelector((state) => state.restaurants.list);
   const menus = useSelector((state) => state.restaurants.menus || {});
-  const carouselItems = useSelector((state) => state.restaurants.carousel || []);
+  const rawCarouselItems = useSelector((state) => state.restaurants.carousel || []);
+  const carouselItems = useMemo(() => {
+    if (!Array.isArray(rawCarouselItems)) return [];
+    return [...rawCarouselItems].sort((a, b) => {
+      const posA = parseInt(a.position ?? a.carouselId ?? a.id ?? '999', 10);
+      const posB = parseInt(b.position ?? b.carouselId ?? b.id ?? '999', 10);
+      return (isNaN(posA) ? 999 : posA) - (isNaN(posB) ? 999 : posB);
+    });
+  }, [rawCarouselItems]);
   const categories = useSelector((state) => state.restaurants.categories || []);
   const initialLoaded = useSelector((state) => state.restaurants.initialLoaded);
   const reduxLoading = useSelector((state) => state.restaurants.loading);
+  const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
 
   // Redux Selectors for Global Location State
   const {
@@ -267,6 +276,7 @@ export default function RestaurantListScreen() {
   } = useSelector((state) => state.location);
 
   const handleEnableLocation = async () => {
+    if (maintenanceMode === false) return;
     console.log('[Location UI] handleEnableLocation triggered.');
     try {
       if (Platform.OS === 'android') {
@@ -283,6 +293,7 @@ export default function RestaurantListScreen() {
   };
 
   const handleOpenSettings = () => {
+    if (maintenanceMode === false) return;
     console.log('[Location UI] Opening app settings...');
     Platform.OS === 'ios' ? Linking.openURL('app-settings:') : Linking.openSettings();
   };
@@ -291,8 +302,16 @@ export default function RestaurantListScreen() {
   const [showDeliverToModal, setShowDeliverToModal] = useState(false);
   const hasTriggeredDistanceCalc = useRef(false);
 
+  // Suppress all location modals when app enters maintenance mode
+  useEffect(() => {
+    if (maintenanceMode === false) {
+      setShowDeliverToModal(false);
+    }
+  }, [maintenanceMode]);
+
   useEffect(() => {
     const initLocationFlow = async () => {
+      if (maintenanceMode === false) return;
       if (globalHasCheckedInitialLocation || globalHasShownDeliverToModal) return;
       globalHasCheckedInitialLocation = true;
       globalHasShownDeliverToModal = true;
@@ -340,8 +359,8 @@ export default function RestaurantListScreen() {
           dispatch(checkLocationAndCalculateDistances(restaurants));
         }
       } else {
-        // Location is OFF or not permitted: Show Deliver To modal (unless user has active order)
-        if (!hasActiveOrder) {
+        // Location is OFF or not permitted: Show Deliver To modal (unless user has active order or app is in maintenance)
+        if (!hasActiveOrder && maintenanceMode !== false) {
           setShowDeliverToModal(true);
         } else {
           setShowDeliverToModal(false);
@@ -539,6 +558,51 @@ export default function RestaurantListScreen() {
     return item.isActive !== false && item.isActive !== 'false' && item.isactive !== false && item.isactive !== 'false' && item.isActive !== 0 && item.isactive !== 0 && item.status !== 'closed' && item.status !== 'INACTIVE';
   };
 
+  const isItemAvailable = (item) => {
+    if (!item) return false;
+    if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0) return false;
+    if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0) return false;
+    if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'OUT_OF_STOCK' || item.status === 'inactive' || item.status === 0) return false;
+    if (item.available === false || item.available === 'false' || item.available === 0) return false;
+    if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0) return false;
+    return true;
+  };
+
+  const extractPriceThreshold = (catName) => {
+    if (!catName || typeof catName !== 'string') return null;
+    const trimmed = catName.trim().toLowerCase();
+    const numMatch = trimmed.match(/\b\d+\b/);
+    if (!numMatch) return null;
+    const val = parseInt(numMatch[0], 10);
+    if (isNaN(val) || val <= 0) return null;
+    const cleanChars = trimmed.replace(/[0-9\s₹rs.,\/-]/gi, '');
+    const isNumericOnly = cleanChars.length === 0;
+    const hasPriceKeyword =
+      trimmed.includes('store') ||
+      trimmed.includes('under') ||
+      trimmed.includes('below') ||
+      trimmed.includes('₹') ||
+      trimmed.includes('rs') ||
+      trimmed.includes('rupee') ||
+      trimmed.includes('/-') ||
+      trimmed.includes('budget') ||
+      trimmed.includes('deal') ||
+      trimmed.includes('only') ||
+      trimmed.includes('corner');
+    if (isNumericOnly || hasPriceKeyword) {
+      return val;
+    }
+    return null;
+  };
+
+  const getItemPrice = (mItem) => {
+    if (!mItem) return null;
+    const p = mItem.price ?? mItem.discountPrice ?? mItem.finalPrice ?? mItem.itemPrice ?? mItem.itemprice ?? mItem.Price;
+    if (p === undefined || p === null || p === '') return null;
+    const num = Number(p);
+    return isNaN(num) ? null : num;
+  };
+
   const handlePressRestaurant = useCallback((item, displayName) => {
     const isActive = isRestActive(item);
     if (!isActive) {
@@ -558,7 +622,8 @@ export default function RestaurantListScreen() {
         address: item.address || '',
         openTime: item.openTime || '',
         closeTime: item.closeTime || '',
-        offerTitle: item.offerTitle || ''
+        offerTitle: item.offerTitle || '',
+        rating: item.rating !== undefined && item.rating !== null ? String(item.rating) : ''
       }
     });
   }, [dispatch, router, triggerToast]);
@@ -719,13 +784,42 @@ export default function RestaurantListScreen() {
     }
   }, [dispatch, initialLoaded, reduxLoading]);
 
-  // Background Menu Prefetching for Instant Item Search & Instant Menu Open (runs immediately once restaurants are loaded)
+  // Background & On-Demand Menu Fetching for Instant Item Search & Instant Category Dishes Display
+  const prefetchedRestIdsRef = useRef(new Set());
   useEffect(() => {
-    if (restaurants && restaurants.length > 0 && !globalHasPrefetchedMenus) {
-      globalHasPrefetchedMenus = true;
-      dispatch(fetchAllRestaurantMenus(restaurants));
+    if (restaurants && restaurants.length > 0) {
+      const missing = restaurants.filter((r) => {
+        const id1 = r.restId;
+        const id2 = r._id;
+        const id3 = r.id;
+        const id4 = r.restaurantId;
+        const hasMenu =
+          (id1 && menus[id1]?.length > 0) ||
+          (id2 && menus[id2]?.length > 0) ||
+          (id3 && menus[id3]?.length > 0) ||
+          (id4 && menus[id4]?.length > 0) ||
+          (Array.isArray(r.items) && r.items.length > 0) ||
+          (Array.isArray(r.menu) && r.menu.length > 0) ||
+          (Array.isArray(r.dishes) && r.dishes.length > 0);
+
+        const anyKey = id1 || id2 || id3 || id4;
+        if (hasMenu) {
+          if (anyKey) prefetchedRestIdsRef.current.add(anyKey);
+          return false;
+        }
+
+        if (anyKey && prefetchedRestIdsRef.current.has(anyKey)) {
+          return false;
+        }
+        if (anyKey) prefetchedRestIdsRef.current.add(anyKey);
+        return true;
+      });
+
+      if (missing.length > 0) {
+        dispatch(fetchAllRestaurantMenus(missing));
+      }
     }
-  }, [dispatch, restaurants]);
+  }, [dispatch, restaurants, menus, selectedCategory]);
 
   // Auto-trigger distance calculation as soon as restaurants are loaded
   useEffect(() => {
@@ -941,9 +1035,14 @@ export default function RestaurantListScreen() {
 
     let normalSelected = '';
     let singularSelected = '';
+    let priceThreshold = null;
+    let isPriceFilter = false;
+
     if (hasCatFilter) {
       normalSelected = selectedCategory.toLowerCase().trim();
       singularSelected = normalSelected.endsWith('s') ? normalSelected.slice(0, -1) : normalSelected;
+      priceThreshold = extractPriceThreshold(selectedCategory);
+      isPriceFilter = priceThreshold !== null;
     }
 
     const list = restaurants
@@ -955,58 +1054,160 @@ export default function RestaurantListScreen() {
           if (activeType === 'Non-Veg' && restType !== 'Non-Veg' && restType !== 'Both') return false;
         }
 
-        // Fast Step 2: Filter by selected category
-        if (hasCatFilter) {
-          const itemCats = item.categories;
-          if (!itemCats || itemCats.length === 0) return false;
-
-          let hasCategory = false;
-          for (let i = 0; i < itemCats.length; i++) {
-            const c = itemCats[i];
-            if (!c || typeof c !== 'string') continue;
-            const normalC = c.toLowerCase().trim();
-            if (
-              normalC.includes(normalSelected) ||
-              normalSelected.includes(normalC) ||
-              (singularSelected && normalC.includes(singularSelected))
-            ) {
-              hasCategory = true;
-              break;
-            }
-          }
-          if (!hasCategory) return false;
-        }
-
         const restIdKey = item._id || item.restId;
-        const restMenu = menus[restIdKey] || menus[item.restId] || menus[item._id] || [];
+        const restMenu =
+          menus[restIdKey] ||
+          menus[item.restId] ||
+          menus[item._id] ||
+          menus[item.id] ||
+          menus[item.restaurantId] ||
+          (Array.isArray(item.items) ? item.items : null) ||
+          (Array.isArray(item.menu) ? item.menu : null) ||
+          (Array.isArray(item.dishes) ? item.dishes : null) ||
+          [];
 
-        // Populate matching menu items for selected category filter display
-        if (hasCatFilter && !hasQuery && restMenu.length > 0) {
-          const catMatchingItems = [];
-          for (let i = 0; i < restMenu.length; i++) {
-            const mItem = restMenu[i];
-            if (!mItem) continue;
-            const isAvail = mItem.itemStatus !== false && mItem.itemStatus !== 'false' && mItem.itemStatus !== 0 &&
-                            mItem.itemtodisplayintherestuarentapp !== false && mItem.itemtodisplayintherestuarentapp !== 'false' && mItem.itemtodisplayintherestuarentapp !== 0 &&
-                            mItem.status !== 'unavailable' && mItem.status !== 'OUT_OF_STOCK' && mItem.status !== 'inactive' && mItem.status !== false && mItem.status !== 0 &&
-                            mItem.available !== false && mItem.available !== 'false' && mItem.available !== 0 &&
-                            mItem.isAvailable !== false && mItem.isAvailable !== 'false' && mItem.isAvailable !== 0;
-            if (!isAvail) continue;
+        // Fast Step 2: Filter by selected category (Price Filter OR Category Name Filter)
+        if (hasCatFilter) {
+          if (isPriceFilter) {
+            // Price Filter (e.g. "99", "99 Store", "₹99", "Under 99", "149", etc.)
+            if (restMenu.length > 0) {
+              const priceMatchingItems = [];
+              for (let i = 0; i < restMenu.length; i++) {
+                const mItem = restMenu[i];
+                if (!mItem) continue;
+                const p = getItemPrice(mItem);
+                if (p !== null && p <= priceThreshold) {
+                  const isAvail = isItemAvailable(mItem);
+                  if (isAvail) {
+                    priceMatchingItems.push(mItem);
+                  }
+                }
+              }
 
-            const itemCat = (mItem.category || '').toLowerCase().trim();
-            const singularCat = itemCat.endsWith('s') ? itemCat.slice(0, -1) : itemCat;
+              // Fallback: Check all items if no available ones found
+              if (priceMatchingItems.length === 0) {
+                for (let i = 0; i < restMenu.length; i++) {
+                  const mItem = restMenu[i];
+                  if (!mItem) continue;
+                  const p = getItemPrice(mItem);
+                  if (p !== null && p <= priceThreshold) {
+                    priceMatchingItems.push(mItem);
+                  }
+                }
+              }
 
-            if (
-              itemCat.includes(normalSelected) ||
-              normalSelected.includes(itemCat) ||
-              (singularSelected && itemCat.includes(singularSelected)) ||
-              (singularCat && normalSelected.includes(singularCat))
-            ) {
-              catMatchingItems.push(mItem);
+              if (priceMatchingItems.length === 0) {
+                // Restaurant does not have any items priced <= priceThreshold
+                return false;
+              }
+
+              // Sort matching dishes by price in ascending order
+              priceMatchingItems.sort((a, b) => (getItemPrice(a) || 0) - (getItemPrice(b) || 0));
+
+              if (!hasQuery) {
+                if (item._id) matchingMap[item._id] = priceMatchingItems;
+                if (item.restId) matchingMap[item.restId] = priceMatchingItems;
+                if (item.id) matchingMap[item.id] = priceMatchingItems;
+                if (item.restaurantId) matchingMap[item.restaurantId] = priceMatchingItems;
+              }
+            } else {
+              // Menu not loaded yet; check if restaurant was tagged with this category name in item.categories
+              const itemCats = item.categories || [];
+              let hasCatTag = false;
+              for (let i = 0; i < itemCats.length; i++) {
+                const c = itemCats[i];
+                if (c && typeof c === 'string' && (c.toLowerCase().includes(normalSelected) || normalSelected.includes(c.toLowerCase()))) {
+                  hasCatTag = true;
+                  break;
+                }
+              }
+              if (!hasCatTag) return false;
             }
-          }
-          if (catMatchingItems.length > 0) {
-            matchingMap[item._id || item.restId] = catMatchingItems;
+          } else {
+            // Normal Category Filter (e.g. Biryani, Pizza, Cakes, etc.)
+            const itemCats = item.categories;
+            if (!itemCats || itemCats.length === 0) return false;
+
+            let hasCategory = false;
+            for (let i = 0; i < itemCats.length; i++) {
+              const c = itemCats[i];
+              if (!c || typeof c !== 'string') continue;
+              const normalC = c.toLowerCase().trim();
+              if (
+                normalC.includes(normalSelected) ||
+                normalSelected.includes(normalC) ||
+                (singularSelected && normalC.includes(singularSelected))
+              ) {
+                hasCategory = true;
+                break;
+              }
+            }
+            if (!hasCategory) return false;
+
+            // Populate matching menu items for selected category filter display
+            if (!hasQuery && restMenu.length > 0) {
+              const catMatchingItems = [];
+              for (let i = 0; i < restMenu.length; i++) {
+                const mItem = restMenu[i];
+                if (!mItem) continue;
+
+                const isAvail = isItemAvailable(mItem);
+                if (!isAvail) continue;
+
+                const itemCat = String(mItem.category || mItem.itemCategory || mItem.subCategory || '').toLowerCase().trim();
+                const singularCat = itemCat.endsWith('s') ? itemCat.slice(0, -1) : itemCat;
+                const itemName = String(mItem.itemName || mItem.name || '').toLowerCase().trim();
+                const itemDesc = String(mItem.description || '').toLowerCase().trim();
+
+                const isCatMatch =
+                  itemCat.includes(normalSelected) ||
+                  normalSelected.includes(itemCat) ||
+                  (singularSelected && itemCat.includes(singularSelected)) ||
+                  (singularCat && normalSelected.includes(singularCat)) ||
+                  itemName.includes(normalSelected) ||
+                  (singularSelected && itemName.includes(singularSelected)) ||
+                  itemDesc.includes(normalSelected);
+
+                if (isCatMatch) {
+                  catMatchingItems.push(mItem);
+                }
+              }
+
+              // Fallback 1: If no available matched item was found, check all items in restMenu
+              if (catMatchingItems.length === 0) {
+                for (let i = 0; i < restMenu.length; i++) {
+                  const mItem = restMenu[i];
+                  if (!mItem) continue;
+                  const itemCat = String(mItem.category || mItem.itemCategory || mItem.subCategory || '').toLowerCase().trim();
+                  const singularCat = itemCat.endsWith('s') ? itemCat.slice(0, -1) : itemCat;
+                  const itemName = String(mItem.itemName || mItem.name || '').toLowerCase().trim();
+                  const itemDesc = String(mItem.description || '').toLowerCase().trim();
+
+                  const isCatMatch =
+                    itemCat.includes(normalSelected) ||
+                    normalSelected.includes(itemCat) ||
+                    (singularSelected && itemCat.includes(singularSelected)) ||
+                    (singularCat && normalSelected.includes(singularCat)) ||
+                    itemName.includes(normalSelected) ||
+                    (singularSelected && itemName.includes(singularSelected)) ||
+                    itemDesc.includes(normalSelected);
+
+                  if (isCatMatch) {
+                    catMatchingItems.push(mItem);
+                  }
+                }
+              }
+
+              // Fallback 2: If the restaurant matched the category but dishes had broad/generic names, show top dishes from restMenu
+              const finalDishes = catMatchingItems.length > 0 ? catMatchingItems : restMenu.filter(Boolean);
+
+              if (finalDishes.length > 0) {
+                if (item._id) matchingMap[item._id] = finalDishes;
+                if (item.restId) matchingMap[item.restId] = finalDishes;
+                if (item.id) matchingMap[item.id] = finalDishes;
+                if (item.restaurantId) matchingMap[item.restaurantId] = finalDishes;
+              }
+            }
           }
         }
 
@@ -1032,11 +1233,7 @@ export default function RestaurantListScreen() {
             for (let i = 0; i < restMenu.length; i++) {
               const mItem = restMenu[i];
               if (!mItem) continue;
-              const isAvail = mItem.itemStatus !== false && mItem.itemStatus !== 'false' && mItem.itemStatus !== 0 &&
-                              mItem.itemtodisplayintherestuarentapp !== false && mItem.itemtodisplayintherestuarentapp !== 'false' && mItem.itemtodisplayintherestuarentapp !== 0 &&
-                              mItem.status !== 'unavailable' && mItem.status !== 'OUT_OF_STOCK' && mItem.status !== 'inactive' && mItem.status !== false && mItem.status !== 0 &&
-                              mItem.available !== false && mItem.available !== 'false' && mItem.available !== 0 &&
-                              mItem.isAvailable !== false && mItem.isAvailable !== 'false' && mItem.isAvailable !== 0;
+              const isAvail = isItemAvailable(mItem);
               if (!isAvail) continue;
 
               const itemName = mItem.itemName || mItem.name || '';
@@ -1058,7 +1255,10 @@ export default function RestaurantListScreen() {
           if (!matchesSearch) return false;
 
           if (hasItemMatch) {
-            matchingMap[item._id || item.restId] = matchingItems;
+            if (item._id) matchingMap[item._id] = matchingItems;
+            if (item.restId) matchingMap[item.restId] = matchingItems;
+            if (item.id) matchingMap[item.id] = matchingItems;
+            if (item.restaurantId) matchingMap[item.restaurantId] = matchingItems;
           }
         }
 
@@ -1109,7 +1309,11 @@ export default function RestaurantListScreen() {
           gap: 10,
         }}
         activeOpacity={0.75}
-        onPress={() => setShowDeliverToModal(true)}
+        onPress={() => {
+          if (maintenanceMode !== false) {
+            setShowDeliverToModal(true);
+          }
+        }}
       >
         <Feather name="map-pin" size={18} color="#FA4D56" />
         <View style={{ flex: 1 }}>
@@ -1488,7 +1692,11 @@ export default function RestaurantListScreen() {
   ]);
 
   const renderRestaurantCard = useCallback(({ item, index: cardIdx }) => {
-    const matchingDishes = matchingItemsMap[item._id || item.restId];
+    const matchingDishes =
+      matchingItemsMap[item._id] ||
+      matchingItemsMap[item.restId] ||
+      matchingItemsMap[item.id] ||
+      matchingItemsMap[item.restaurantId];
     const isActive = isRestActive(item);
     const imageUri = item.logoUrl || 'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=500';
     const rawName = item.name || item.email || 'Restaurant';
@@ -1520,7 +1728,9 @@ export default function RestaurantListScreen() {
             <View style={[styles.ratingBadge, { backgroundColor: isActive ? '#2B783E' : '#707070' }]}>
               <FontAwesome name="star" size={10} color="#FFD200" />
               <Text style={styles.ratingText}>
-                {((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
+                {item.rating !== undefined && item.rating !== null && item.rating !== ''
+                  ? Number(item.rating).toFixed(1)
+                  : ((parseInt(item.restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
               </Text>
             </View>
           </View>
@@ -1626,20 +1836,24 @@ export default function RestaurantListScreen() {
                 <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E3545', flexShrink: 0 }}>
                   Dishes:
                 </Text>
-                {matchingDishes.slice(0, 2).map((dish, idx) => (
-                  <View key={idx} style={{
-                    backgroundColor: '#E8F5E9',
-                    borderColor: '#2B783E',
-                    borderWidth: 1,
-                    paddingHorizontal: 8,
-                    paddingVertical: 3,
-                    borderRadius: 8,
-                  }}>
-                    <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
-                      {dish.itemName || dish.name}
-                    </Text>
-                  </View>
-                ))}
+                {matchingDishes.slice(0, 2).map((dish, idx) => {
+                  const dPrice = getItemPrice(dish);
+                  const dName = dish.itemName || dish.name || 'Dish';
+                  return (
+                    <View key={idx} style={{
+                      backgroundColor: '#E8F5E9',
+                      borderColor: '#2B783E',
+                      borderWidth: 1,
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 8,
+                    }}>
+                      <Text style={{ fontSize: 11, color: '#2B783E', fontWeight: 'bold' }}>
+                        {dName}{dPrice !== null ? ` • ₹${dPrice}` : ''}
+                      </Text>
+                    </View>
+                  );
+                })}
                 {matchingDishes.length > 2 && (
                   <View style={{
                     backgroundColor: '#2B783E',
@@ -1714,7 +1928,7 @@ export default function RestaurantListScreen() {
       )}
 
       {/* Fetching Location Overlay Modal */}
-      <Modal transparent visible={showFetchingModal} animationType="fade">
+      <Modal transparent visible={Boolean(showFetchingModal && maintenanceMode !== false)} animationType="fade">
         <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0, 0, 0, 0.4)' }]}>
           <View style={[styles.modalContent, { backgroundColor: '#F9F9F6' }]}>
             <ActivityIndicator size="large" color="#1E3545" style={{ marginBottom: 16 }} />
@@ -1729,7 +1943,7 @@ export default function RestaurantListScreen() {
       {/* GPS Off / Permission Denied Modal (Hidden — only 1 delivery location selector modal is shown) */}
 
       {/* Deliver To Selector Modal */}
-      <Modal transparent visible={showDeliverToModal} animationType="slide" onRequestClose={() => {}}>
+      <Modal transparent visible={Boolean(showDeliverToModal && maintenanceMode !== false)} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', position: 'relative' }]}>
             {/* Top-Right X Close Symbol */}
@@ -1901,7 +2115,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* Out of Zone warning Modal */}
-      <Modal transparent visible={showOutOfZoneModal} animationType="slide">
+      <Modal transparent visible={Boolean(showOutOfZoneModal && maintenanceMode !== false)} animationType="slide">
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={styles.modalContent}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>

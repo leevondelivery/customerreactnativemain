@@ -1,15 +1,12 @@
+
 import { Platform } from 'react-native';
 
-// Main Production Backend URL:
+// Production URL:
 // export const API_URL = 'https://customerbackendfile-production.up.railway.app';
 
-// Your PC's Wi-Fi IP for Mobile / Android devices to connect to your local backend server:
-const LOCAL_PC_IP = '10.113.153.182';
-
-// Localhost / Local Network Backend URL:
-export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ||
-  (Platform.OS === 'web' ? 'http://localhost:5000' : `http://${LOCAL_PC_IP}:5000`);
+// Local Wi-Fi IP (for physical Android/iOS devices on same Wi-Fi):
+export const API_URL = 'http://192.168.0.109:5000';
+// export const API_URL = 'http://localhost:5000'; // For web / iOS simulator
 
 
 export const CONTACT_INFO = {

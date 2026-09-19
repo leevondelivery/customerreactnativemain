@@ -162,12 +162,6 @@ export default function MyReviewsScreen() {
     return <View style={styles.starsRow}>{stars}</View>;
   };
 
-  const formatCurrency = (val) => {
-    if (val === undefined || val === null || val === '') return '';
-    const num = Number(val);
-    return isNaN(num) ? String(val) : `₹ ${num.toFixed(0)}`;
-  };
-
   const isInitialLoading = screenLoading && !profileLoaded && displayReviews.length === 0;
 
   return (
@@ -230,18 +224,7 @@ export default function MyReviewsScreen() {
 
             const matchingCompletedOrder = rawOrderIdClean ? completedOrdersMap.get(rawOrderIdClean) || null : null;
 
-            const items = (orderDetailsObj && orderDetailsObj.items && Array.isArray(orderDetailsObj.items) && orderDetailsObj.items.length > 0)
-              ? orderDetailsObj.items
-              : (matchingCompletedOrder?.items && Array.isArray(matchingCompletedOrder.items) ? matchingCompletedOrder.items : (Array.isArray(review.items) ? review.items : []));
-
             const restaurantName = review.restaurantName || orderDetailsObj?.restaurantName || matchingCompletedOrder?.restaurantName || matchingCompletedOrder?.name || 'Restaurant';
-            const subTotal = orderDetailsObj?.subTotal ?? matchingCompletedOrder?.subTotal ?? matchingCompletedOrder?.subtotal ?? '';
-            const deliveryCharges = orderDetailsObj?.deliveryCharges ?? orderDetailsObj?.deliveryFee ?? matchingCompletedOrder?.deliveryFee ?? matchingCompletedOrder?.deliveryCharges ?? '';
-            const surgeFee = orderDetailsObj?.surgeFee ?? matchingCompletedOrder?.surgeFee ?? matchingCompletedOrder?.surge_fee ?? '';
-            const gst = orderDetailsObj?.gst ?? matchingCompletedOrder?.gst ?? matchingCompletedOrder?.tax ?? '';
-            const platformFee = orderDetailsObj?.platformFee ?? matchingCompletedOrder?.platformFee ?? matchingCompletedOrder?.platform_fee ?? '';
-            const discountAmount = orderDetailsObj?.discountAmount ?? matchingCompletedOrder?.discountAmount ?? matchingCompletedOrder?.discount ?? '';
-            const grandTotal = orderDetailsObj?.grandTotal ?? matchingCompletedOrder?.grandTotal ?? matchingCompletedOrder?.totalPrice ?? review.grandTotal ?? '';
 
             const displayOrderId = rawOrderIdClean || 'N/A';
 
@@ -283,75 +266,6 @@ export default function MyReviewsScreen() {
                     {delivReviewVal ? (
                       <Text style={styles.reviewCommentText}>{delivReviewVal}</Text>
                     ) : null}
-                  </View>
-                )}
-
-                {/* Order Details & Price Breakdown */}
-                {(items.length > 0 || grandTotal !== '') && (
-                  <View style={styles.detailsBox}>
-                    <Text style={styles.detailsBoxTitle}>Order Details & Summary</Text>
-
-                    {items.length > 0 && items.map((item, idx) => (
-                      <View key={item._id || idx} style={styles.itemRow}>
-                        <Text style={styles.itemName}>{item.name || item.itemName || 'Item'}</Text>
-                        <Text style={styles.itemQty}>{item.quantity || item.qty || 1}x</Text>
-                        <Text style={styles.itemCost}>{formatCurrency(item.cost || item.price || item.amount)}</Text>
-                      </View>
-                    ))}
-
-                    <View style={styles.priceBreakdown}>
-                      {subTotal !== '' && (
-                        <View style={styles.priceRow}>
-                          <Text style={styles.priceLabel}>Sub Total</Text>
-                          <Text style={styles.priceValue}>{formatCurrency(subTotal)}</Text>
-                        </View>
-                      )}
-                      {deliveryCharges !== '' && (
-                        <View style={styles.priceRow}>
-                          <Text style={styles.priceLabel}>Delivery Charges</Text>
-                          <Text style={styles.priceValue}>{formatCurrency(deliveryCharges)}</Text>
-                        </View>
-                      )}
-                      {surgeFee !== '' && Number(surgeFee) > 0 && (
-                        <View style={styles.priceRow}>
-                          <Text style={[styles.priceLabel, { color: '#FF5E5E' }]}>⚡ Surge Fee</Text>
-                          <Text style={[styles.priceValue, { color: '#FF5E5E' }]}>{formatCurrency(surgeFee)}</Text>
-                        </View>
-                      )}
-                      {gst !== '' && Number(gst) > 0 && (() => {
-                        const gNum = Number(gst) || 0;
-                        const halfVal = gNum / 2;
-                        return (
-                          <>
-                            <View style={styles.priceRow}>
-                              <Text style={styles.priceLabel}>GST & Taxes</Text>
-                              <Text style={styles.priceValue}>{formatCurrency(gNum)}</Text>
-                            </View>
-                            <View style={[styles.priceRow, { paddingLeft: 12, marginTop: -2, marginBottom: 2 }]}>
-                              <Text style={[styles.priceLabel, { fontSize: 12, color: '#666' }]}>CGST (2.5%)</Text>
-                              <Text style={[styles.priceValue, { fontSize: 12, color: '#666' }]}>{formatCurrency(halfVal)}</Text>
-                            </View>
-                            <View style={[styles.priceRow, { paddingLeft: 12, marginBottom: 2 }]}>
-                              <Text style={[styles.priceLabel, { fontSize: 12, color: '#666' }]}>SGST (2.5%)</Text>
-                              <Text style={[styles.priceValue, { fontSize: 12, color: '#666' }]}>{formatCurrency(halfVal)}</Text>
-                            </View>
-                          </>
-                        );
-                      })()}
-
-                      {discountAmount !== '' && Number(discountAmount) > 0 && (
-                        <View style={styles.priceRow}>
-                          <Text style={[styles.priceLabel, { color: '#2E7D32' }]}>Discount</Text>
-                          <Text style={[styles.priceValue, { color: '#2E7D32' }]}>-{formatCurrency(discountAmount)}</Text>
-                        </View>
-                      )}
-                      {grandTotal !== '' && (
-                        <View style={styles.totalPriceRow}>
-                          <Text style={styles.totalPriceLabel}>Total Paid</Text>
-                          <Text style={styles.totalPriceValue}>{formatCurrency(grandTotal)}</Text>
-                        </View>
-                      )}
-                    </View>
                   </View>
                 )}
               </View>

@@ -2,81 +2,44 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import { API_URL } from '../config';
 
+const sortCarouselItems = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  return [...arr].sort((a, b) => {
+    const posA = parseInt(a.position ?? a.carouselId ?? a.id ?? '999', 10);
+    const posB = parseInt(b.position ?? b.carouselId ?? b.id ?? '999', 10);
+    return (isNaN(posA) ? 999 : posA) - (isNaN(posB) ? 999 : posB);
+  });
+};
+
 export const loadCachedRestaurants = createAsyncThunk(
   'restaurants/loadCachedRestaurants',
   async () => {
     try {
       const cachedStr = await AsyncStorage.getItem('cached_restaurants_data');
       const cachedMenusStr = await AsyncStorage.getItem('cached_menus_data');
+      const cachedOffersStr = await AsyncStorage.getItem('cached_offers_data');
       let menus = {};
+      let offers = {};
       if (cachedMenusStr) {
         try { menus = JSON.parse(cachedMenusStr); } catch (e) {}
+      }
+      if (cachedOffersStr) {
+        try { offers = JSON.parse(cachedOffersStr); } catch (e) {}
       }
       if (cachedStr) {
         const parsed = JSON.parse(cachedStr);
         return {
           restaurants: parsed.restaurants || [],
-          carousel: parsed.carousel || [],
+          carousel: sortCarouselItems(parsed.carousel || []),
           categories: parsed.categories || [],
-          menus: menus || {}
+          menus: menus || {},
+          offers: offers || {}
         };
       }
     } catch (e) {
       console.warn('[Restaurants] Cache load error:', e);
     }
     return null;
-  }
-);
-
-export const fetchAllRestaurantMenus = createAsyncThunk(
-  'restaurants/fetchAllRestaurantMenus',
-  async (restaurantsList, { getState }) => {
-    try {
-      if (!Array.isArray(restaurantsList) || restaurantsList.length === 0) return {};
-      const state = getState();
-      const existingMenus = state.restaurants?.menus || {};
-
-      const missingRestaurants = restaurantsList.filter((rest) => {
-        const id1 = rest.restId;
-        const id2 = rest._id;
-        const has1 = id1 && existingMenus[id1] && existingMenus[id1].length > 0;
-        const has2 = id2 && existingMenus[id2] && existingMenus[id2].length > 0;
-        return !has1 && !has2;
-      });
-
-      if (missingRestaurants.length === 0) return {};
-
-      const newMenus = {};
-      const fetchMenuForRest = async (rest) => {
-        const candidateIds = [rest.restId, rest._id].filter(Boolean);
-        for (const id of candidateIds) {
-          try {
-            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            const timeoutId = controller ? setTimeout(() => controller.abort(), 3500) : null;
-            const res = await fetch(`${API_URL}/restaurants/${id}/menu`, {
-              signal: controller?.signal,
-            });
-            if (timeoutId) clearTimeout(timeoutId);
-            if (res.ok) {
-              const data = await res.json();
-              const items = data.items || [];
-              if (Array.isArray(items) && items.length > 0) {
-                if (rest.restId) newMenus[rest.restId] = items;
-                if (rest._id) newMenus[rest._id] = items;
-                newMenus[id] = items;
-                return;
-              }
-            }
-          } catch (_e) {}
-        }
-      };
-
-      await Promise.all(missingRestaurants.map(rest => fetchMenuForRest(rest)));
-      AsyncStorage.setItem('cached_menus_data', JSON.stringify({ ...existingMenus, ...newMenus })).catch(() => {});
-      return newMenus;
-    } catch (_err) {
-      return {};
-    }
   }
 );
 
@@ -117,7 +80,7 @@ export const fetchRestaurants = createAsyncThunk(
         if (carouselRes.ok) {
           const carouselData = await carouselRes.json();
           if (carouselData.carousel && Array.isArray(carouselData.carousel)) {
-            carousel = carouselData.carousel;
+            carousel = sortCarouselItems(carouselData.carousel);
           }
         }
       } catch (e) {
@@ -149,19 +112,104 @@ export const fetchRestaurants = createAsyncThunk(
   }
 );
 
+export const fetchAllRestaurantMenus = createAsyncThunk(
+  'restaurants/fetchAllRestaurantMenus',
+  async (restaurantsList, { getState }) => {
+    try {
+      if (!Array.isArray(restaurantsList) || restaurantsList.length === 0) return { menus: {}, offers: {} };
+      const state = getState();
+      const existingMenus = state.restaurants?.menus || {};
+      const existingOffers = state.restaurants?.offers || {};
+
+      const missingRestaurants = restaurantsList.filter((rest) => {
+        const id1 = rest.restId;
+        const id2 = rest._id;
+        const id3 = rest.id;
+        const id4 = rest.restaurantId;
+        const has1 = id1 && existingMenus[id1] && existingMenus[id1].length > 0;
+        const has2 = id2 && existingMenus[id2] && existingMenus[id2].length > 0;
+        const has3 = id3 && existingMenus[id3] && existingMenus[id3].length > 0;
+        const has4 = id4 && existingMenus[id4] && existingMenus[id4].length > 0;
+        return !has1 && !has2 && !has3 && !has4;
+      });
+
+      if (missingRestaurants.length === 0) return { menus: {}, offers: {} };
+
+      const newMenus = {};
+      const newOffers = {};
+
+      const fetchMenuAndOffersForRest = async (rest) => {
+        const candidateIds = [rest.restId, rest._id, rest.id, rest.restaurantId]
+          .filter(Boolean)
+          .filter((id, idx, arr) => arr.indexOf(id) === idx);
+
+        for (const id of candidateIds) {
+          try {
+            const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 5000) : null;
+            const [menuRes, offersRes] = await Promise.allSettled([
+              fetch(`${API_URL}/restaurants/${id}/menu`, { signal: controller?.signal }),
+              fetch(`${API_URL}/api/offers/restaurant/${id}`, { signal: controller?.signal }),
+            ]);
+            if (timeoutId) clearTimeout(timeoutId);
+
+            if (menuRes.status === 'fulfilled' && menuRes.value.ok) {
+              const data = await menuRes.value.json();
+              const items = data.items || [];
+              if (Array.isArray(items) && items.length > 0) {
+                if (rest.restId) newMenus[rest.restId] = items;
+                if (rest._id) newMenus[rest._id] = items;
+                if (rest.id) newMenus[rest.id] = items;
+                if (rest.restaurantId) newMenus[rest.restaurantId] = items;
+                newMenus[id] = items;
+              }
+            }
+
+            if (offersRes.status === 'fulfilled' && offersRes.value.ok) {
+              const offersData = await offersRes.value.json();
+              if (offersData && offersData.success && offersData.data) {
+                if (rest.restId) newOffers[rest.restId] = offersData.data;
+                if (rest._id) newOffers[rest._id] = offersData.data;
+                if (rest.id) newOffers[rest.id] = offersData.data;
+                if (rest.restaurantId) newOffers[rest.restaurantId] = offersData.data;
+                newOffers[id] = offersData.data;
+              }
+            }
+
+            if (newMenus[id]) return;
+          } catch (_e) {}
+        }
+      };
+
+      await Promise.all(missingRestaurants.map(rest => fetchMenuAndOffersForRest(rest)));
+      AsyncStorage.setItem('cached_menus_data', JSON.stringify({ ...existingMenus, ...newMenus })).catch(() => {});
+      AsyncStorage.setItem('cached_offers_data', JSON.stringify({ ...existingOffers, ...newOffers })).catch(() => {});
+      return { menus: newMenus, offers: newOffers };
+    } catch (_err) {
+      return { menus: {}, offers: {} };
+    }
+  }
+);
+
 export const fetchRestaurantMenu = createAsyncThunk(
   'restaurants/fetchRestaurantMenu',
   async (restaurantId, { getState, rejectWithValue }) => {
     try {
       const state = getState();
       const restaurants = state.restaurants?.list || [];
-      const rest = restaurants.find(r => r.restId === restaurantId || r._id === restaurantId);
+      const rest = restaurants.find(r =>
+        (r.restId && String(r.restId) === String(restaurantId)) ||
+        (r._id && String(r._id) === String(restaurantId)) ||
+        (r.id && String(r.id) === String(restaurantId))
+      );
 
       const candidateIds = [
         restaurantId,
         rest?.restId,
-        rest?._id
-      ].filter(Boolean).filter((id, idx, arr) => arr.indexOf(id) === idx);
+        rest?._id,
+        rest?.id,
+        rest?.restaurantId
+      ].filter(Boolean).map(String).filter((id, idx, arr) => arr.indexOf(id) === idx);
 
       const existing = state.restaurants?.menus?.[restaurantId] ||
                        (rest?.restId && state.restaurants?.menus?.[rest.restId]) ||
@@ -187,23 +235,59 @@ export const fetchRestaurantMenu = createAsyncThunk(
         return null;
       };
 
-      // Fetch all candidate IDs in parallel for maximum speed
-      const results = await Promise.all(candidateIds.map(id => fetchMenuForId(id)));
-      const items = results.find(res => Array.isArray(res) && res.length > 0) || existing;
+      // Helper to fetch offers for a single candidate ID
+      const fetchOffersForId = async (id) => {
+        try {
+          const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+          const res = await fetch(`${API_URL}/api/offers/restaurant/${id}`, {
+            signal: controller ? controller.signal : undefined,
+          });
+          if (timeoutId) clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.success && data.data) {
+              return data.data;
+            }
+          }
+        } catch (_e) {}
+        return null;
+      };
 
-      if (items.length > 0) {
+      // Fetch all candidate IDs in parallel for maximum speed
+      const [menuResults, offersResults] = await Promise.all([
+        Promise.all(candidateIds.map(id => fetchMenuForId(id))),
+        Promise.all(candidateIds.map(id => fetchOffersForId(id)))
+      ]);
+
+      const items = menuResults.find(res => Array.isArray(res) && res.length > 0) || existing;
+      const existingOffers = state.restaurants?.offers?.[restaurantId] ||
+                             (rest?.restId && state.restaurants?.offers?.[rest.restId]) ||
+                             (rest?._id && state.restaurants?.offers?.[rest._id]) ||
+                             null;
+      const offers = offersResults.find(Boolean) || existingOffers || null;
+
+      if (items.length > 0 || offers) {
         try {
           const existingMenus = state.restaurants?.menus || {};
-          const updated = { ...existingMenus, [restaurantId]: items };
-          if (rest?.restId) updated[rest.restId] = items;
-          if (rest?._id) updated[rest._id] = items;
-          AsyncStorage.setItem('cached_menus_data', JSON.stringify(updated)).catch(() => {});
+          const updatedMenus = { ...existingMenus, [restaurantId]: items };
+          if (rest?.restId) updatedMenus[rest.restId] = items;
+          if (rest?._id) updatedMenus[rest._id] = items;
+          AsyncStorage.setItem('cached_menus_data', JSON.stringify(updatedMenus)).catch(() => {});
+
+          if (offers) {
+            const existingOffersMap = state.restaurants?.offers || {};
+            const updatedOffers = { ...existingOffersMap, [restaurantId]: offers };
+            if (rest?.restId) updatedOffers[rest.restId] = offers;
+            if (rest?._id) updatedOffers[rest._id] = offers;
+            AsyncStorage.setItem('cached_offers_data', JSON.stringify(updatedOffers)).catch(() => {});
+          }
         } catch (_e) {}
       }
 
-      return { restaurantId, rest, items };
+      return { restaurantId, rest, items, offers };
     } catch (err) {
-      return { restaurantId, items: [] };
+      return { restaurantId, items: [], offers: null };
     }
   }
 );
@@ -362,6 +446,7 @@ const restaurantsSlice = createSlice({
     carousel: [],      // Cache of carousel items
     categories: [],    // Cache of category filters
     menus: {},         // Cache of menus: { [restaurantId]: [item1, item2, ...] }
+    offers: {},        // Cache of restaurant offers: { [restaurantId]: { bogoOffers, categoryDiscounts, tieredOffers } }
     menuLoading: {},   // Loading state by restaurantId: { [restaurantId]: boolean }
     orders: [],        // Cache of completed orders
     reviews: [],       // Cache of user reviews (Redux Store)
@@ -420,9 +505,12 @@ const restaurantsSlice = createSlice({
           if (action.payload.menus) {
             state.menus = { ...state.menus, ...action.payload.menus };
           }
+          if (action.payload.offers) {
+            state.offers = { ...state.offers, ...action.payload.offers };
+          }
           if (action.payload.restaurants && action.payload.restaurants.length > 0 && !state.initialLoaded) {
             state.list = action.payload.restaurants;
-            state.carousel = action.payload.carousel;
+            state.carousel = sortCarouselItems(action.payload.carousel);
             state.categories = action.payload.categories;
             state.initialLoaded = true;
           }
@@ -430,7 +518,12 @@ const restaurantsSlice = createSlice({
       })
       .addCase(fetchAllRestaurantMenus.fulfilled, (state, action) => {
         if (action.payload) {
-          state.menus = { ...state.menus, ...action.payload };
+          if (action.payload.menus) {
+            state.menus = { ...state.menus, ...action.payload.menus };
+          }
+          if (action.payload.offers) {
+            state.offers = { ...state.offers, ...action.payload.offers };
+          }
         }
       })
       .addCase(fetchRestaurants.pending, (state) => {
@@ -440,7 +533,7 @@ const restaurantsSlice = createSlice({
       })
       .addCase(fetchRestaurants.fulfilled, (state, action) => {
         state.list = action.payload.restaurants || [];
-        state.carousel = action.payload.carousel || [];
+        state.carousel = sortCarouselItems(action.payload.carousel);
         state.categories = action.payload.categories || [];
         state.loading = false;
         state.initialLoaded = true;
@@ -455,7 +548,7 @@ const restaurantsSlice = createSlice({
         state.menuLoading[restaurantId] = true;
       })
       .addCase(fetchRestaurantMenu.fulfilled, (state, action) => {
-        const { restaurantId, rest, items } = action.payload;
+        const { restaurantId, rest, items, offers } = action.payload;
         if (items && items.length > 0) {
           state.menus[restaurantId] = items;
           if (rest?.restId) state.menus[rest.restId] = items;
@@ -465,6 +558,13 @@ const restaurantsSlice = createSlice({
           if (rest?.restId && !state.menus[rest.restId]) state.menus[rest.restId] = items || [];
           if (rest?._id && !state.menus[rest._id]) state.menus[rest._id] = items || [];
         }
+
+        if (offers) {
+          state.offers[restaurantId] = offers;
+          if (rest?.restId) state.offers[rest.restId] = offers;
+          if (rest?._id) state.offers[rest._id] = offers;
+        }
+
         state.menuLoading[restaurantId] = false;
         if (rest?.restId) state.menuLoading[rest.restId] = false;
         if (rest?._id) state.menuLoading[rest._id] = false;

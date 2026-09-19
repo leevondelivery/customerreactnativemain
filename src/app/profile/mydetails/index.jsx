@@ -804,6 +804,11 @@ export default function MyDetailsScreen() {
                   We sent a 6-digit verification code to +91 {verificationPhone.trim().slice(-10)}.
                 </Text>
                 
+                {/* Red SMS Spam / Inbox Notice */}
+                <Text style={{ color: '#D32F2F', fontSize: 12, fontWeight: '700', textAlign: 'center', marginBottom: 12 }}>
+                  Check OTP in SMS Inbox / SMS Spam folder
+                </Text>
+                
                 <TextInput
                   style={[localStyles.addressInput, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', textAlign: 'center', fontSize: 20, letterSpacing: 5, fontWeight: 'bold', marginBottom: 20, width: '100%', height: 50, borderRadius: 25 }]}
                   placeholder="------"

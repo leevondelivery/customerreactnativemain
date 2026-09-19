@@ -2,7 +2,7 @@ import { Feather, FontAwesome5, Ionicons, MaterialIcons } from '@expo/vector-ico
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -22,6 +22,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
+import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 // Lazily require Firebase Auth & Firestore to avoid crash when native module is not linked
@@ -91,6 +92,9 @@ const loadRazorpayScript = () => {
 // Global In-Memory Offers Cache to guarantee instant 0ms zero-flicker loading across page switches
 const offersMemoryCache = new Map();
 
+// Module-level tracker for currently active celebrated discount key
+let lastCelebratedDiscountKey = null;
+
 export default function CartScreen() {
 
   // Restaurant Offers (1+1 BOGO, Category % Discounts, Tiered Bill Discounts)
@@ -142,6 +146,7 @@ export default function CartScreen() {
   const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
   const restaurants = useSelector((state) => state.restaurants.list);
   const confirmPayEnabled = useSelector((state) => state.controls.confirmPayEnabled);
+  const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
 
   useFocusEffect(
     useCallback(() => {
@@ -171,6 +176,11 @@ export default function CartScreen() {
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isGstExpanded, setIsGstExpanded] = useState(false);
+
+  // 1+1 BOGO / Tiered Restaurant Discount Celebration Animation State
+  const [celebrationState, setCelebrationState] = useState({ visible: false, offerDetails: null });
+  const lastCelebratedTierRef = useRef(null);
+  const isUserActionRef = useRef(false);
 
   // Address flow states
   const [userid, setUserid] = useState(null);
@@ -279,6 +289,15 @@ export default function CartScreen() {
         setAppliedCoupon(couponObj);
         await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
         triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
+        setCelebrationState({
+          visible: true,
+          offerDetails: {
+            type: 'coupon',
+            customTitle: 'COUPON APPLIED!',
+            customSubtext: `Saved with coupon ${couponObj.couponCode}!`,
+            triggerId: Date.now(),
+          },
+        });
       } else {
         setCouponError(data.message || 'Invalid coupon code.');
         setAppliedCoupon(null);
@@ -420,6 +439,66 @@ export default function CartScreen() {
     loop.start();
     return () => loop.stop();
   }, [floatAnim]);
+
+  const calculatedSubtotal = useMemo(() => {
+    return cartItems.reduce((sum, item) => {
+      const itemCat = String(item.category || '').trim().toLowerCase();
+      const matchedCatDiscount = (restaurantOffers?.categoryDiscounts || []).find((d) => {
+        if (d.isActive === false) return false;
+        const targetCat = String(d.category || '').trim().toLowerCase();
+        return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
+      });
+      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+      const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+      const offerPercent = Math.max(directOffer, catDiscountPercent);
+      const price = (offerPercent > 0 && offerPercent <= 100)
+        ? (item.price - (item.price * (offerPercent / 100)))
+        : (item.price || 0);
+      return sum + price * (item.quantity || 0);
+    }, 0);
+  }, [cartItems, restaurantOffers]);
+
+  const activeTierOffer = useMemo(() => {
+    if (!restaurantOffers?.tieredDiscounts || !restaurantOffers.tieredDiscounts.length) return null;
+    const activeTiers = (restaurantOffers.tieredDiscounts || [])
+      .filter(t => {
+        if (t.isActive === false || Number(t.minBillAmount) <= 0) return false;
+        const isFlat = t.discountType === 'flat' || (Number(t.discountAmount) > 0 && !t.discountPercentage);
+        return isFlat ? Number(t.discountAmount) > 0 : Number(t.discountPercentage) > 0;
+      })
+      .sort((a, b) => Number(b.minBillAmount) - Number(a.minBillAmount));
+
+    return activeTiers.find(t => calculatedSubtotal >= Number(t.minBillAmount)) || null;
+  }, [restaurantOffers, calculatedSubtotal]);
+
+  // Trigger celebration whenever a Tiered Restaurant Discount is unlocked or upgraded!
+  useEffect(() => {
+    if (loading) return; // Wait until initial cart load finishes to avoid false triggers
+
+    const currentRestId = cartItems[0]?.restId || '';
+    if (activeTierOffer && activeTierOffer.minBillAmount && cartItems.length > 0) {
+      const tierKey = `${currentRestId}_${activeTierOffer.minBillAmount}_${activeTierOffer.discountAmount || activeTierOffer.discountPercentage}_${activeTierOffer.discountType || ''}`;
+
+      AsyncStorage.getItem('last_celebrated_discount_key').then((storedKey) => {
+        if (storedKey !== tierKey) {
+          AsyncStorage.setItem('last_celebrated_discount_key', tierKey).catch(() => {});
+          const isFlat = activeTierOffer.discountType === 'flat' || (Number(activeTierOffer.discountAmount) > 0 && !activeTierOffer.discountPercentage);
+          const discountStr = isFlat ? `₹${activeTierOffer.discountAmount} Instant Savings` : `${activeTierOffer.discountPercentage}% Instant Savings`;
+          setCelebrationState({
+            visible: true,
+            offerDetails: {
+              type: 'tiered',
+              customTitle: 'DISCOUNT UNLOCKED!',
+              customSubtext: `Big win! You unlocked ${discountStr} on your order!`,
+              triggerId: Date.now(),
+            },
+          });
+        }
+      }).catch(() => {});
+    } else if (!activeTierOffer || cartItems.length === 0) {
+      AsyncStorage.removeItem('last_celebrated_discount_key').catch(() => {});
+    }
+  }, [activeTierOffer, cartItems.length, loading]);
 
   const loadCart = useCallback(async () => {
     try {
@@ -640,6 +719,9 @@ export default function CartScreen() {
 
   const updateQuantity = async (itemId, change) => {
     try {
+      if (change > 0) {
+        isUserActionRef.current = true;
+      }
       const updated = cartItems
         .map((item) => {
           if (item._id === itemId || item.itemId === itemId) {
@@ -649,6 +731,10 @@ export default function CartScreen() {
         })
         .filter((item) => item.quantity > 0);
 
+      if (updated.length === 0) {
+        lastCelebratedDiscountKey = null;
+        await AsyncStorage.removeItem('last_celebrated_discount_key').catch(() => {});
+      }
       setCartItems(updated);
       await AsyncStorage.setItem('cart', JSON.stringify(updated));
     } catch (error) {
@@ -658,6 +744,8 @@ export default function CartScreen() {
 
   const clearCart = async () => {
     try {
+      lastCelebratedDiscountKey = null;
+      await AsyncStorage.removeItem('last_celebrated_discount_key').catch(() => {});
       await AsyncStorage.removeItem('cart');
       setCartItems([]);
     } catch (error) {
@@ -666,8 +754,8 @@ export default function CartScreen() {
   };
 
   const handlePlaceOrder = async () => {
-    // Instant 0ms check from Redux (polled every 5s in background)
-    if (!confirmPayEnabled) {
+    // Instant check from Redux
+    if (!confirmPayEnabled || maintenanceMode === false) {
       showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
       return;
     }
@@ -1354,7 +1442,7 @@ export default function CartScreen() {
           category: matchedBogo.targetCategory || 'Offer Item',
           isFreeItem: true,
           isBogo: true,
-          bogoTag: `Free with ${item.name || item.itemName}`,
+          bogoTag: '1+1 FREE',
         });
       }
     });
@@ -2061,14 +2149,14 @@ export default function CartScreen() {
                     </Text>
 
                     <View style={styles.controlsRow}>
-                      {/* Quantity Pill with Plus on Left and Minus on Right */}
+                      {/* Quantity Pill with Minus on Left and Plus on Right */}
                       <View style={styles.quantityContainer}>
-                        <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
-                          <Feather name="plus" size={14} color="#1A1A1A" />
+                        <TouchableOpacity style={styles.quantityBtn} activeOpacity={0.7} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
+                          <Feather name="minus" size={17} color="#1A1A1A" />
                         </TouchableOpacity>
                         <Text style={styles.quantityText}>{isCrossItem ? item.quantity : (isBogo ? (item.quantity * 2) : item.quantity)}</Text>
-                        <TouchableOpacity style={styles.quantityBtn} onPress={() => updateQuantity(item._id || item.itemId, -1)}>
-                          <Feather name="minus" size={14} color="#1A1A1A" />
+                        <TouchableOpacity style={styles.quantityBtn} activeOpacity={0.7} onPress={() => updateQuantity(item._id || item.itemId, 1)}>
+                          <Feather name="plus" size={17} color="#1A1A1A" />
                         </TouchableOpacity>
                       </View>
 
@@ -2093,26 +2181,75 @@ export default function CartScreen() {
                   {isBogo && !isCrossItem && (
                     <View style={{
                       marginTop: 10,
-                      paddingTop: 8,
-                      borderTopWidth: 1,
-                      borderTopColor: 'rgba(0, 128, 0, 0.2)',
+                      paddingVertical: 8,
+                      paddingHorizontal: 12,
+                      backgroundColor: 'rgba(5, 150, 105, 0.08)',
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: 'rgba(5, 150, 105, 0.22)',
                       flexDirection: 'row',
                       alignItems: 'center',
                       justifyContent: 'space-between',
                     }}>
                       <View style={{
-                        backgroundColor: '#008000',
-                        paddingHorizontal: 7,
-                        paddingVertical: 2.5,
-                        borderRadius: 6,
+                        backgroundColor: '#059669',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3.5,
+                        borderRadius: 20,
                         flexDirection: 'row',
                         alignItems: 'center',
                         gap: 4,
+                        shadowColor: '#059669',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.25,
+                        shadowRadius: 3,
+                        elevation: 2,
                       }}>
-                        <Text style={{ color: '#FFFFFF', fontSize: 10.5, fontWeight: '800' }}>1+1 OFFER</Text>
+                        <Ionicons name="sparkles" size={11} color="#FFFFFF" />
+                        <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '900', letterSpacing: 0.4 }}>1+1 FREE</Text>
                       </View>
-                      <Text style={{ color: '#008000', fontSize: 12, fontWeight: '700' }}>
-                        {item.quantity * 2} Items ({item.quantity} Paid + {item.quantity} Free)
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <Ionicons name="gift-outline" size={13} color="#047857" />
+                        <Text style={{ color: '#065F46', fontSize: 12, fontWeight: '800' }}>
+                          {item.quantity * 2} Items ({item.quantity} Paid + {item.quantity} FREE)
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Cross-Item 1+1 Paired Banner on Paid Card */}
+                  {isBogo && isCrossItem && (
+                    <View style={{
+                      marginTop: 10,
+                      paddingVertical: 8,
+                      paddingHorizontal: 12,
+                      backgroundColor: 'rgba(5, 150, 105, 0.08)',
+                      borderRadius: 14,
+                      borderWidth: 1,
+                      borderColor: 'rgba(5, 150, 105, 0.22)',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}>
+                      <View style={{
+                        backgroundColor: '#059669',
+                        paddingHorizontal: 8,
+                        paddingVertical: 3.5,
+                        borderRadius: 20,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                        shadowColor: '#059669',
+                        shadowOffset: { width: 0, height: 2 },
+                        shadowOpacity: 0.25,
+                        shadowRadius: 3,
+                        elevation: 2,
+                      }}>
+                        <Ionicons name="sparkles" size={11} color="#FFFFFF" />
+                        <Text style={{ color: '#FFFFFF', fontSize: 10, fontWeight: '900', letterSpacing: 0.4 }}>1+1 FREE</Text>
+                      </View>
+                      <Text style={{ color: '#065F46', fontSize: 11.5, fontWeight: '800', flex: 1, textAlign: 'right', marginLeft: 8 }} numberOfLines={1}>
+                        +1 {matchedBogo.targetItemName} FREE
                       </Text>
                     </View>
                   )}
@@ -2126,38 +2263,59 @@ export default function CartScreen() {
                       marginTop: -4,
                       marginBottom: 12,
                       borderLeftWidth: 4,
-                      borderLeftColor: '#008000',
-                      backgroundColor: 'rgb(235, 243, 230)',
+                      borderLeftColor: '#059669',
+                      borderWidth: 1,
+                      borderColor: 'rgba(5, 150, 105, 0.25)',
+                      backgroundColor: 'rgba(236, 253, 245, 0.95)',
                       flexDirection: 'column',
-                      alignItems: 'stretch'
+                      alignItems: 'stretch',
+                      shadowColor: '#059669',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.08,
+                      shadowRadius: 4,
+                      elevation: 1,
                     }
                   ]}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                       <View style={{ flex: 1, marginRight: 8 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
-                          <View style={{ backgroundColor: '#008000', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                            <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '800' }}>1+1 FREE (+1)</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          <View style={{
+                            backgroundColor: '#059669',
+                            paddingHorizontal: 7,
+                            paddingVertical: 3,
+                            borderRadius: 20,
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 3.5,
+                          }}>
+                            <Ionicons name="gift" size={10} color="#FFFFFF" />
+                            <Text style={{ color: '#FFFFFF', fontSize: 9.5, fontWeight: '900', letterSpacing: 0.3 }}>1+1 FREE (+1)</Text>
                           </View>
-                          <Text style={{ color: '#2E7D32', fontSize: 11, fontWeight: '700' }} numberOfLines={1}>
-                            Free with {item.name || item.itemName}
-                          </Text>
                         </View>
-                        <Text style={[styles.itemName, { color: '#1B5E20', fontSize: 14.5, fontWeight: '800' }]} numberOfLines={2}>
+                        <Text style={[styles.itemName, { color: '#064E3B', fontSize: 14.5, fontWeight: '800' }]} numberOfLines={2}>
                           {matchedBogo.targetItemName}
                         </Text>
                       </View>
 
                       <View style={styles.controlsRow}>
                         {/* Quantity Pill */}
-                        <View style={[styles.quantityContainer, { backgroundColor: '#FFFFFF', borderColor: '#A5D6A7', borderWidth: 1, paddingHorizontal: 10 }]}>
-                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#2E7D32', marginRight: 4 }}>QTY</Text>
-                          <Text style={[styles.quantityText, { color: '#1B5E20', fontWeight: '900' }]}>{item.quantity}</Text>
+                        <View style={[styles.quantityContainer, { backgroundColor: '#FFFFFF', borderColor: '#A7F3D0', borderWidth: 1, paddingHorizontal: 10 }]}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#047857', marginRight: 4 }}>QTY</Text>
+                          <Text style={[styles.quantityText, { color: '#064E3B', fontWeight: '900' }]}>{item.quantity}</Text>
                         </View>
 
                         {/* Price: ₹0.00 FREE */}
                         <View style={{ alignItems: 'flex-end', minWidth: 60 }}>
-                          <Text style={[styles.itemPrice, { color: '#008000', fontWeight: '900', fontSize: 15 }]}>₹0.00</Text>
-                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#008000', letterSpacing: 0.5 }}>FREE</Text>
+                          <Text style={[styles.itemPrice, { color: '#059669', fontWeight: '900', fontSize: 15 }]}>₹0.00</Text>
+                          <View style={{
+                            backgroundColor: 'rgba(5, 150, 105, 0.15)',
+                            paddingHorizontal: 5,
+                            paddingVertical: 1.5,
+                            borderRadius: 4,
+                            marginTop: 1,
+                          }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: '900', color: '#047857', letterSpacing: 0.5 }}>FREE</Text>
+                          </View>
                         </View>
                       </View>
                     </View>
@@ -2970,6 +3128,11 @@ export default function CartScreen() {
                   We sent a 6-digit verification code to +91 {verificationPhone.trim().slice(-10)}.
                 </Text>
 
+                {/* Red SMS Spam / Inbox Notice */}
+                <Text style={{ color: '#D32F2F', fontSize: 12, fontWeight: '700', textAlign: 'center', marginBottom: 12 }}>
+                  Check OTP in SMS Inbox / SMS Spam folder
+                </Text>
+
                 <TextInput
                   style={[styles.addressInput, { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCD3C5', textAlign: 'center', fontSize: 20, letterSpacing: 5, fontWeight: 'bold', marginBottom: 20 }]}
                   placeholder="------"
@@ -3025,7 +3188,7 @@ export default function CartScreen() {
       {/* Select Delivery Location Modal */}
       <Modal
         transparent
-        visible={showLocationChoiceModal}
+        visible={Boolean(showLocationChoiceModal && maintenanceMode !== false)}
         animationType="slide"
         onRequestClose={() => setShowLocationChoiceModal(false)}
       >
@@ -3269,7 +3432,7 @@ export default function CartScreen() {
       </Modal>
 
       {/* Fetching Location Loading Overlay Modal */}
-      <Modal transparent visible={Boolean(isFetchingLocation || showFetchingModal)} animationType="fade">
+      <Modal transparent visible={Boolean((isFetchingLocation || showFetchingModal) && maintenanceMode !== false)} animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
           <View style={{ width: '85%', maxWidth: 320, backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 24, alignItems: 'center' }}>
             <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
@@ -3280,6 +3443,13 @@ export default function CartScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Discount & Offer Celebration Confetti Overlay */}
+      <BogoCelebration
+        visible={celebrationState.visible}
+        offerDetails={celebrationState.offerDetails}
+        onDismiss={() => setCelebrationState({ visible: false, offerDetails: null })}
+      />
     </View>
   );
 }
@@ -3335,19 +3505,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    gap: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    gap: 10,
   },
   quantityBtn: {
-    width: 20,
-    height: 20,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#F5F5F0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   quantityText: {
-    fontSize: 14,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '800',
     color: '#1A1A1A',
   },
   itemPrice: {

@@ -332,12 +332,11 @@ export const styles = StyleSheet.create({
   categoryText: {
     color: '#FFF',
     fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.3,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
     textAlign: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     textTransform: 'uppercase',
-    width: '100%',
   },
   categoryCloseBadge: {
     position: 'absolute',

@@ -1011,6 +1011,11 @@ export default function LoginScreen() {
               <Text style={styles.otpMobileHighlight}>+91 {mobile}</Text>
             </Text>
 
+            {/* Red SMS Spam / Inbox Notice */}
+            <Text style={{ color: '#D32F2F', fontSize: 12, fontWeight: '700', textAlign: 'center', marginVertical: 6 }}>
+              Check OTP in SMS Inbox / SMS Spam folder
+            </Text>
+
             {/* 6 Digit Visual OTP Boxes */}
             <View style={styles.otpWrapper}>
               <View
@@ -1268,6 +1273,11 @@ export default function LoginScreen() {
               <View style={{ width: '100%', gap: 15, marginBottom: 20 }}>
                 <Text style={{ color: '#7E7C77', fontSize: 13, textAlign: 'center', marginBottom: 5 }}>
                   Enter the OTP sent to your number and choose a new password
+                </Text>
+
+                {/* Red SMS Spam / Inbox Notice */}
+                <Text style={{ color: '#D32F2F', fontSize: 12, fontWeight: '700', textAlign: 'center', marginVertical: 2 }}>
+                  Check OTP in SMS Inbox / SMS Spam folder
                 </Text>
 
                 {/* OTP input */}

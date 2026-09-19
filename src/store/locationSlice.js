@@ -141,6 +141,15 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         longitude = Number(customLng);
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
+        const state = thunkAPI.getState();
+        if (state.controls?.maintenanceMode === false) {
+          console.log('[Location Redux] App is under maintenance. Skipping GPS location fetch.');
+          return rejectWithValue({
+            type: 'MAINTENANCE_MODE',
+            message: 'App is under maintenance.'
+          });
+        }
+
         // Check if user has an active order in progress; if so, do not fetch GPS location
         const uid = await AsyncStorage.getItem('userid');
         if (uid) {

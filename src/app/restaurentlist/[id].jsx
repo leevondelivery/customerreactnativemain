@@ -24,6 +24,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
+import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { skipLocation } from '../../store/locationSlice';
 import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
@@ -68,6 +69,7 @@ const SMOOTH_LAYOUT_ANIMATION = {
 };
 
 const EMPTY_ARRAY = [];
+const memoryOffersCache = new Map();
 
 const isItemAvailable = (item) => {
   if (!item) return false;
@@ -79,45 +81,11 @@ const isItemAvailable = (item) => {
   return true;
 };
 
-function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
-  const animValue = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    animValue.setValue(0);
-    const delay = Math.min(index * 8, 40);
-    const timer = setTimeout(() => {
-      Animated.spring(animValue, {
-        toValue: 1,
-        tension: 280,
-        friction: 20,
-        useNativeDriver: true,
-      }).start();
-    }, delay);
-
-    return () => clearTimeout(timer);
-  }, [filterKey, index]);
-
-  const translateY = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [5, 0],
-  });
-
-  const scale = animValue.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.98, 1],
-  });
-
+function AnimatedCardWrapper({ children, style }) {
   return (
-    <Animated.View
-      style={[
-        style,
-        {
-          transform: [{ translateY }, { scale }],
-        },
-      ]}
-    >
+    <View style={style}>
       {children}
-    </Animated.View>
+    </View>
   );
 }
 
@@ -125,13 +93,11 @@ function AnimatedCardWrapper({ index = 0, filterKey, children, style }) {
 const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast, isBogo, bogoOffer, categoryDiscountPercent }) {
   const available = isItemAvailable(item);
   const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
-  const suffix = isVeg ? ' (Veg)' : ' (Non-Veg)';
   const fallbackImage = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
 
-  let displayItemName = item.itemName ? item.itemName.charAt(0).toUpperCase() + item.itemName.slice(1) : 'Food Item';
-  if (!displayItemName.toLowerCase().includes('(veg') && !displayItemName.toLowerCase().includes('(non-veg')) {
-    displayItemName += suffix;
-  }
+  let rawItemName = (item.itemName || item.name || 'Food Item').trim();
+  let displayItemName = rawItemName.replace(/\s*\((?:veg|non-veg|non veg)\)/gi, '').trim();
+  displayItemName = displayItemName ? displayItemName.charAt(0).toUpperCase() + displayItemName.slice(1) : 'Food Item';
 
   const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
   const catOffer = categoryDiscountPercent ? parseFloat(categoryDiscountPercent) : 0;
@@ -208,9 +174,31 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
         transition={100}
       />
 
-      <Text style={[styles.itemNameText, !available && { color: '#8E8E93' }]} numberOfLines={2}>
-        {displayItemName}
-      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginVertical: 4, paddingHorizontal: 4, minHeight: 38 }}>
+        <Text style={[styles.itemNameText, { marginVertical: 0, minHeight: 0, flexShrink: 1 }, !available && { color: '#8E8E93' }]} numberOfLines={2}>
+          {displayItemName}
+        </Text>
+
+        {/* Official Veg (Green) / Non-Veg (Red) Symbol placed after the name */}
+        <View style={{
+          width: 13,
+          height: 13,
+          borderWidth: 1.5,
+          borderColor: isVeg ? '#0F8A65' : '#D32F2F',
+          borderRadius: 3,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#FFFFFF',
+          flexShrink: 0,
+        }}>
+          <View style={{
+            width: 5.5,
+            height: 5.5,
+            borderRadius: 2.75,
+            backgroundColor: isVeg ? '#0F8A65' : '#D32F2F',
+          }} />
+        </View>
+      </View>
 
       <View style={styles.ratingAndOfferContainer}>
         <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
@@ -246,8 +234,8 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
         </TouchableOpacity>
       ) : quantity > 0 ? (
         <View style={styles.quantityContainer}>
-          <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, -1)}>
-            <Feather name="minus" size={12} color="#1E3545" />
+          <TouchableOpacity style={styles.quantityBtn} activeOpacity={0.7} onPress={() => onUpdateQuantity(item, -1, isBogo, bogoOffer)}>
+            <Feather name="minus" size={17} color="#1E3545" />
           </TouchableOpacity>
           <Text style={styles.quantityText}>
             {(() => {
@@ -255,12 +243,12 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
               return isCrossItem ? quantity : (isBogo ? (quantity * 2) : quantity);
             })()}
           </Text>
-          <TouchableOpacity style={styles.quantityBtn} onPress={() => onUpdateQuantity(item, 1)}>
-            <Feather name="plus" size={12} color="#1E3545" />
+          <TouchableOpacity style={styles.quantityBtn} activeOpacity={0.7} onPress={() => onUpdateQuantity(item, 1, isBogo, bogoOffer)}>
+            <Feather name="plus" size={17} color="#1E3545" />
           </TouchableOpacity>
         </View>
       ) : (
-        <TouchableOpacity style={styles.addButton} activeOpacity={0.8} onPress={() => onUpdateQuantity(item, 1)}>
+        <TouchableOpacity style={styles.addButton} activeOpacity={0.8} onPress={() => onUpdateQuantity(item, 1, isBogo, bogoOffer)}>
           <Text style={styles.addButtonText}>ADD</Text>
         </TouchableOpacity>
       )}
@@ -365,7 +353,7 @@ export default function RestaurantMenuScreen() {
   const dispatch = useDispatch();
 
   // Route parameters
-  const { id: urlId, restId: paramRestId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime, offerTitle: passedOfferTitle } = useLocalSearchParams();
+  const { id: urlId, restId: paramRestId, name: passedName, logoUrl: passedLogoUrl, address: passedAddress, openTime: passedOpenTime, closeTime: passedCloseTime, offerTitle: passedOfferTitle, rating: passedRating } = useLocalSearchParams();
   const restId = paramRestId || urlId;
 
   // State
@@ -464,6 +452,9 @@ export default function RestaurantMenuScreen() {
   const [showReplaceCartModal, setShowReplaceCartModal] = useState(false);
   const [pendingItemToAdd, setPendingItemToAdd] = useState(null);
   const [previousRestaurantName, setPreviousRestaurantName] = useState('');
+
+  // 1+1 BOGO Celebration Animation State
+  const [celebrationState, setCelebrationState] = useState({ visible: false, offerDetails: null });
 
   // Toast state and animated values (smooth spring entrance & pulse on repeat clicks)
   const [toastConfig, setToastConfig] = useState({ message: 'ADDED TO CART SUCCESSFULLY!', type: 'success' });
@@ -670,22 +661,102 @@ export default function RestaurantMenuScreen() {
   const offerTitle = restaurantDetail?.offerTitle || passedOfferTitle;
   const isActive = restaurantDetail ? (restaurantDetail.isActive !== false && restaurantDetail.isActive !== 'false' && restaurantDetail.isactive !== false && restaurantDetail.isactive !== 'false' && restaurantDetail.isActive !== 0 && restaurantDetail.isactive !== 0 && restaurantDetail.status !== 'closed' && restaurantDetail.status !== 'INACTIVE') : true;
 
-  const [hasFetched, setHasFetched] = useState(false);
+  const targetId = restId || paramRestId || urlId || restaurantDetail?.restId || restaurantDetail?._id;
+
+  const reduxOffers = useSelector((state) => {
+    const offersMap = state.restaurants?.offers || {};
+    return (
+      (restId && offersMap[String(restId)]) ||
+      (paramRestId && offersMap[String(paramRestId)]) ||
+      (urlId && offersMap[String(urlId)]) ||
+      (restaurantDetail?.restId && offersMap[String(restaurantDetail.restId)]) ||
+      (restaurantDetail?._id && offersMap[String(restaurantDetail._id)]) ||
+      null
+    );
+  });
+
+  const [localOffers, setLocalOffers] = useState(() => {
+    return (
+      (targetId && memoryOffersCache.get(String(targetId))) ||
+      (restId && memoryOffersCache.get(String(restId))) ||
+      (restaurantDetail?.restId && memoryOffersCache.get(String(restaurantDetail.restId))) ||
+      (restaurantDetail?._id && memoryOffersCache.get(String(restaurantDetail._id))) ||
+      null
+    );
+  });
+
+  const restaurantOffers = localOffers || reduxOffers || (targetId ? memoryOffersCache.get(String(targetId)) : null) || null;
+
+  const [hasMenuFetched, setHasMenuFetched] = useState(false);
+  const [hasOffersFetched, setHasOffersFetched] = useState(() => {
+    return Boolean(
+      (targetId && memoryOffersCache.has(String(targetId))) ||
+      (restId && memoryOffersCache.has(String(restId))) ||
+      (restaurantDetail?.restId && memoryOffersCache.has(String(restaurantDetail.restId))) ||
+      (restaurantDetail?._id && memoryOffersCache.has(String(restaurantDetail._id))) ||
+      reduxOffers
+    );
+  });
   const hasFetchedRef = useRef(false);
 
   useEffect(() => {
-    const targetId = restId || paramRestId || urlId;
-
     if (targetId && !hasFetchedRef.current) {
       hasFetchedRef.current = true;
       dispatch(fetchRestaurantMenu(targetId)).finally(() => {
-        setHasFetched(true);
+        setHasMenuFetched(true);
       });
     }
-  }, [dispatch, restId, paramRestId, urlId]);
+  }, [dispatch, targetId]);
 
-  // Stale-While-Revalidate: If items already exist in Redux/cache, display immediately without blocking UI
-  const loading = menuItems.length === 0 && (!hasFetched || menuLoading);
+  // Restaurant Offers (1+1 BOGO deals, Category % Discounts, Tiered Bill Discounts)
+  useEffect(() => {
+    let isSubscribed = true;
+    const fetchOffers = async () => {
+      const candidateIds = [
+        restId,
+        paramRestId,
+        urlId,
+        restaurantDetail?.restId,
+        restaurantDetail?._id
+      ].filter(Boolean).map(String).filter((id, idx, arr) => arr.indexOf(id) === idx);
+
+      if (candidateIds.length === 0) {
+        if (isSubscribed) setHasOffersFetched(true);
+        return;
+      }
+
+      for (const id of candidateIds) {
+        try {
+          const res = await fetch(`${API_URL}/api/offers/restaurant/${id}`);
+          const data = await res.json();
+          if (data && data.success && data.data && isSubscribed) {
+            candidateIds.forEach((cId) => memoryOffersCache.set(cId, data.data));
+            const currentStr = JSON.stringify(localOffers || reduxOffers || null);
+            const newStr = JSON.stringify(data.data);
+            if (currentStr !== newStr) {
+              setLocalOffers(data.data);
+            }
+            break;
+          }
+        } catch (err) {}
+      }
+      if (isSubscribed) {
+        setHasOffersFetched(true);
+      }
+    };
+
+    fetchOffers();
+    return () => {
+      isSubscribed = false;
+    };
+  }, [restId, paramRestId, urlId, restaurantDetail?._id, restaurantDetail?.restId]);
+
+  // Zero-flicker loading gate:
+  // Requires both menu items and offers to be resolved before mounting the UI
+  // This guarantees the menu never mounts without 1+1 offers and then shifts after fetching
+  const isMenuReady = (menuItems.length > 0 && !menuLoading) || hasMenuFetched;
+  const isOffersReady = Boolean(restaurantOffers) || hasOffersFetched;
+  const loading = !isMenuReady || !isOffersReady;
 
   // Background polling for menu items status (every 10 minutes)
   useEffect(() => {
@@ -698,42 +769,24 @@ export default function RestaurantMenuScreen() {
     return () => clearInterval(interval);
   }, [dispatch, restId]);
 
-
-
-
-  // Restaurant Offers (1+1 BOGO deals, Category % Discounts, Tiered Bill Discounts)
-  const [restaurantOffers, setRestaurantOffers] = useState(null);
-
-  useEffect(() => {
-    const fetchOffers = async () => {
-      const targetId = restId || restaurantDetail?.restId || restaurantDetail?._id || urlId || paramRestId;
-      if (!targetId) return;
-      try {
-        const res = await fetch(`${API_URL}/api/offers/restaurant/${targetId}`);
-        const data = await res.json();
-        if (data && data.success && data.data) {
-          setRestaurantOffers(data.data);
-        }
-      } catch (err) {
-        console.warn('Error fetching restaurant offers in menu:', err);
-      }
-    };
-    fetchOffers();
-  }, [restId, restaurantDetail, urlId, paramRestId]);
-
   const getBogoOffer = useCallback((foodItem, categoryTitle) => {
     if (!restaurantOffers?.bogoOffers || !restaurantOffers.bogoOffers.length) return null;
-    const itemId = String(foodItem?._id || foodItem?.itemId || foodItem?.id || '');
-    const itemName = String(foodItem?.name || foodItem?.itemName || '').trim().toLowerCase();
+    const itemId = String(foodItem?._id || foodItem?.itemId || foodItem?.id || '').trim();
+    const itemName = String(foodItem?.itemName || foodItem?.name || '').trim().toLowerCase();
     const itemCat = String(foodItem?.category || categoryTitle || '').trim().toLowerCase();
 
     // 1. Check for item-wise 1+1 rule first
     const itemMatch = restaurantOffers.bogoOffers.find((b) => {
       if (b.isActive === false) return false;
       if (b.type === 'item') {
-        const srcId = String(b.sourceItemId || '');
+        const srcId = String(b.sourceItemId || '').trim();
         const srcName = String(b.sourceItemName || '').trim().toLowerCase();
-        return (srcId && srcId === itemId) || (srcName && (srcName === itemName || itemName.includes(srcName) || srcName.includes(itemName)));
+        const matchId = Boolean(srcId && itemId && srcId === itemId);
+        const matchName = Boolean(
+          srcName && itemName &&
+          (srcName === itemName || (itemName.length > 2 && itemName.includes(srcName)) || (srcName.length > 2 && srcName.includes(itemName)))
+        );
+        return matchId || matchName;
       }
       return false;
     });
@@ -744,7 +797,10 @@ export default function RestaurantMenuScreen() {
       if (b.isActive === false) return false;
       if (!b.type || b.type === 'category') {
         const srcCat = String(b.sourceCategory || '').trim().toLowerCase();
-        return srcCat && (srcCat === itemCat || itemCat.includes(srcCat) || srcCat.includes(itemCat));
+        return Boolean(
+          srcCat && itemCat &&
+          (srcCat === itemCat || (itemCat.length > 2 && itemCat.includes(srcCat)) || (srcCat.length > 2 && srcCat.includes(itemCat)))
+        );
       }
       return false;
     });
@@ -767,17 +823,29 @@ export default function RestaurantMenuScreen() {
   }, [restaurantOffers]);
 
   // Extract all unique categories from database items
-  const categories = useMemo(() => [
-    'All',
-    ...new Set(
-      menuItems
-        .map((item) => {
-          if (!item.category) return null;
-          return item.category.trim().charAt(0).toUpperCase() + item.category.trim().slice(1);
-        })
-        .filter(Boolean)
-    ),
-  ], [menuItems]);
+  const categories = useMemo(() => {
+    const hasBogo = Boolean(
+      restaurantOffers?.bogoOffers?.length > 0 &&
+      menuItems.some((item) => checkIsBogo(item, item.category))
+    );
+
+    const baseCategories = [
+      ...new Set(
+        menuItems
+          .map((item) => {
+            if (!item.category) return null;
+            return item.category.trim().charAt(0).toUpperCase() + item.category.trim().slice(1);
+          })
+          .filter(Boolean)
+      ),
+    ];
+
+    if (hasBogo) {
+      return ['All', '1+1 Free', ...baseCategories];
+    }
+
+    return ['All', ...baseCategories];
+  }, [menuItems, restaurantOffers, checkIsBogo]);
 
   // Fast O(1) cart quantity lookup map
   const cartMap = useMemo(() => {
@@ -869,10 +937,18 @@ export default function RestaurantMenuScreen() {
       .sort((a, b) => {
         // Priority 1: If a category is selected, items belonging to it are placed at the top (UP)
         if (!catAll) {
-          const catA = (a.category || '').toLowerCase() === selectedCatLower;
-          const catB = (b.category || '').toLowerCase() === selectedCatLower;
-          if (catA && !catB) return -1;
-          if (!catA && catB) return 1;
+          const isBogoCat = selectedCatLower.includes('1+1');
+          if (isBogoCat) {
+            const bogoA = checkIsBogo(a, a.category);
+            const bogoB = checkIsBogo(b, b.category);
+            if (bogoA && !bogoB) return -1;
+            if (!bogoA && bogoB) return 1;
+          } else {
+            const catA = (a.category || '').toLowerCase() === selectedCatLower;
+            const catB = (b.category || '').toLowerCase() === selectedCatLower;
+            if (catA && !catB) return -1;
+            if (!catA && catB) return 1;
+          }
         }
 
         // Priority 2: Available items before out-of-stock items
@@ -899,9 +975,9 @@ export default function RestaurantMenuScreen() {
         }
         return 0;
       });
-  }, [menuItems, searchQuery, filterType, selectedCategory, sortBy]);
+  }, [menuItems, searchQuery, filterType, selectedCategory, sortBy, checkIsBogo]);
 
-  const handleUpdateQuantity = useCallback(async (item, change) => {
+  const handleUpdateQuantity = useCallback(async (item, change, passedIsBogo, passedBogoOffer) => {
     if (!isItemAvailable(item)) {
       triggerToast('THIS ITEM IS CURRENTLY OUT OF STOCK AND CANNOT BE ADDED TO CART', 'warning');
       return;
@@ -920,7 +996,7 @@ export default function RestaurantMenuScreen() {
       );
       if (change > 0 && differentRestaurantItem) {
         setPreviousRestaurantName(differentRestaurantItem.restaurantName || 'another restaurant');
-        setPendingItemToAdd(item);
+        setPendingItemToAdd({ ...item, isBogo: passedIsBogo, bogoOffer: passedBogoOffer });
         setShowReplaceCartModal(true);
         return;
       }
@@ -935,14 +1011,15 @@ export default function RestaurantMenuScreen() {
           )
       );
 
+      const bogoMatch = passedBogoOffer || getBogoOffer(item, item.category);
+      const isBogoMatch = passedIsBogo !== undefined ? Boolean(passedIsBogo) : Boolean(bogoMatch);
+
       if (existingItemIndex > -1) {
         currentCart[existingItemIndex].quantity += change;
         if (currentCart[existingItemIndex].quantity <= 0) {
           currentCart.splice(existingItemIndex, 1);
         }
       } else if (change > 0) {
-        const bogoMatch = getBogoOffer(item, item.category);
-        const isBogoMatch = Boolean(bogoMatch);
         const catDiscountPercent = getCategoryDiscountPercent(item, item.category);
         currentCart.push({
           ...item,
@@ -953,6 +1030,18 @@ export default function RestaurantMenuScreen() {
           restId: restId, // keep track of the restaurant ID
           restaurantName: passedName, // save restaurant name
         });
+
+        if (isBogoMatch) {
+          // Trigger celebration confetti & popup banner ONLY once when item is first added
+          setCelebrationState({
+            visible: true,
+            offerDetails: {
+              itemName: item.itemName || item.name || 'Food Item',
+              bogoOffer: bogoMatch,
+              triggerId: Date.now(),
+            },
+          });
+        }
       }
 
       setCart(currentCart);
@@ -968,13 +1057,36 @@ export default function RestaurantMenuScreen() {
     }
   }, [hasActiveOrder, restId, passedName, triggerToast, getBogoOffer, getCategoryDiscountPercent]);
 
-  // Group sorted items by category for section headings
+  // Group sorted items by category for section headings with 1+1 Offers displayed at the very TOP
   const groupedCategories = useMemo(() => {
     if (!sortedItems || sortedItems.length === 0) return EMPTY_ARRAY;
 
     const groups = [];
     const groupMap = {};
 
+    // 1. Gather all items that have active 1+1 (BOGO) offer
+    const bogoItems = [];
+    const hasBogoOffers = Boolean(restaurantOffers?.bogoOffers && restaurantOffers.bogoOffers.length > 0);
+
+    if (hasBogoOffers) {
+      for (let i = 0; i < sortedItems.length; i++) {
+        const item = sortedItems[i];
+        if (checkIsBogo(item, item.category)) {
+          bogoItems.push(item);
+        }
+      }
+    }
+
+    // If 1+1 offers exist, show dedicated "1+1 Free Offers" section at the TOP
+    if (bogoItems.length > 0 && (!selectedCategory || selectedCategory === 'All' || selectedCategory.toLowerCase().includes('1+1'))) {
+      groups.push({
+        title: '1+1 Free Offers',
+        isSpecialOffer: true,
+        items: bogoItems,
+      });
+    }
+
+    // 2. Populate regular category groups
     for (let i = 0; i < sortedItems.length; i++) {
       const item = sortedItems[i];
       const rawCat = item.category ? item.category.trim() : 'Menu';
@@ -982,16 +1094,29 @@ export default function RestaurantMenuScreen() {
 
       if (!groupMap[catTitle]) {
         groupMap[catTitle] = [];
-        groups.push({ title: catTitle, items: groupMap[catTitle] });
+        groups.push({ title: catTitle, isSpecialOffer: false, items: groupMap[catTitle] });
       }
       groupMap[catTitle].push(item);
     }
 
+    // Within each regular category group, place 1+1 items at the top
+    groups.forEach((g) => {
+      if (!g.isSpecialOffer) {
+        g.items.sort((a, b) => {
+          const bogoA = checkIsBogo(a, a.category);
+          const bogoB = checkIsBogo(b, b.category);
+          if (bogoA && !bogoB) return -1;
+          if (!bogoA && bogoB) return 1;
+          return 0;
+        });
+      }
+    });
+
     if (selectedCategory && selectedCategory !== 'All') {
       const selCatLower = selectedCategory.toLowerCase().trim();
       groups.sort((a, b) => {
-        const isASel = a.title.toLowerCase().trim() === selCatLower;
-        const isBSel = b.title.toLowerCase().trim() === selCatLower;
+        const isASel = a.title.toLowerCase().trim() === selCatLower || (selCatLower.includes('1+1') && a.isSpecialOffer);
+        const isBSel = b.title.toLowerCase().trim() === selCatLower || (selCatLower.includes('1+1') && b.isSpecialOffer);
         if (isASel && !isBSel) return -1;
         if (!isASel && isBSel) return 1;
         return 0;
@@ -999,7 +1124,7 @@ export default function RestaurantMenuScreen() {
     }
 
     return groups;
-  }, [sortedItems, selectedCategory]);
+  }, [sortedItems, selectedCategory, restaurantOffers, checkIsBogo]);
 
   const renderCategoryGroup = useCallback(({ item: group }) => {
     return (
@@ -1015,12 +1140,12 @@ export default function RestaurantMenuScreen() {
           <View style={{
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: '#1E3545',
+            backgroundColor: group.isSpecialOffer ? '#065F46' : '#1E3545',
             paddingHorizontal: 12,
             paddingVertical: 3.5,
             borderRadius: 10,
             gap: 7,
-            shadowColor: '#000',
+            shadowColor: group.isSpecialOffer ? '#065F46' : '#000',
             shadowOffset: { width: 0, height: 1 },
             shadowOpacity: 0.12,
             shadowRadius: 3,
@@ -1030,7 +1155,7 @@ export default function RestaurantMenuScreen() {
               width: 7,
               height: 7,
               borderRadius: 3.5,
-              backgroundColor: '#0F8A65',
+              backgroundColor: group.isSpecialOffer ? '#34D399' : '#0F8A65',
             }} />
             <Text style={{
               fontSize: 12,
@@ -1039,13 +1164,13 @@ export default function RestaurantMenuScreen() {
               letterSpacing: 0.7,
               textTransform: 'uppercase',
             }}>
-              {group.title}
+              {group.isSpecialOffer ? `🎉 ${group.title}` : group.title}
             </Text>
           </View>
           <View style={{
             flex: 1,
             height: 1.5,
-            backgroundColor: 'rgba(30, 53, 69, 0.15)',
+            backgroundColor: group.isSpecialOffer ? 'rgba(6, 95, 70, 0.25)' : 'rgba(30, 53, 69, 0.15)',
             marginLeft: 12,
             borderRadius: 1,
           }} />
@@ -1065,9 +1190,7 @@ export default function RestaurantMenuScreen() {
             const catDiscountPercent = getCategoryDiscountPercent(foodItem, group.title);
             return (
               <AnimatedCardWrapper
-                key={foodItem._id || foodItem.itemId || ('food_' + group.title + '_' + idx)}
-                index={idx}
-                filterKey={(filterType + '_' + sortBy + '_' + searchQuery)}
+                key={`${group.title}_${foodItem._id || foodItem.itemId || foodItem.id || idx}`}
                 style={{ width: '48%' }}
               >
                 <ItemCard
@@ -1103,7 +1226,7 @@ export default function RestaurantMenuScreen() {
       <FlatList
         ref={flatListRef}
         data={groupedCategories}
-        extraData={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}`}
+        extraData={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}_${restaurantOffers ? 'offers_loaded' : 'no_offers'}`}
         keyExtractor={(group) => group.title}
         renderItem={renderCategoryGroup}
         showsVerticalScrollIndicator={false}
@@ -1132,7 +1255,11 @@ export default function RestaurantMenuScreen() {
                   <View style={styles.heroSpecRating}>
                     <FontAwesome name="star" size={11} color="#FFD200" />
                     <Text style={styles.heroSpecText}>
-                      {((parseInt(restId || '1') % 5) * 0.1 + 4.1).toFixed(1)}
+                      {restaurantDetail?.rating !== undefined && restaurantDetail?.rating !== null && restaurantDetail?.rating !== ''
+                        ? Number(restaurantDetail.rating).toFixed(1)
+                        : (passedRating && passedRating !== ''
+                          ? Number(passedRating).toFixed(1)
+                          : ((parseInt(restId || '1') % 5) * 0.1 + 4.1).toFixed(1))}
                     </Text>
                   </View>
                   {distanceText ? (
@@ -1590,14 +1717,29 @@ export default function RestaurantMenuScreen() {
                 onPress={async () => {
                   if (pendingItemToAdd) {
                     try {
+                      const bogoMatch = getBogoOffer(pendingItemToAdd, pendingItemToAdd.category);
+                      const isBogoMatch = Boolean(bogoMatch);
+                      const catDiscountPercent = getCategoryDiscountPercent(pendingItemToAdd, pendingItemToAdd.category);
                       const newCart = [{
                         ...pendingItemToAdd,
                         quantity: 1,
+                        isBogo: isBogoMatch,
+                        bogoOffer: bogoMatch || null,
+                        categoryDiscountPercent: catDiscountPercent,
                         restId: restId,
                         restaurantName: passedName,
                       }];
                       setCart(newCart);
                       triggerToast();
+                      if (isBogoMatch) {
+                        setCelebrationState({
+                          visible: true,
+                          offerDetails: {
+                            itemName: pendingItemToAdd.itemName || pendingItemToAdd.name || 'Food Item',
+                            bogoOffer: bogoMatch,
+                          },
+                        });
+                      }
                       AsyncStorage.setItem('cart', JSON.stringify(newCart)).catch(err => {
                         console.error('Error saving replaced cart:', err);
                       });
@@ -1615,6 +1757,13 @@ export default function RestaurantMenuScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* 1+1 Free Celebration Confetti & Banner Overlay */}
+      <BogoCelebration
+        visible={celebrationState.visible}
+        offerDetails={celebrationState.offerDetails}
+        onDismiss={() => setCelebrationState({ visible: false, offerDetails: null })}
+      />
     </SafeAreaView>
   );
 }
@@ -1951,8 +2100,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     backgroundColor: 'rgb(247, 247, 235)', // Matching page background
     width: '100%',
-    height: 36, // Exact same fixed height as addButton
-    paddingHorizontal: 12,
+    height: 38, // Exact same fixed height as addButton
+    paddingHorizontal: 8,
     borderRadius: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
@@ -1962,16 +2111,16 @@ const styles = StyleSheet.create({
     marginTop: 10, // Push button down from price
   },
   quantityBtn: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#F5F5F5',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#F0EBE0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   quantityText: {
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '800',
     color: '#1E3545',
   },
   drawerBackdrop: {
