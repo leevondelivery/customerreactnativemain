@@ -749,13 +749,13 @@ export default function LoginScreen() {
       return;
     }
 
-    if (forgotPasswordNewPassword !== forgotPasswordConfirmPassword) {
-      setForgotPasswordError('Passwords do not match');
+    if (forgotPasswordNewPassword.trim().length < 6) {
+      setForgotPasswordError('Password must be at least 6 characters long');
       return;
     }
 
-    if (forgotPasswordNewPassword.length < 6) {
-      setForgotPasswordError('New password must be at least 6 characters long');
+    if (forgotPasswordNewPassword !== forgotPasswordConfirmPassword) {
+      setForgotPasswordError('Passwords do not match');
       return;
     }
 
@@ -1300,7 +1300,7 @@ export default function LoginScreen() {
                   <Feather name="lock" size={16} color="#E05A47" style={styles.inputIcon} />
                   <TextInput
                     style={[styles.input, { color: '#E05A47', fontSize: 14 }]}
-                    placeholder="New Password"
+                    placeholder="New Password (min. 6 characters)"
                     placeholderTextColor="#E05A47"
                     secureTextEntry={!showForgotPasswordNewPassword}
                     value={forgotPasswordNewPassword}
@@ -1455,7 +1455,7 @@ export default function LoginScreen() {
               <Feather name="lock" size={18} color="#E05A47" style={styles.inputIcon} />
               <TextInput
                 style={[styles.input, { color: '#E05A47' }]}
-                placeholder="Password"
+                placeholder={isSignUp ? "Password (min. 6 characters)" : "Password"}
                 placeholderTextColor="#E05A47"
                 secureTextEntry={!showPassword}
                 value={password}
