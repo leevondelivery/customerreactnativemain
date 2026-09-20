@@ -190,7 +190,12 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
         }
       };
 
-      await Promise.all(missingRestaurants.map(rest => fetchMenuAndOffersForRest(rest)));
+      // Process missing restaurants in batches of 4 to prevent network throttling
+      const batchSize = 4;
+      for (let i = 0; i < missingRestaurants.length; i += batchSize) {
+        const batch = missingRestaurants.slice(i, i + batchSize);
+        await Promise.all(batch.map(rest => fetchMenuAndOffersForRest(rest)));
+      }
       AsyncStorage.setItem('cached_menus_data', JSON.stringify({ ...existingMenus, ...newMenus })).catch(() => {});
       AsyncStorage.setItem('cached_offers_data', JSON.stringify({ ...existingOffers, ...newOffers })).catch(() => {});
       return { menus: newMenus, offers: newOffers };
@@ -225,11 +230,11 @@ export const fetchRestaurantMenu = createAsyncThunk(
                        (rest?._id && state.restaurants?.menus?.[rest._id]) ||
                        [];
 
-      // Helper to fetch menu for a single candidate ID with 4s timeout
+      // Helper to fetch menu for a single candidate ID with 8s timeout
       const fetchMenuForId = async (id) => {
         try {
           const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-          const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
           const res = await fetch(`${API_URL}/restaurants/${id}/menu`, {
             signal: controller ? controller.signal : undefined,
           });
@@ -244,11 +249,11 @@ export const fetchRestaurantMenu = createAsyncThunk(
         return null;
       };
 
-      // Helper to fetch offers for a single candidate ID
+      // Helper to fetch offers for a single candidate ID with 8s timeout
       const fetchOffersForId = async (id) => {
         try {
           const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-          const timeoutId = controller ? setTimeout(() => controller.abort(), 4000) : null;
+          const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
           const res = await fetch(`${API_URL}/api/offers/restaurant/${id}`, {
             signal: controller ? controller.signal : undefined,
           });

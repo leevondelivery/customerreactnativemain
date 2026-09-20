@@ -8,8 +8,10 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  KeyboardAvoidingView,
   Linking,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -373,6 +375,7 @@ export default function OrderStatusScreen() {
   const [deliveryBoyReview, setDeliveryBoyReview] = useState('');
   const [submittingReview, setSubmittingReview] = useState(false);
 
+  const reviewScrollRef = useRef(null);
   const showReviewModalRef = useRef(false);
   const reviewOrderRef = useRef(null);
   const reviewedOrDismissedSessionRef = useRef(new Set());
@@ -895,9 +898,14 @@ export default function OrderStatusScreen() {
       visible={showReviewModal}
       transparent
       animationType="slide"
+      statusBarTranslucent={true}
       onRequestClose={handleDismissReview}
     >
-      <View style={reviewStyles.backdrop}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={reviewStyles.backdrop}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 20 : 0}
+      >
         <View style={reviewStyles.sheet}>
           {/* Header */}
           <View style={reviewStyles.sheetHeader}>
@@ -921,9 +929,13 @@ export default function OrderStatusScreen() {
               </Text>
 
               <ScrollView
+                ref={reviewScrollRef}
                 style={reviewStyles.formScroll}
+                contentContainerStyle={{ paddingBottom: 160 }}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                automaticallyAdjustKeyboardInsets={true}
               >
                 {/* Restaurant Rating */}
                 <View style={reviewStyles.ratingBox}>
@@ -940,6 +952,11 @@ export default function OrderStatusScreen() {
                     numberOfLines={3}
                     value={restaurantReview}
                     onChangeText={setRestaurantReview}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        reviewScrollRef.current?.scrollTo({ y: 40, animated: true });
+                      }, 150);
+                    }}
                   />
                 </View>
 
@@ -948,7 +965,7 @@ export default function OrderStatusScreen() {
                   <Text style={reviewStyles.ratingLabel}>
                     🛵 Rate Delivery Partner
                   </Text>
-                  <Text style={reviewStyles.ratingSubLabel}>{reviewOrder.deliveryBoyName}</Text>
+                  <Text style={reviewStyles.ratingSubLabel}>{reviewOrder.deliveryBoyName || 'Delivery Partner'}</Text>
                   {renderInteractiveStars(deliveryBoyRating, setDeliveryBoyRating)}
                   <TextInput
                     style={reviewStyles.textInput}
@@ -958,6 +975,11 @@ export default function OrderStatusScreen() {
                     numberOfLines={3}
                     value={deliveryBoyReview}
                     onChangeText={setDeliveryBoyReview}
+                    onFocus={() => {
+                      setTimeout(() => {
+                        reviewScrollRef.current?.scrollToEnd({ animated: true });
+                      }, 150);
+                    }}
                   />
                 </View>
 
@@ -975,12 +997,12 @@ export default function OrderStatusScreen() {
                   )}
                 </TouchableOpacity>
 
-                <View style={{ height: 24 }} />
+                <View style={{ height: 40 }} />
               </ScrollView>
             </>
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 

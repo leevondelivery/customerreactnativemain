@@ -700,13 +700,27 @@ export default function RestaurantMenuScreen() {
   const hasFetchedRef = useRef(false);
 
   useEffect(() => {
-    if (targetId && !hasFetchedRef.current) {
-      hasFetchedRef.current = true;
-      dispatch(fetchRestaurantMenu(targetId)).finally(() => {
-        setHasMenuFetched(true);
-      });
+    if (targetId) {
+      if (!hasFetchedRef.current || menuItems.length === 0) {
+        hasFetchedRef.current = true;
+        dispatch(fetchRestaurantMenu(targetId)).finally(() => {
+          setHasMenuFetched(true);
+        });
+      }
     }
-  }, [dispatch, targetId]);
+  }, [dispatch, targetId, restaurantDetail, menuItems.length]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadCart();
+      checkActiveOrderStatus();
+      if (targetId && menuItems.length === 0) {
+        dispatch(fetchRestaurantMenu(targetId)).finally(() => {
+          setHasMenuFetched(true);
+        });
+      }
+    }, [dispatch, targetId, menuItems.length])
+  );
 
   // Restaurant Offers (1+1 BOGO deals, Category % Discounts, Tiered Bill Discounts)
   useEffect(() => {
@@ -824,11 +838,22 @@ export default function RestaurantMenuScreen() {
     return match ? Number(match.discountPercentage || 0) : 0;
   }, [restaurantOffers]);
 
-  // Extract all unique categories from database items
+  const getItemDiscountPercent = useCallback((foodItem, categoryTitle) => {
+    if (!foodItem) return 0;
+    const directOffer = foodItem.offerpercentage ? parseFloat(foodItem.offerpercentage) : (foodItem.offerPercentage ? parseFloat(foodItem.offerPercentage) : 0);
+    const catOffer = getCategoryDiscountPercent(foodItem, categoryTitle || foodItem.category);
+    return Math.max(isNaN(directOffer) ? 0 : directOffer, isNaN(catOffer) ? 0 : catOffer);
+  }, [getCategoryDiscountPercent]);
+
+  // Extract all unique categories from database items, with 1+1 and Discount Offers at the top
   const categories = useMemo(() => {
     const hasBogo = Boolean(
       restaurantOffers?.bogoOffers?.length > 0 &&
       menuItems.some((item) => checkIsBogo(item, item.category))
+    );
+
+    const hasDiscounts = Boolean(
+      menuItems.some((item) => getItemDiscountPercent(item, item.category) > 0)
     );
 
     const baseCategories = [
@@ -842,12 +867,16 @@ export default function RestaurantMenuScreen() {
       ),
     ];
 
+    const result = ['All'];
     if (hasBogo) {
-      return ['All', '1+1 Free', ...baseCategories];
+      result.push('1+1 Free');
     }
-
-    return ['All', ...baseCategories];
-  }, [menuItems, restaurantOffers, checkIsBogo]);
+    if (hasDiscounts) {
+      result.push('Discount Offers');
+    }
+    result.push(...baseCategories);
+    return result;
+  }, [menuItems, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
 
   // Fast O(1) cart quantity lookup map
   const cartMap = useMemo(() => {
@@ -937,7 +966,7 @@ export default function RestaurantMenuScreen() {
         return true;
       })
       .sort((a, b) => {
-        // Priority 1: If a category is selected, items belonging to it are placed at the top (UP)
+        // Priority 1: If a category is selected from drawer, items belonging to it are placed at the top
         if (!catAll) {
           const isBogoCat = selectedCatLower.includes('1+1');
           if (isBogoCat) {
@@ -953,14 +982,26 @@ export default function RestaurantMenuScreen() {
           }
         }
 
-        // Priority 2: Available items before out-of-stock items
+        // Priority 2: 1+1 BOGO items at the very top
+        const bogoA = checkIsBogo(a, a.category);
+        const bogoB = checkIsBogo(b, b.category);
+        if (bogoA && !bogoB) return -1;
+        if (!bogoA && bogoB) return 1;
+
+        // Priority 3: Items with direct or category discount (highest % discount first)
+        const discA = getItemDiscountPercent(a, a.category);
+        const discB = getItemDiscountPercent(b, b.category);
+        if (discA > 0 && discB <= 0) return -1;
+        if (discA <= 0 && discB > 0) return 1;
+        if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
+
+        // Priority 4: Available items before out-of-stock items
         const availA = isItemAvailable(a);
         const availB = isItemAvailable(b);
-
         if (availA && !availB) return -1;
         if (!availA && availB) return 1;
 
-        // Priority 3: Search query matching items at top
+        // Priority 5: Search query matching items at top
         if (hasQuery) {
           const matchA = checkMatch(a);
           const matchB = checkMatch(b);
@@ -968,7 +1009,7 @@ export default function RestaurantMenuScreen() {
           if (!matchA && matchB) return 1;
         }
 
-        // Priority 4: Price sorting
+        // Priority 6: Price sorting
         if (sortBy === 'Low to High') {
           return (a.price || 0) - (b.price || 0);
         }
@@ -977,7 +1018,7 @@ export default function RestaurantMenuScreen() {
         }
         return 0;
       });
-  }, [menuItems, searchQuery, filterType, selectedCategory, sortBy, checkIsBogo]);
+  }, [menuItems, searchQuery, filterType, selectedCategory, sortBy, checkIsBogo, getItemDiscountPercent]);
 
   const handleUpdateQuantity = useCallback(async (item, change, passedIsBogo, passedBogoOffer) => {
     if (!isItemAvailable(item)) {
@@ -1059,7 +1100,7 @@ export default function RestaurantMenuScreen() {
     }
   }, [hasActiveOrder, restId, passedName, triggerToast, getBogoOffer, getCategoryDiscountPercent]);
 
-  // Group sorted items by category for section headings with 1+1 Offers displayed at the very TOP
+  // Group sorted items by category with 1+1 BOGO first, then Special Discount Offers next, then regular categories
   const groupedCategories = useMemo(() => {
     if (!sortedItems || sortedItems.length === 0) return EMPTY_ARRAY;
 
@@ -1084,11 +1125,42 @@ export default function RestaurantMenuScreen() {
       groups.push({
         title: '1+1 Free Offers',
         isSpecialOffer: true,
+        offerType: 'bogo',
         items: bogoItems,
       });
     }
 
-    // 2. Populate regular category groups
+    // 2. Gather all items that have any direct or category discount
+    const discountItems = [];
+    for (let i = 0; i < sortedItems.length; i++) {
+      const item = sortedItems[i];
+      const disc = getItemDiscountPercent(item, item.category);
+      if (disc > 0) {
+        discountItems.push(item);
+      }
+    }
+    discountItems.sort((a, b) => {
+      const discA = getItemDiscountPercent(a, a.category);
+      const discB = getItemDiscountPercent(b, b.category);
+      if (discA !== discB) return discB - discA;
+      const availA = isItemAvailable(a);
+      const availB = isItemAvailable(b);
+      if (availA && !availB) return -1;
+      if (!availA && availB) return 1;
+      return 0;
+    });
+
+    // If discount items exist, show dedicated "Special Discount Offers" section right after 1+1 (or at top if no 1+1)
+    if (discountItems.length > 0 && (!selectedCategory || selectedCategory === 'All' || selectedCategory.toLowerCase().includes('discount') || selectedCategory.toLowerCase().includes('offer'))) {
+      groups.push({
+        title: 'Special Discount Offers',
+        isSpecialOffer: true,
+        offerType: 'discount',
+        items: discountItems,
+      });
+    }
+
+    // 3. Populate regular category groups
     for (let i = 0; i < sortedItems.length; i++) {
       const item = sortedItems[i];
       const rawCat = item.category ? item.category.trim() : 'Menu';
@@ -1096,12 +1168,15 @@ export default function RestaurantMenuScreen() {
 
       if (!groupMap[catTitle]) {
         groupMap[catTitle] = [];
-        groups.push({ title: catTitle, isSpecialOffer: false, items: groupMap[catTitle] });
+        groups.push({ title: catTitle, isSpecialOffer: false, offerType: null, items: groupMap[catTitle] });
       }
       groupMap[catTitle].push(item);
     }
 
-    // Within each regular category group, place 1+1 items at the top
+    // Within each regular category group:
+    // Rank 1: 1+1 BOGO items
+    // Rank 2: Discounted items (highest discount % first)
+    // Rank 3: Available items before out-of-stock items
     groups.forEach((g) => {
       if (!g.isSpecialOffer) {
         g.items.sort((a, b) => {
@@ -1109,16 +1184,33 @@ export default function RestaurantMenuScreen() {
           const bogoB = checkIsBogo(b, b.category);
           if (bogoA && !bogoB) return -1;
           if (!bogoA && bogoB) return 1;
+
+          const discA = getItemDiscountPercent(a, g.title || a.category);
+          const discB = getItemDiscountPercent(b, g.title || b.category);
+          if (discA > 0 && discB <= 0) return -1;
+          if (discA <= 0 && discB > 0) return 1;
+          if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
+
+          const availA = isItemAvailable(a);
+          const availB = isItemAvailable(b);
+          if (availA && !availB) return -1;
+          if (!availA && availB) return 1;
+
           return 0;
         });
       }
     });
 
+    // Handle user selected category filter from drawer
     if (selectedCategory && selectedCategory !== 'All') {
       const selCatLower = selectedCategory.toLowerCase().trim();
       groups.sort((a, b) => {
-        const isASel = a.title.toLowerCase().trim() === selCatLower || (selCatLower.includes('1+1') && a.isSpecialOffer);
-        const isBSel = b.title.toLowerCase().trim() === selCatLower || (selCatLower.includes('1+1') && b.isSpecialOffer);
+        const isASel = a.title.toLowerCase().trim() === selCatLower ||
+          (selCatLower.includes('1+1') && a.offerType === 'bogo') ||
+          (selCatLower.includes('discount') && a.offerType === 'discount');
+        const isBSel = b.title.toLowerCase().trim() === selCatLower ||
+          (selCatLower.includes('1+1') && b.offerType === 'bogo') ||
+          (selCatLower.includes('discount') && b.offerType === 'discount');
         if (isASel && !isBSel) return -1;
         if (!isASel && isBSel) return 1;
         return 0;
@@ -1126,9 +1218,15 @@ export default function RestaurantMenuScreen() {
     }
 
     return groups;
-  }, [sortedItems, selectedCategory, restaurantOffers, checkIsBogo]);
+  }, [sortedItems, selectedCategory, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
 
   const renderCategoryGroup = useCallback(({ item: group }) => {
+    const isBogoGroup = group.offerType === 'bogo';
+    const isDiscountGroup = group.offerType === 'discount';
+    const bannerBgColor = isBogoGroup ? '#065F46' : (isDiscountGroup ? '#EA580C' : '#1E3545');
+    const dividerColor = isBogoGroup ? 'rgba(6, 95, 70, 0.25)' : (isDiscountGroup ? 'rgba(234, 88, 12, 0.25)' : 'rgba(30, 53, 69, 0.15)');
+    const bannerTitle = isBogoGroup ? `🎉 ${group.title}` : group.title;
+
     return (
       <View key={group.title} style={{ marginBottom: 16 }}>
         {/* Premium Category Heading Banner */}
@@ -1142,23 +1240,16 @@ export default function RestaurantMenuScreen() {
           <View style={{
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: group.isSpecialOffer ? '#065F46' : '#1E3545',
+            backgroundColor: bannerBgColor,
             paddingHorizontal: 12,
-            paddingVertical: 3.5,
+            paddingVertical: 4.5,
             borderRadius: 10,
-            gap: 7,
-            shadowColor: group.isSpecialOffer ? '#065F46' : '#000',
+            shadowColor: bannerBgColor,
             shadowOffset: { width: 0, height: 1 },
             shadowOpacity: 0.12,
             shadowRadius: 3,
             elevation: 2,
           }}>
-            <View style={{
-              width: 7,
-              height: 7,
-              borderRadius: 3.5,
-              backgroundColor: group.isSpecialOffer ? '#34D399' : '#0F8A65',
-            }} />
             <Text style={{
               fontSize: 12,
               fontWeight: '800',
@@ -1166,13 +1257,13 @@ export default function RestaurantMenuScreen() {
               letterSpacing: 0.7,
               textTransform: 'uppercase',
             }}>
-              {group.isSpecialOffer ? `🎉 ${group.title}` : group.title}
+              {bannerTitle}
             </Text>
           </View>
           <View style={{
             flex: 1,
             height: 1.5,
-            backgroundColor: group.isSpecialOffer ? 'rgba(6, 95, 70, 0.25)' : 'rgba(30, 53, 69, 0.15)',
+            backgroundColor: dividerColor,
             marginLeft: 12,
             borderRadius: 1,
           }} />
@@ -2009,24 +2100,24 @@ const styles = StyleSheet.create({
   },
   itemCard: {
     backgroundColor: 'rgb(224, 214, 188)', // Matching restaurentlist card background
-    borderRadius: 20,
+    borderRadius: 22,
     width: '100%',
-    marginTop: 45, // space for the absolute positioned circular image
-    paddingTop: 50, // push texts below the overlaying image
+    marginTop: 56, // space for the larger floating circular image
+    paddingTop: 58, // push texts below the overlaying image
     paddingHorizontal: 12,
-    paddingBottom: 18, // Move button closer to bottom edge
+    paddingBottom: 18,
     alignItems: 'center',
     position: 'relative',
-    minHeight: 195, // Maintain stable taller height
+    minHeight: 208, // Stable height for larger cards
   },
   itemImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 2,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    borderWidth: 3,
     borderColor: 'rgb(247, 247, 235)', // white circle frame to pop from page background
     position: 'absolute',
-    top: -40,
+    top: -52,
   },
   itemNameText: {
     fontSize: 14,
