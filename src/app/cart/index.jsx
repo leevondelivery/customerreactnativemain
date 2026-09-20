@@ -118,18 +118,22 @@ export default function CartScreen() {
       } catch (e) {}
     }
 
-    // 3. Fetch latest in background and update only if different
+    // 3. Fetch latest in background and update
     try {
-      const res = await fetch(`${API_URL}/api/offers/restaurant/${rId}`);
+      const res = await fetch(`${API_URL}/api/offers/restaurant/${rId}?t=${Date.now()}`, {
+        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+      });
       const data = await res.json();
       if (data && data.success && data.data) {
         const newJson = JSON.stringify(data.data);
-        const oldJson = JSON.stringify(offersMemoryCache.get(rId) || null);
-        if (newJson !== oldJson) {
-          offersMemoryCache.set(rId, data.data);
-          setRestaurantOffers(data.data);
-          await AsyncStorage.setItem(`restaurant_offers_${rId}`, newJson).catch(() => {});
-        }
+        offersMemoryCache.set(rId, data.data);
+        setRestaurantOffers(data.data);
+        await AsyncStorage.setItem(`restaurant_offers_${rId}`, newJson).catch(() => {});
+      } else if (data && data.success && !data.data) {
+        const emptyOffers = { restId: rId, bogoOffers: [], categoryDiscounts: [], tieredDiscounts: [] };
+        offersMemoryCache.set(rId, emptyOffers);
+        setRestaurantOffers(emptyOffers);
+        await AsyncStorage.setItem(`restaurant_offers_${rId}`, JSON.stringify(emptyOffers)).catch(() => {});
       }
     } catch (err) {
       console.warn('[Cart] Error loading offers in background:', err);
@@ -204,6 +208,18 @@ export default function CartScreen() {
   // confirmPayEnabled comes from Redux (polled every 5s in _layout.jsx)
 
   const targetRestId = cartItems[0]?.restId || '';
+  const targetRestaurant = (restaurants || []).find(r => String(r.restId || r.id || '') === String(targetRestId));
+  const isPackagingActive = Boolean(
+    restaurantOffers?.isPackagingFeeActive !== undefined
+      ? (restaurantOffers.isPackagingFeeActive === true || restaurantOffers.isPackagingFeeActive === 'true' || restaurantOffers.isPackagingFeeActive === 1)
+      : (targetRestaurant?.isPackagingFeeActive === true || targetRestaurant?.isPackagingFeeActive === 'true' || targetRestaurant?.isPackagingFeeActive === 1)
+  );
+  const rawPackagingFee = restaurantOffers?.packagingFee !== undefined
+    ? Number(restaurantOffers.packagingFee)
+    : Number(targetRestaurant?.packagingFee || 0);
+  const packagingFee = (isPackagingActive && rawPackagingFee > 0)
+    ? rawPackagingFee
+    : 0;
   const distanceStr = roadDistances[targetRestId] || '';
   const isDistanceCalculated = Boolean(distanceStr) && distanceStr.trim() !== '' && !isNaN(parseFloat(distanceStr));
 
@@ -448,7 +464,7 @@ export default function CartScreen() {
         const targetCat = String(d.category || '').trim().toLowerCase();
         return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
       });
-      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : 0;
       const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
       const offerPercent = Math.max(directOffer, catDiscountPercent);
       const price = (offerPercent > 0 && offerPercent <= 100)
@@ -717,6 +733,19 @@ export default function CartScreen() {
     }
   }, [selectedSavedAddressIdRedux, savedAddresses]);
 
+  // Background polling for restaurant packaging fee and offers once every 1 minute while on cart screen
+  useEffect(() => {
+    if (!cartItems || cartItems.length === 0) return;
+    const rId = cartItems[0]?.restId || cartItems[0]?.restaurantId || '';
+    if (!rId) return;
+
+    const interval = setInterval(() => {
+      fetchOffersForRestaurant(rId);
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [cartItems, fetchOffersForRestaurant]);
+
   const updateQuantity = async (itemId, change) => {
     try {
       if (change > 0) {
@@ -755,8 +784,13 @@ export default function CartScreen() {
 
   const handlePlaceOrder = async () => {
     // Instant check from Redux
-    if (!confirmPayEnabled || maintenanceMode === false) {
-      showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
+    if (maintenanceMode) {
+      showAlert('App Under Maintenance', 'Sorry for the inconvenience, the application is currently under maintenance.');
+      return;
+    }
+
+    if (!confirmPayEnabled) {
+      showAlert('Ordering Temporarily Disabled', 'Order placement is currently paused by admin. Please try again shortly.');
       return;
     }
 
@@ -1156,10 +1190,16 @@ export default function CartScreen() {
     // 1. INSTANTLY SHOW FULL-SCREEN LOADING SPINNER (0ms DELAY)
     setIsProcessingPayment(true);
 
-    // Instant 0ms check from Redux (polled every 5s in background)
+    // Instant 0ms check from Redux (polled every 10s in background)
+    if (maintenanceMode) {
+      resetPlacingOrderState();
+      showAlert('App Under Maintenance', 'Sorry for the inconvenience, the application is currently under maintenance.');
+      return;
+    }
+
     if (!confirmPayEnabled) {
       resetPlacingOrderState();
-      showAlert('App Under Maintenance', 'Sorry for the inconvenience this app is under maintenance');
+      showAlert('Ordering Temporarily Disabled', 'Order placement is currently paused by admin. Please try again shortly.');
       return;
     }
 
@@ -1408,9 +1448,9 @@ export default function CartScreen() {
         return false;
       });
 
-      const matchedBogo = itemBogoMatch || catBogoMatch || (item.bogoOffer || null);
-      const isBogo = Boolean(item.isBogo || matchedBogo);
-      const isCrossItem = matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName;
+      const matchedBogo = itemBogoMatch || catBogoMatch || null;
+      const isBogo = Boolean(matchedBogo);
+      const isCrossItem = Boolean(isBogo && matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName);
 
       // Add Paid Item
       preparedItems.push({
@@ -1424,22 +1464,24 @@ export default function CartScreen() {
         category: item.category || '',
         isFreeItem: false,
         isBogo: isBogo,
-        bogoTag: isCrossItem 
-          ? null 
-          : (isBogo ? '1+1 Offer (1 Paid + 1 Free)' : null),
+        bogoTag: isBogo ? '1+1 Offer' : null,
       });
 
-      // If cross-item 1+1, add paired free item
-      if (isCrossItem && matchedBogo.targetItemName) {
+      // Add Paired Free Item for any 1+1 deal (Same-item or Cross-item)
+      if (isBogo) {
+        const freeItemName = (isCrossItem && matchedBogo.targetItemName)
+          ? matchedBogo.targetItemName
+          : (item.itemName || item.name);
+
         preparedItems.push({
           _id: `free_${item._id || item.itemId || Math.random()}`,
           itemId: String(matchedBogo.targetItemId || `free_${item._id || item.itemId}`),
-          name: matchedBogo.targetItemName,
-          itemName: matchedBogo.targetItemName,
+          name: freeItemName,
+          itemName: freeItemName,
           price: 0,
           cost: 0,
           quantity: Number(item.quantity || 1),
-          category: matchedBogo.targetCategory || 'Offer Item',
+          category: matchedBogo.targetCategory || item.category || 'Offer Item',
           isFreeItem: true,
           isBogo: true,
           bogoTag: '1+1 FREE',
@@ -1459,7 +1501,7 @@ export default function CartScreen() {
     const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
     const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
     const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
-    const gTotal = Math.round(Math.max(0, subTotal - totalDiscount + gstAmount + deliveryFee) * 100) / 100;
+    const gTotal = Math.round(Math.max(0, subTotal - totalDiscount + gstAmount + deliveryFee + packagingFee) * 100) / 100;
 
     return {
       subTotal,
@@ -1474,6 +1516,7 @@ export default function CartScreen() {
       foodGstAmount,
       deliveryGstAmount,
       gstAmount,
+      packagingFee,
       gTotal,
     };
   };
@@ -1497,6 +1540,7 @@ export default function CartScreen() {
         foodGstAmount,
         deliveryGstAmount,
         gstAmount,
+        packagingFee: orderPkgFee,
         gTotal,
       } = buildOrderData();
 
@@ -1558,6 +1602,7 @@ export default function CartScreen() {
         foodGst: foodGstAmount,
         deliveryGst: deliveryGstAmount,
         platformFee: 0.00,
+        packagingFee: orderPkgFee || 0,
         grandTotal: gTotal,
         coinsEarned: coins,
         userName: activeName,
@@ -1641,6 +1686,7 @@ export default function CartScreen() {
       foodGstAmount,
       deliveryGstAmount,
       gstAmount,
+      packagingFee: orderPkgFee,
       gTotal,
     } = buildOrderData();
 
@@ -1759,6 +1805,7 @@ export default function CartScreen() {
                   foodGst: foodGstAmount,
                   deliveryGst: deliveryGstAmount,
                   platformFee: pFee,
+                  packagingFee: orderPkgFee !== undefined ? orderPkgFee : (packagingFee || 0),
                   grandTotal: gTotal,
                   coinsEarned: coins,
                   userName: activeName,
@@ -1875,6 +1922,7 @@ export default function CartScreen() {
                     foodGst: foodGstAmount,
                     deliveryGst: deliveryGstAmount,
                     platformFee: pFee,
+                    packagingFee: orderPkgFee !== undefined ? orderPkgFee : (packagingFee || 0),
                     grandTotal: gTotal,
                     coinsEarned: coins,
                     userName: activeName,
@@ -1954,7 +2002,7 @@ export default function CartScreen() {
         const targetCat = String(d.category || '').trim().toLowerCase();
         return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
       });
-      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : 0;
       const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
       const offerPercent = Math.max(directOffer, catDiscountPercent);
       const price = (offerPercent > 0 && offerPercent <= 100)
@@ -2027,7 +2075,7 @@ export default function CartScreen() {
   const foodGst = Math.round((total * 0.05) * 100) / 100; // 5% Food GST
   const deliveryGst = isLocationFetched ? Math.round((deliveryFee * 0.18) * 100) / 100 : 0; // 18% Delivery GST
   const gst = Math.round((foodGst + deliveryGst) * 100) / 100;
-  const grandTotal = Math.round(Math.max(0, total - discountAmount - restaurantTieredDiscount + gst + deliveryFee) * 100) / 100;
+  const grandTotal = Math.round(Math.max(0, total - discountAmount - restaurantTieredDiscount + gst + deliveryFee + packagingFee) * 100) / 100;
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
   const coinsBase = feesConfig.coinBaseAmount ?? 10;
@@ -2105,7 +2153,7 @@ export default function CartScreen() {
               const targetCat = String(d.category || '').trim().toLowerCase();
               return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
             });
-            const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : Number(item.categoryDiscountPercent || 0);
+            const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : 0;
             const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
             const offerPercent = Math.max(directOffer, catDiscountPercent);
             const hasOffer = offerPercent > 0 && offerPercent <= 100;
@@ -2135,9 +2183,9 @@ export default function CartScreen() {
               return false;
             });
 
-            const matchedBogo = itemBogoMatch || catBogoMatch || (item.bogoOffer || null);
-            const isBogo = Boolean(item.isBogo || matchedBogo);
-            const isCrossItem = matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName;
+            const matchedBogo = itemBogoMatch || catBogoMatch || null;
+            const isBogo = Boolean(matchedBogo);
+            const isCrossItem = Boolean(isBogo && matchedBogo?.type === 'item' && matchedBogo.targetItemName && matchedBogo.targetItemName.trim().toLowerCase() !== itemName);
 
             return (
               <React.Fragment key={item._id || item.itemId || `cart-item-${idx}`}>
@@ -2511,6 +2559,17 @@ export default function CartScreen() {
               </Text>
               <Text style={[styles.billValue, { color: '#FF5E5E', fontWeight: '600' }]}>
                 ₹{Number(feesConfig.surgeFee).toFixed(2)}
+              </Text>
+            </View>
+          )}
+
+          {packagingFee > 0 && (
+            <View style={styles.billRow}>
+              <Text style={styles.billLabel}>
+                Packaging Charges
+              </Text>
+              <Text style={styles.billValue}>
+                ₹{packagingFee.toFixed(2)}
               </Text>
             </View>
           )}
@@ -3188,7 +3247,7 @@ export default function CartScreen() {
       {/* Select Delivery Location Modal */}
       <Modal
         transparent
-        visible={Boolean(showLocationChoiceModal && maintenanceMode !== false)}
+        visible={Boolean(showLocationChoiceModal && !maintenanceMode)}
         animationType="slide"
         onRequestClose={() => setShowLocationChoiceModal(false)}
       >
@@ -3432,14 +3491,11 @@ export default function CartScreen() {
       </Modal>
 
       {/* Fetching Location Loading Overlay Modal */}
-      <Modal transparent visible={Boolean((isFetchingLocation || showFetchingModal) && maintenanceMode !== false)} animationType="fade">
+      <Modal transparent visible={Boolean((isFetchingLocation || showFetchingModal) && !maintenanceMode)} animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
           <View style={{ width: '85%', maxWidth: 320, backgroundColor: 'rgb(224, 214, 188)', borderRadius: 30, padding: 24, alignItems: 'center' }}>
             <ActivityIndicator size="large" color="#1a1a1a" style={{ marginBottom: 16 }} />
-            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1E3545', textAlign: 'center', marginBottom: 6 }}>Fetching Location</Text>
-            <Text style={{ fontSize: 13, color: '#666666', textAlign: 'center', lineHeight: 18 }}>
-              Retrieving your coordinates and calculating delivery distances...
-            </Text>
+            <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#1E3545', textAlign: 'center' }}>Fetching Location</Text>
           </View>
         </View>
       </Modal>

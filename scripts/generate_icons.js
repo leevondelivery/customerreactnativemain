@@ -210,15 +210,15 @@ for (const d of splashDensities) {
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
-  // Splash icon with 60% safe zone to prevent any clipping on Android 12+ circular splash window
-  const splashBuf = renderIcon(d.size, 0.60, false);
+  // Splash icon with 48% safe zone to prevent any clipping on Android 12+ circular splash window and all devices
+  const splashBuf = renderIcon(d.size, 0.48, false);
   fs.writeFileSync(path.join(targetDir, 'splashscreen_logo.png'), splashBuf);
 
   console.log(`Generated ${d.dir}/splashscreen_logo.png (${d.size}px)`);
 }
 
-// Generate assets/images/splash-icon.png
-const splashIconBuf = renderIcon(512, 0.60, false);
+// Generate assets/images/splash-icon.png with 48% safe zone
+const splashIconBuf = renderIcon(512, 0.48, false);
 fs.writeFileSync(path.resolve(projectRoot, 'assets/images/splash-icon.png'), splashIconBuf);
 console.log('Generated assets/images/splash-icon.png');
 

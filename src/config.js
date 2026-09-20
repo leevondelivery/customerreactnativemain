@@ -1,13 +1,7 @@
 
-import { Platform } from 'react-native';
-
-// Production URL:
-// export const API_URL = 'https://customerbackendfile-production.up.railway.app';
-
-// Local Wi-Fi IP (for physical Android/iOS devices on same Wi-Fi):
 export const API_URL = 'http://10.252.192.182:5000';
-// export const API_URL = 'http://192.168.0.109:5000';
-// export const API_URL = 'http://localhost:5000'; // For web / iOS simulator
+// export const API_URL = 'http://localhost:5000';
+// export const API_URL = 'https://customerbackendfile-production.up.railway.app';
 
 
 export const CONTACT_INFO = {

@@ -119,7 +119,7 @@ export const fetchControlsStatus = createAsyncThunk(
 
       return {
         confirmPayEnabled: confirmPayEnabled !== null ? Boolean(confirmPayEnabled) : true,
-        maintenanceMode: maintenanceMode !== null ? Boolean(maintenanceMode) : true,
+        maintenanceMode: maintenanceMode !== null ? Boolean(maintenanceMode) : false,
       };
     } catch (err) {
       clearTimeout(timeoutId);
@@ -131,8 +131,8 @@ export const fetchControlsStatus = createAsyncThunk(
 const controlsSlice = createSlice({
   name: 'controls',
   initialState: {
-    confirmPayEnabled: true, // true = payment allowed, false = disabled
-    maintenanceMode: true,   // true = app runs normally, false = app is under maintenance
+    confirmPayEnabled: true, // true = payment/ordering allowed, false = disabled
+    maintenanceMode: false,  // true = app is under maintenance, false = app runs normally
     lastFetched: null,
     loading: false,
     error: null,

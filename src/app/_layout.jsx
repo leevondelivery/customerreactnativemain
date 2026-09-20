@@ -512,15 +512,14 @@ function MainLayoutContent({
   // Poll confirmPayButton + maintenanceMode from MongoDB every 5 seconds (inside Provider)
   const dispatch = useDispatch();
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
-  // Show maintenance screen after location has been resolved (not on idle/login)
-  // We block on all pages except login
-  const showMaintenance = !isLoginPage && maintenanceMode === false;
+  // Show maintenance screen when maintenanceMode is true (enabled in Office) on all pages except login
+  const showMaintenance = !isLoginPage && maintenanceMode === true;
 
   useEffect(() => {
     dispatch(fetchControlsStatus());
     const controlsInterval = setInterval(() => {
       dispatch(fetchControlsStatus());
-    }, 30 * 60 * 1000); // poll every 30 minutes
+    }, 10 * 1000); // poll every 10 seconds
     return () => clearInterval(controlsInterval);
   }, [dispatch]);
 

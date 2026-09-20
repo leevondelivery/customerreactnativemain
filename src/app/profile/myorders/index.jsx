@@ -38,6 +38,7 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
   const deliveryFee = order.deliveryFee ?? order.delivery_fee ?? order.deliveryCharges ?? 0;
   const gst = order.gst ?? order.tax ?? 0;
   const platformFee = order.platformFee ?? order.platform_fee ?? 0;
+  const packagingFee = order.packagingFee ?? order.packaging_fee ?? order.packagingCharge ?? 0;
   const surgeFee = order.surgeFee ?? order.surge_fee ?? 0;
   const discountAmount = order.discountAmount ?? order.discount ?? 0;
   const couponDiscount = Number(order.couponDiscount !== undefined ? order.couponDiscount : (order.couponCode ? discountAmount : 0)) || 0;
@@ -221,6 +222,11 @@ const generateInvoiceHtml = (order, customerInfo = {}) => {
             <tr>
               <td style="color: #6B7280;">Delivery Fee:</td>
               <td style="text-align: right; font-weight: 600;">₹${Number(deliveryFee).toFixed(2)}</td>
+            </tr>` : ''}
+            ${packagingFee && Number(packagingFee) > 0 ? `
+            <tr>
+              <td style="color: #6B7280;">Packaging Charges:</td>
+              <td style="text-align: right; font-weight: 600;">₹${Number(packagingFee).toFixed(2)}</td>
             </tr>` : ''}
             ${surgeFee ? `
             <tr>
@@ -714,6 +720,13 @@ export default function MyOrdersScreen() {
                     <View style={styles.previewPriceRow}>
                       <Text style={[styles.previewPriceLabel, { color: '#EF4444' }]}>⚡ Surge Fee</Text>
                       <Text style={[styles.previewPriceValue, { color: '#EF4444' }]}>₹{previewOrder.surgeFee}</Text>
+                    </View>
+                  ) : null}
+
+                  {previewOrder.packagingFee && Number(previewOrder.packagingFee) > 0 ? (
+                    <View style={styles.previewPriceRow}>
+                      <Text style={styles.previewPriceLabel}>Packaging Charges</Text>
+                      <Text style={styles.previewPriceValue}>₹{Number(previewOrder.packagingFee).toFixed(2)}</Text>
                     </View>
                   ) : null}
 

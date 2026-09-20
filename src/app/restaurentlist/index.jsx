@@ -284,7 +284,7 @@ export default function RestaurantListScreen() {
   } = useSelector((state) => state.location);
 
   const handleEnableLocation = async () => {
-    if (maintenanceMode === false) return;
+    if (maintenanceMode) return;
     console.log('[Location UI] handleEnableLocation triggered.');
     try {
       if (Platform.OS === 'android') {
@@ -301,7 +301,7 @@ export default function RestaurantListScreen() {
   };
 
   const handleOpenSettings = () => {
-    if (maintenanceMode === false) return;
+    if (maintenanceMode) return;
     console.log('[Location UI] Opening app settings...');
     Platform.OS === 'ios' ? Linking.openURL('app-settings:') : Linking.openSettings();
   };
@@ -312,14 +312,14 @@ export default function RestaurantListScreen() {
 
   // Suppress all location modals when app enters maintenance mode
   useEffect(() => {
-    if (maintenanceMode === false) {
+    if (maintenanceMode) {
       setShowDeliverToModal(false);
     }
   }, [maintenanceMode]);
 
   useEffect(() => {
     const initLocationFlow = async () => {
-      if (maintenanceMode === false) return;
+      if (maintenanceMode) return;
       if (globalHasCheckedInitialLocation || globalHasShownDeliverToModal) return;
       globalHasCheckedInitialLocation = true;
       globalHasShownDeliverToModal = true;
@@ -368,13 +368,13 @@ export default function RestaurantListScreen() {
         }
       } else {
         // Location is OFF or not permitted: Show Deliver To modal (unless user has active order or app is in maintenance)
-        if (!hasActiveOrder && maintenanceMode !== false) {
+        if (!hasActiveOrder && !maintenanceMode) {
           setShowDeliverToModal(true);
         } else {
           setShowDeliverToModal(false);
-        }
-        if (savedAddrId) {
-          dispatch(setSelectedSavedAddressId(savedAddrId));
+          if (savedAddrId) {
+            dispatch(setSelectedSavedAddressId(savedAddrId));
+          }
         }
       }
 
@@ -422,6 +422,7 @@ export default function RestaurantListScreen() {
 
   // When restaurants list loads from network/cache and location is already determined, calculate distances
   useEffect(() => {
+    if (showDeliverToModal || maintenanceMode) return;
     if (restaurants && restaurants.length > 0 && userLocation && !selectedSavedAddressId) {
       const sampleId = restaurants[0]?._id || restaurants[0]?.restId || restaurants[0]?.id;
       if (sampleId && !roadDistances[String(sampleId)] && !hasTriggeredDistanceCalc.current) {
@@ -432,7 +433,7 @@ export default function RestaurantListScreen() {
         }));
       }
     }
-  }, [restaurants, userLocation, roadDistances, selectedSavedAddressId, dispatch]);
+  }, [restaurants, userLocation, roadDistances, selectedSavedAddressId, dispatch, showDeliverToModal, maintenanceMode]);
 
   const lastBackPressTime = useRef(0);
 
@@ -850,6 +851,7 @@ export default function RestaurantListScreen() {
   useEffect(() => {
     let isCancelled = false;
     const triggerDistance = async () => {
+      if (showDeliverToModal || maintenanceMode) return;
       if (restaurants && restaurants.length > 0 && !hasTriggeredDistanceCalc.current && locationStatus !== 'requesting') {
         const uid = await AsyncStorage.getItem('userid');
         if (uid) {
@@ -1335,7 +1337,7 @@ export default function RestaurantListScreen() {
         }}
         activeOpacity={0.75}
         onPress={() => {
-          if (maintenanceMode !== false) {
+          if (!maintenanceMode) {
             setShowDeliverToModal(true);
           }
         }}
@@ -1966,14 +1968,11 @@ export default function RestaurantListScreen() {
       )}
 
       {/* Fetching Location Overlay Modal */}
-      <Modal transparent visible={Boolean(showFetchingModal && maintenanceMode !== false)} animationType="fade">
+      <Modal transparent visible={Boolean(showFetchingModal && !maintenanceMode)} animationType="fade">
         <View style={[styles.modalOverlay, { backgroundColor: 'rgba(0, 0, 0, 0.4)' }]}>
           <View style={[styles.modalContent, { backgroundColor: '#F9F9F6' }]}>
             <ActivityIndicator size="large" color="#1E3545" style={{ marginBottom: 16 }} />
             <Text style={styles.modalTitle}>Fetching Location & Distance</Text>
-            <Text style={styles.modalSub}>
-              Retrieving your coordinates and calculating delivery distances...
-            </Text>
           </View>
         </View>
       </Modal>
@@ -1981,7 +1980,7 @@ export default function RestaurantListScreen() {
       {/* GPS Off / Permission Denied Modal (Hidden — only 1 delivery location selector modal is shown) */}
 
       {/* Deliver To Selector Modal */}
-      <Modal transparent visible={Boolean(showDeliverToModal && maintenanceMode !== false)} animationType="slide" onRequestClose={() => {}}>
+      <Modal transparent visible={Boolean(showDeliverToModal && !maintenanceMode)} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', position: 'relative' }]}>
             {/* Top-Right X Close Symbol */}
@@ -2153,7 +2152,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* Out of Zone warning Modal */}
-      <Modal transparent visible={Boolean(showOutOfZoneModal && maintenanceMode !== false)} animationType="slide">
+      <Modal transparent visible={Boolean(showOutOfZoneModal && !maintenanceMode)} animationType="slide">
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={styles.modalContent}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>

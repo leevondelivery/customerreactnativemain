@@ -727,7 +727,9 @@ export default function RestaurantMenuScreen() {
 
       for (const id of candidateIds) {
         try {
-          const res = await fetch(`${API_URL}/api/offers/restaurant/${id}`);
+          const res = await fetch(`${API_URL}/api/offers/restaurant/${id}?t=${Date.now()}`, {
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+          });
           const data = await res.json();
           if (data && data.success && data.data && isSubscribed) {
             candidateIds.forEach((cId) => memoryOffersCache.set(cId, data.data));
@@ -867,7 +869,7 @@ export default function RestaurantMenuScreen() {
   const cartItemCount = useMemo(() => {
     if (!cart || cart.length === 0) return 0;
     return cart.reduce((sum, item) => {
-      const isBogo = item.isBogo || checkIsBogo(item, item.category);
+      const isBogo = checkIsBogo(item, item.category);
       const units = isBogo ? (Number(item.quantity) || 0) * 2 : (Number(item.quantity) || 0);
       return sum + units;
     }, 0);
@@ -1011,8 +1013,8 @@ export default function RestaurantMenuScreen() {
           )
       );
 
-      const bogoMatch = passedBogoOffer || getBogoOffer(item, item.category);
-      const isBogoMatch = passedIsBogo !== undefined ? Boolean(passedIsBogo) : Boolean(bogoMatch);
+      const bogoMatch = getBogoOffer(item, item.category);
+      const isBogoMatch = Boolean(bogoMatch);
 
       if (existingItemIndex > -1) {
         currentCart[existingItemIndex].quantity += change;

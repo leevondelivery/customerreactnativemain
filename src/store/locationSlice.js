@@ -124,7 +124,7 @@ const getRestaurantCoords = (rest) => {
 
 export const checkLocationAndCalculateDistances = createAsyncThunk(
   'location/checkLocationAndCalculateDistances',
-  async (arg, { rejectWithValue, dispatch }) => {
+  async (arg, { rejectWithValue, dispatch, getState }) => {
     // support both signature formats: list directly or { restaurantsList, customCoords }
     const restaurantsList = Array.isArray(arg) ? arg : (arg && arg.restaurantsList ? arg.restaurantsList : []);
     const customCoords = (arg && !Array.isArray(arg)) ? arg.customCoords : null;
@@ -141,8 +141,8 @@ export const checkLocationAndCalculateDistances = createAsyncThunk(
         longitude = Number(customLng);
         console.log('[Location Redux] Using custom coordinates passed to thunk:', latitude, longitude);
       } else {
-        const state = thunkAPI.getState();
-        if (state.controls?.maintenanceMode === false) {
+        const state = getState ? getState() : {};
+        if (state.controls?.maintenanceMode) {
           console.log('[Location Redux] App is under maintenance. Skipping GPS location fetch.');
           return rejectWithValue({
             type: 'MAINTENANCE_MODE',

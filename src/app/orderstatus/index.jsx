@@ -417,7 +417,7 @@ export default function OrderStatusScreen() {
     if (value === undefined || value === null || value === '') return '';
     const num = Number(value);
     if (isNaN(num)) return '';
-    return `₹ ${num.toFixed(2)}`;
+    return `₹${num.toFixed(2)}`;
   };
 
   // Check if this order was already reviewed or review prompt was dismissed
@@ -1135,6 +1135,7 @@ export default function OrderStatusScreen() {
     ?? orderStatus.tax_amount 
     ?? '';
   const platformFee = orderStatus.platformFee ?? orderStatus.platform_fee ?? orderStatus.platformFeeAmount ?? '';
+  const packagingFee = orderStatus.packagingFee ?? orderStatus.packaging_fee ?? orderStatus.packagingCharge ?? orderStatus.packaging_charge ?? 0;
   const surgeFee = orderStatus.surgeFee ?? orderStatus.surge_fee ?? '';
   const grandTotal = orderStatus.grandTotal ?? orderStatus.totalPrice ?? orderStatus.total ?? orderStatus.finalTotal ?? '';
   const discountAmount = orderStatus.discountAmount ?? orderStatus.discount_amount ?? orderStatus.discount ?? '';
@@ -1283,64 +1284,97 @@ export default function OrderStatusScreen() {
             </>
           ) : null}
 
-          {/* Items Table */}
+          {/* Items Section */}
+          <Text style={styles.sectionLabel}>Items Ordered</Text>
           <View style={styles.itemsTableCard}>
             <View style={styles.tableHeader}>
-              <Text style={styles.tableHeaderTextLeft}>Items</Text>
-              <Text style={styles.tableHeaderText}>Quantity</Text>
-              <Text style={styles.tableHeaderText}>Cost</Text>
+              <View style={styles.tableColItems}>
+                <Text style={styles.tableHeaderText}>Items</Text>
+              </View>
+              <View style={styles.tableColQty}>
+                <Text style={styles.tableHeaderText}>Quantity</Text>
+              </View>
+              <View style={styles.tableColCost}>
+                <Text style={styles.tableHeaderText}>Cost</Text>
+              </View>
             </View>
 
-            {items.length > 0 ? items.map((item, idx) => {
-              const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0 || Number(item.amount) === 0);
-              const isBogo = Boolean(item.isBogo || item.bogoTag || isFree);
-              const bogoTag = item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer Applied' : null));
-              const itemName = item.name || item.itemName || item.item || '-';
-              const qty = item.quantity || item.qty || 1;
-              const costVal = item.cost !== undefined ? item.cost : (item.price !== undefined ? item.price : item.amount);
+            {items.length > 0 ? (() => {
+              const hasSeparateFreeItems = items.some(it => Boolean(it.isFreeItem || it.isFree || it.cost === 0 || it.price === 0 || Number(it.amount) === 0));
 
-              return (
-                <View 
-                  key={idx} 
-                  style={[
-                    styles.tableRow, 
-                    isFree ? { backgroundColor: '#F1F8E9', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 6, marginVertical: 3, borderLeftWidth: 3, borderLeftColor: '#2E7D32' } : null
-                  ]}
-                >
-                  <View style={{ flex: 3, paddingRight: 6 }}>
-                    <Text style={[styles.tableCellLeft, isFree ? { color: '#1B5E20', fontWeight: '700' } : null]}>
-                      {itemName}
-                    </Text>
-                    {bogoTag ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
-                        <View style={{ backgroundColor: isFree ? '#2E7D32' : '#008000', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, alignSelf: 'flex-start' }}>
-                          <Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '800' }}>🎁 {bogoTag}</Text>
+              return items.map((item, idx) => {
+                const isFree = Boolean(item.isFreeItem || item.isFree || item.cost === 0 || item.price === 0 || Number(item.amount) === 0);
+                const isBogo = Boolean(item.isBogo || item.bogoTag || isFree);
+                const isSingleLineBogo = isBogo && !isFree && !hasSeparateFreeItems;
+                const rawQty = item.quantity || item.qty || 1;
+                const displayQty = isSingleLineBogo ? `${rawQty * 2}x` : `${rawQty}x`;
+                const bogoTag = isSingleLineBogo 
+                  ? `1+1 FREE (${rawQty} Paid + ${rawQty} Free)`
+                  : (item.bogoTag || (isFree ? '1+1 FREE' : (item.isBogo ? '1+1 Offer' : null)));
+                const itemName = item.name || item.itemName || item.item || '-';
+                const costVal = item.cost !== undefined ? item.cost : (item.price !== undefined ? item.price : item.amount);
+
+                return (
+                  <View 
+                    key={idx} 
+                    style={[
+                      styles.tableRow, 
+                      isFree ? { backgroundColor: '#F0FDF4', borderRadius: 8, marginVertical: 1 } : null
+                    ]}
+                  >
+                    <View style={styles.tableColItems}>
+                      <Text style={[styles.itemText, isFree ? { color: '#065F46', fontWeight: '700' } : null]}>
+                        {itemName}
+                      </Text>
+                      {bogoTag ? (
+                        <View style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 3.5,
+                          backgroundColor: '#ECFDF5',
+                          borderColor: '#A7F3D0',
+                          borderWidth: 1,
+                          paddingHorizontal: 7,
+                          paddingVertical: 2,
+                          borderRadius: 12,
+                          alignSelf: 'flex-start',
+                          marginTop: 4,
+                        }}>
+                          <Feather name="gift" size={10.5} color="#059669" />
+                          <Text style={{ color: '#047857', fontSize: 10, fontWeight: '700', letterSpacing: 0.2 }}>
+                            {bogoTag}
+                          </Text>
                         </View>
-                      </View>
-                    ) : null}
+                      ) : null}
+                    </View>
+                    <View style={styles.tableColQty}>
+                      <Text style={[styles.qtyText, isFree ? { color: '#065F46', fontWeight: '700' } : null]}>
+                        {displayQty}
+                      </Text>
+                    </View>
+                    <View style={styles.tableColCost}>
+                      <Text style={[styles.costText, isFree ? { color: '#059669', fontWeight: '800' } : null]} numberOfLines={1}>
+                        {isFree ? 'FREE (₹0.00)' : formatCurrency(costVal)}
+                      </Text>
+                    </View>
                   </View>
-                  <Text style={[styles.tableCell, isFree ? { color: '#1B5E20', fontWeight: '700' } : null]}>
-                    {qty}x
-                  </Text>
-                  <Text style={[styles.tableCell, isFree ? { color: '#2E7D32', fontWeight: '800' } : null]}>
-                    {isFree ? 'FREE (₹0.00)' : formatCurrency(costVal)}
-                  </Text>
-                </View>
-              );
-            }) : (
+                );
+              });
+            })() : (
               <View style={styles.tableRow}>
                 <Text style={[styles.tableCellLeft, { color: '#AEAEB2' }]}>No items found</Text>
               </View>
             )}
+          </View>
 
+          {/* Bill Summary Section */}
+          <Text style={styles.sectionLabel}>Bill Summary</Text>
+          <View style={styles.billSummaryCard}>
             {subTotal !== '' && (
-              <>
-                <View style={styles.tableDivider} />
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Sub Total</Text>
-                  <Text style={styles.summaryValue}>{formatCurrency(subTotal)}</Text>
-                </View>
-              </>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Sub Total</Text>
+                <Text style={styles.summaryValue}>{formatCurrency(subTotal)}</Text>
+              </View>
             )}
             {(deliveryCharges !== '' && deliveryCharges !== null && deliveryCharges !== undefined) && (
               <View style={styles.summaryRow}>
@@ -1354,6 +1388,12 @@ export default function OrderStatusScreen() {
               <View style={styles.summaryRow}>
                 <Text style={[styles.summaryLabel, { color: '#FF5E5E' }]}>⚡ Surge Fee</Text>
                 <Text style={[styles.summaryValue, { color: '#FF5E5E' }]}>{formatCurrency(surgeFee)}</Text>
+              </View>
+            )}
+            {Number(packagingFee) > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Packaging Charges</Text>
+                <Text style={styles.summaryValue}>{formatCurrency(packagingFee)}</Text>
               </View>
             )}
             {(gst !== '' && gst !== null && gst !== undefined && Number(gst) > 0) && (
@@ -1382,15 +1422,15 @@ export default function OrderStatusScreen() {
                   const dCgst = (deliveryGstVal / 2);
                   const dSgst = (deliveryGstVal / 2);
                   return (
-                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, marginHorizontal: 16, marginVertical: 4, borderWidth: 1, borderColor: '#E2E8F0' }}>
                       <Text style={{ fontSize: 14.5, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
                         Food GST (5%): {formatCurrency(foodGstVal)}
                       </Text>
-                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                      <View style={[styles.summaryRow, { paddingHorizontal: 0, paddingLeft: 12, marginVertical: 2 }]}>
                         <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>CGST (2.5%)</Text>
                         <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(fCgst)}</Text>
                       </View>
-                      <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                      <View style={[styles.summaryRow, { paddingHorizontal: 0, paddingLeft: 12, marginVertical: 2 }]}>
                         <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>SGST (2.5%)</Text>
                         <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(fSgst)}</Text>
                       </View>
@@ -1401,11 +1441,11 @@ export default function OrderStatusScreen() {
                           <Text style={{ fontSize: 14.5, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
                             Delivery GST (18%): {formatCurrency(deliveryGstVal)}
                           </Text>
-                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                          <View style={[styles.summaryRow, { paddingHorizontal: 0, paddingLeft: 12, marginVertical: 2 }]}>
                             <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>CGST (9.0%)</Text>
                             <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(dCgst)}</Text>
                           </View>
-                          <View style={[styles.summaryRow, { paddingLeft: 12, marginVertical: 2 }]}>
+                          <View style={[styles.summaryRow, { paddingHorizontal: 0, paddingLeft: 12, marginVertical: 2 }]}>
                             <Text style={[styles.summaryLabel, { fontSize: 14, color: '#64748B' }]}>SGST (9.0%)</Text>
                             <Text style={[styles.summaryValue, { fontSize: 14, color: '#64748B' }]}>{formatCurrency(dSgst)}</Text>
                           </View>
@@ -1465,7 +1505,7 @@ export default function OrderStatusScreen() {
                 borderRadius: 12,
                 paddingVertical: 12,
                 paddingHorizontal: 16,
-                marginHorizontal: 10,
+                marginHorizontal: 16,
                 marginTop: 8,
                 marginBottom: 12,
                 flexDirection: 'row',

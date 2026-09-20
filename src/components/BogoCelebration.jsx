@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -25,104 +25,139 @@ const CONFETTI_COLORS = [
   '#00E5FF', // Cyan
 ];
 
-const NUM_CONFETTI = 36;
+const NUM_CONFETTI = 18;
 
 export default function BogoCelebration({ visible, offerDetails, onDismiss }) {
   const bannerAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const confettiProgress = useRef(new Animated.Value(0)).current;
+  const animRunningRef = useRef(false);
 
-  // Generate confetti particle animations once
-  const confettiParticles = useRef(
-    Array.from({ length: NUM_CONFETTI }, (_, i) => {
-      const angle = (Math.PI * 2 * i) / NUM_CONFETTI + (Math.random() * 0.4 - 0.2);
-      const velocity = 180 + Math.random() * 260;
-      const startX = SCREEN_WIDTH / 2 + (Math.random() * 80 - 40);
-      const startY = SCREEN_HEIGHT * 0.42 + (Math.random() * 60 - 30);
+  // Pre-compute particle trajectory configurations and fixed interpolation nodes ONCE
+  const particles = useMemo(() => {
+    return Array.from({ length: NUM_CONFETTI }, (_, i) => {
+      const angle = -(Math.PI * 0.15 + (Math.PI * 0.42 * (i / NUM_CONFETTI))) + (Math.random() * 0.16 - 0.08);
+      const velocity = 260 + Math.random() * 260;
+      const startX = 24 + (Math.random() * 30 - 15);
+      const startY = SCREEN_HEIGHT - (Platform.OS === 'ios' ? 140 : 100) + (Math.random() * 24 - 12);
+      const peakY = startY + Math.sin(angle) * velocity - 35;
       const endX = startX + Math.cos(angle) * velocity;
-      const endY = startY + Math.sin(angle) * velocity + 150; // gravity drift downward
+      const endY = startY + Math.sin(angle) * velocity + 120;
       const rotationStart = Math.random() * 360;
-      const rotationEnd = rotationStart + 360 + Math.random() * 720;
-      const size = 6 + Math.random() * 6;
+      const rotationEnd = rotationStart + 360 + Math.random() * 540;
+      const size = 2.4 + Math.random() * 1.8;
       const isCircle = i % 3 === 0;
       const color = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
 
+      // Attach pre-computed interpolations directly to the single confettiProgress value
+      const translateX = confettiProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [startX, endX],
+      });
+      const translateY = confettiProgress.interpolate({
+        inputRange: [0, 0.45, 1],
+        outputRange: [startY, peakY, endY],
+      });
+      const rotate = confettiProgress.interpolate({
+        inputRange: [0, 1],
+        outputRange: [`${rotationStart}deg`, `${rotationEnd}deg`],
+      });
+      const opacity = confettiProgress.interpolate({
+        inputRange: [0, 0.75, 1],
+        outputRange: [1, 0.9, 0],
+      });
+      const scale = confettiProgress.interpolate({
+        inputRange: [0, 0.2, 1],
+        outputRange: [0.3, 1.2, 0.8],
+      });
+
       return {
         id: i,
-        startX,
-        startY,
-        endX,
-        endY,
-        rotationStart,
-        rotationEnd,
         size,
         isCircle,
         color,
-        progress: new Animated.Value(0),
+        translateX,
+        translateY,
+        rotate,
+        opacity,
+        scale,
       };
-    })
-  ).current;
+    });
+  }, [confettiProgress]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      bannerAnim.setValue(0);
+      pulseAnim.setValue(1);
+      confettiProgress.setValue(0);
+      animRunningRef.current = false;
+      return;
+    }
 
-    // 1. Reset all animation values
+    animRunningRef.current = true;
     bannerAnim.setValue(0);
     pulseAnim.setValue(1);
-    confettiParticles.forEach((p) => p.progress.setValue(0));
+    confettiProgress.setValue(0);
 
-    // 2. Banner Spring In
+    // Run animations smoothly
     const bannerSpring = Animated.spring(bannerAnim, {
       toValue: 1,
-      friction: 5,
+      friction: 7,
       tension: 40,
       useNativeDriver: true,
     });
 
-    // 3. Pulse loop for gift/sparkle icon
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.15,
-          duration: 350,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 350,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    pulseLoop.start();
-
-    // 4. Confetti burst animation
-    const confettiAnims = confettiParticles.map((p, idx) =>
-      Animated.timing(p.progress, {
-        toValue: 1,
-        duration: 1600 + (idx % 5) * 120,
-        easing: Easing.out(Easing.quad),
+    const pulseSeq = Animated.sequence([
+      Animated.timing(pulseAnim, {
+        toValue: 1.18,
+        duration: 250,
         useNativeDriver: true,
-      })
-    );
+      }),
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pulseAnim, {
+        toValue: 1.12,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pulseAnim, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }),
+    ]);
 
-    Animated.parallel([bannerSpring, ...confettiAnims]).start();
+    const confettiTiming = Animated.timing(confettiProgress, {
+      toValue: 1,
+      duration: 1800,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    });
 
-    // 5. Auto-dismiss after 2.6 seconds
+    Animated.parallel([bannerSpring, pulseSeq, confettiTiming]).start();
+
     const timer = setTimeout(() => {
+      if (!animRunningRef.current) return;
       Animated.timing(bannerAnim, {
         toValue: 0,
-        duration: 300,
+        duration: 280,
         easing: Easing.in(Easing.ease),
         useNativeDriver: true,
       }).start(() => {
-        pulseLoop.stop();
+        animRunningRef.current = false;
         if (onDismiss) onDismiss();
       });
-    }, 2600);
+    }, 2400);
 
     return () => {
+      animRunningRef.current = false;
       clearTimeout(timer);
-      pulseLoop.stop();
+      bannerAnim.stopAnimation();
+      pulseAnim.stopAnimation();
+      confettiProgress.stopAnimation();
     };
   }, [visible, offerDetails?.triggerId, offerDetails?.itemName]);
 
@@ -152,55 +187,32 @@ export default function BogoCelebration({ visible, offerDetails, onDismiss }) {
 
   return (
     <View style={styles.overlayContainer} pointerEvents="none">
-      {/* Confetti Particles */}
-      {confettiParticles.map((p) => {
-        const translateX = p.progress.interpolate({
-          inputRange: [0, 1],
-          outputRange: [p.startX - SCREEN_WIDTH / 2, p.endX - SCREEN_WIDTH / 2],
-        });
-        const translateY = p.progress.interpolate({
-          inputRange: [0, 0.4, 1],
-          outputRange: [p.startY - SCREEN_HEIGHT / 2, (p.startY + p.endY) / 2 - SCREEN_HEIGHT / 2 - 40, p.endY - SCREEN_HEIGHT / 2],
-        });
-        const rotate = p.progress.interpolate({
-          inputRange: [0, 1],
-          outputRange: [`${p.rotationStart}deg`, `${p.rotationEnd}deg`],
-        });
-        const opacity = p.progress.interpolate({
-          inputRange: [0, 0.7, 1],
-          outputRange: [1, 0.9, 0],
-        });
-        const scale = p.progress.interpolate({
-          inputRange: [0, 0.2, 1],
-          outputRange: [0.3, 1.2, 0.8],
-        });
+      {/* Confetti Particles (Shooting from bottom-left corner) */}
+      {particles.map((p) => (
+        <Animated.View
+          key={p.id}
+          style={[
+            styles.confettiPiece,
+            {
+              left: 0,
+              top: 0,
+              width: p.size,
+              height: p.isCircle ? p.size : p.size * 1.4,
+              borderRadius: p.isCircle ? p.size / 2 : 1,
+              backgroundColor: p.color,
+              opacity: p.opacity,
+              transform: [
+                { translateX: p.translateX },
+                { translateY: p.translateY },
+                { rotate: p.rotate },
+                { scale: p.scale },
+              ],
+            },
+          ]}
+        />
+      ))}
 
-        return (
-          <Animated.View
-            key={p.id}
-            style={[
-              styles.confettiPiece,
-              {
-                left: SCREEN_WIDTH / 2,
-                top: SCREEN_HEIGHT / 2,
-                width: p.size,
-                height: p.isCircle ? p.size : p.size * 1.6,
-                borderRadius: p.isCircle ? p.size / 2 : 2,
-                backgroundColor: p.color,
-                opacity,
-                transform: [
-                  { translateX },
-                  { translateY },
-                  { rotate },
-                  { scale },
-                ],
-              },
-            ]}
-          />
-        );
-      })}
-
-      {/* Floating Celebration Card */}
+      {/* Top Notification Celebration Banner */}
       <Animated.View
         style={[
           styles.celebrationCardContainer,
@@ -210,13 +222,13 @@ export default function BogoCelebration({ visible, offerDetails, onDismiss }) {
               {
                 translateY: bannerAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [-80, 0],
+                  outputRange: [-70, 0],
                 }),
               },
               {
                 scale: bannerAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0.8, 1],
+                  outputRange: [0.92, 1],
                 }),
               },
             ],
@@ -233,14 +245,14 @@ export default function BogoCelebration({ visible, offerDetails, onDismiss }) {
               },
             ]}
           >
-            <MaterialCommunityIcons name="party-popper" size={28} color="#FFFFFF" />
+            <MaterialCommunityIcons name="party-popper" size={26} color="#FFFFFF" />
           </Animated.View>
 
           {/* Texts */}
           <View style={styles.textContainer}>
             <View style={styles.titleRow}>
               <Text style={styles.celebrationTitle}>{titleText}</Text>
-              <Ionicons name="sparkles" size={16} color="#FFD700" style={{ marginLeft: 6 }} />
+              <Ionicons name="sparkles" size={15} color="#FFD700" style={{ marginLeft: 6 }} />
             </View>
             <Text style={styles.celebrationSubtext} numberOfLines={2}>
               {subText}
@@ -270,7 +282,7 @@ const styles = StyleSheet.create({
   },
   celebrationCardContainer: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 60 : 40,
+    top: Platform.OS === 'ios' ? 60 : 42,
     left: 16,
     right: 16,
     alignItems: 'center',
@@ -281,23 +293,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#0F8A65', // Rich Emerald Theme
-    paddingVertical: 14,
+    paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 18,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 12,
-    elevation: 16,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 12,
     borderWidth: 1.5,
     borderColor: 'rgba(255, 255, 255, 0.45)',
     maxWidth: 420,
     width: '100%',
   },
   iconWrapper: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: 'rgba(255, 255, 255, 0.22)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -313,16 +325,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   celebrationTitle: {
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: '900',
     color: '#FFFFFF',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   celebrationSubtext: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '600',
     color: '#E8F5E9',
     marginTop: 2,
-    lineHeight: 16,
+    lineHeight: 15,
   },
 });
