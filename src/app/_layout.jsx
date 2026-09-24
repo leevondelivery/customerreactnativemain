@@ -519,7 +519,7 @@ function MainLayoutContent({
     dispatch(fetchControlsStatus());
     const controlsInterval = setInterval(() => {
       dispatch(fetchControlsStatus());
-    }, 20 * 1000); // poll every 20 seconds
+    }, 60 * 1000); // poll every 60 seconds
     return () => clearInterval(controlsInterval);
   }, [dispatch]);
 

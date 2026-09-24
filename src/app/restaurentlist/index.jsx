@@ -33,6 +33,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
 import LoadingView from '../../components/LoadingView';
 import { API_URL } from '../../config';
+import { fetchControlsStatus } from '../../store/controlsSlice';
 import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, setSavedAddressesRedux, skipLocation } from '../../store/locationSlice';
 import { fetchAllRestaurantMenus, fetchRestaurantMenu, fetchRestaurants, loadCachedRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/restaurentlist.styles';
@@ -268,6 +269,30 @@ export default function RestaurantListScreen() {
   const initialLoaded = useSelector((state) => state.restaurants.initialLoaded);
   const reduxLoading = useSelector((state) => state.restaurants.loading);
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
+  const homeBannerEnabled = useSelector((state) => state.controls?.homeBannerEnabled);
+  const homeBannerTitle = useSelector((state) => state.controls?.homeBannerTitle);
+  const homeBannerText = useSelector((state) => state.controls?.homeBannerText);
+
+  // Announcement Alert Modal state (controlled dynamically from Office controls)
+  const [homeAlertDismissed, setHomeAlertDismissed] = useState(false);
+  const [lastSeenHomeAlert, setLastSeenHomeAlert] = useState('');
+
+  // Reset dismissed state whenever a new title/text is configured or toggled from Office
+  useEffect(() => {
+    const currentAlertKey = `${homeBannerTitle || ''}_${homeBannerText || ''}`;
+    if (homeBannerEnabled && currentAlertKey && currentAlertKey !== lastSeenHomeAlert) {
+      setHomeAlertDismissed(false);
+      setLastSeenHomeAlert(currentAlertKey);
+    }
+  }, [homeBannerEnabled, homeBannerTitle, homeBannerText, lastSeenHomeAlert]);
+
+  // Priority flag: when announcement alert is active, it must show FIRST before location modals
+  const isAnnouncementAlertActive = Boolean(
+    homeBannerEnabled &&
+    !homeAlertDismissed &&
+    (homeBannerTitle || homeBannerText) &&
+    !maintenanceMode
+  );
 
   // Redux Selectors for Global Location State
   const {
@@ -909,6 +934,7 @@ export default function RestaurantListScreen() {
   // Focus Effect: Re-fetch fresh restaurant statuses silently in background (at most once every 30s)
   useFocusEffect(
     useCallback(() => {
+      dispatch(fetchControlsStatus());
       let isMounted = true;
       const now = Date.now();
       if (now - lastStatusFetchTimeRef.current < 30000) {
@@ -1979,8 +2005,119 @@ export default function RestaurantListScreen() {
 
       {/* GPS Off / Permission Denied Modal (Hidden — only 1 delivery location selector modal is shown) */}
 
+      {/* Dynamic Announcement Alert Modal (Shows FIRST before location selector) */}
+      <Modal
+        transparent
+        visible={isAnnouncementAlertActive}
+        animationType="fade"
+        onRequestClose={() => setHomeAlertDismissed(true)}
+      >
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalContent,
+              {
+                position: 'relative',
+                maxWidth: 340,
+                borderRadius: 22,
+                paddingVertical: 24,
+                paddingHorizontal: 22,
+                backgroundColor: '#FFFFFF',
+              },
+            ]}
+          >
+            {/* Top Close 'x' button */}
+            <TouchableOpacity
+              style={{
+                position: 'absolute',
+                top: 14,
+                right: 14,
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                backgroundColor: 'rgba(0, 0, 0, 0.06)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                zIndex: 10,
+              }}
+              onPress={() => setHomeAlertDismissed(true)}
+              activeOpacity={0.7}
+            >
+              <Feather name="x" size={17} color="#1E3545" />
+            </TouchableOpacity>
+
+            {/* Announcement Megaphone Icon */}
+            <View
+              style={[
+                styles.modalIconContainer,
+                {
+                  backgroundColor: '#FEF2F2',
+                  width: 60,
+                  height: 60,
+                  borderRadius: 30,
+                  marginBottom: 14,
+                },
+              ]}
+            >
+              <Ionicons name="megaphone" size={28} color="#FA4D56" />
+            </View>
+
+            {/* Dynamic Alert Title */}
+            <Text
+              style={[
+                styles.modalTitle,
+                {
+                  fontSize: 17,
+                  color: '#1E3545',
+                  marginBottom: homeBannerText ? 8 : 16,
+                },
+              ]}
+            >
+              {homeBannerTitle || 'Special Announcement'}
+            </Text>
+
+            {/* Dynamic Alert Message / Description */}
+            {Boolean(homeBannerText) && (
+              <Text
+                style={[
+                  styles.modalSub,
+                  {
+                    fontSize: 13.5,
+                    color: '#5C6B73',
+                    marginBottom: 18,
+                    lineHeight: 19,
+                  },
+                ]}
+              >
+                {homeBannerText}
+              </Text>
+            )}
+
+            {/* OK Action Button */}
+            <TouchableOpacity
+              style={[
+                styles.primaryButton,
+                {
+                  backgroundColor: '#FA4D56',
+                  borderRadius: 14,
+                  paddingVertical: 13,
+                  marginBottom: 0,
+                  width: '100%',
+                },
+              ]}
+              onPress={() => setHomeAlertDismissed(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.primaryButtonText, { fontSize: 15, fontWeight: '700' }]}>
+                OK
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Deliver To Selector Modal */}
-      <Modal transparent visible={Boolean(showDeliverToModal && !maintenanceMode)} animationType="slide" onRequestClose={() => {}}>
+      <Modal transparent visible={Boolean(showDeliverToModal && !isAnnouncementAlertActive && !maintenanceMode)} animationType="slide" onRequestClose={() => {}}>
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={[styles.modalContent, { maxHeight: '80%', backgroundColor: 'rgb(224, 214, 188)', position: 'relative' }]}>
             {/* Top-Right X Close Symbol */}
@@ -2152,7 +2289,7 @@ export default function RestaurantListScreen() {
       </Modal>
 
       {/* Out of Zone warning Modal */}
-      <Modal transparent visible={Boolean(showOutOfZoneModal && !maintenanceMode)} animationType="slide">
+      <Modal transparent visible={Boolean(showOutOfZoneModal && !isAnnouncementAlertActive && !maintenanceMode)} animationType="slide">
         <View style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}>
           <View style={styles.modalContent}>
             <View style={[styles.modalIconContainer, { backgroundColor: '#FDF0ED' }]}>

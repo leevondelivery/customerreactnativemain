@@ -25,6 +25,7 @@ import LoadingView from '../../components/LoadingView';
 import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
+import { fetchControlsStatus } from '../../store/controlsSlice';
 // Lazily require Firebase Auth & Firestore to avoid crash when native module is not linked
 let auth = null;
 let firestore = null;
@@ -150,10 +151,14 @@ export default function CartScreen() {
   const selectedSavedAddressIdRedux = useSelector((state) => state.location.selectedSavedAddressId);
   const restaurants = useSelector((state) => state.restaurants.list);
   const confirmPayEnabled = useSelector((state) => state.controls.confirmPayEnabled);
+  const confirmPayDisabledTitle = useSelector((state) => state.controls.confirmPayDisabledTitle);
+  const confirmPayDisabledMessage = useSelector((state) => state.controls.confirmPayDisabledMessage);
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
 
   useFocusEffect(
     useCallback(() => {
+      dispatch(fetchControlsStatus());
+
       const onBackPress = () => {
         if (router.canGoBack()) {
           router.back();
@@ -790,7 +795,9 @@ export default function CartScreen() {
     }
 
     if (!confirmPayEnabled) {
-      showAlert('Ordering Temporarily Disabled', 'Order placement is currently paused by admin. Please try again shortly.');
+      const disabledTitle = confirmPayDisabledTitle?.trim() || 'Ordering Temporarily Disabled';
+      const disabledMsg = confirmPayDisabledMessage?.trim() || 'Order placement is currently paused by admin. Please try again shortly.';
+      showAlert(disabledTitle, disabledMsg);
       return;
     }
 
@@ -1199,7 +1206,9 @@ export default function CartScreen() {
 
     if (!confirmPayEnabled) {
       resetPlacingOrderState();
-      showAlert('Ordering Temporarily Disabled', 'Order placement is currently paused by admin. Please try again shortly.');
+      const disabledTitle = confirmPayDisabledTitle?.trim() || 'Ordering Temporarily Disabled';
+      const disabledMsg = confirmPayDisabledMessage?.trim() || 'Order placement is currently paused by admin. Please try again shortly.';
+      showAlert(disabledTitle, disabledMsg);
       return;
     }
 
@@ -2648,8 +2657,6 @@ export default function CartScreen() {
             </Text>
           </View>
         )}
-
-
 
         {/* Action Buttons Row */}
         <View style={styles.actionsRow}>
