@@ -659,4 +659,13 @@ export const styles = StyleSheet.create({
   otpResendDisabledText: {
     color: '#9C9C9C',
   },
+  otpLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  otpDisabledButton: {
+    opacity: 0.65,
+  },
 });

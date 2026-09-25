@@ -228,6 +228,10 @@ let globalHasShownDeliverToModal = false;
 let globalHasCheckedInitialLocation = false;
 let globalHasPrefetchedMenus = false;
 
+// Track announcement alert modal display per app session to show only once on app open
+let globalAnnouncementAlertDismissed = false;
+let globalDismissedAlertKey = '';
+
 export default function RestaurantListScreen() {
   const [nowTime, setNowTime] = useState(new Date());
 
@@ -274,22 +278,31 @@ export default function RestaurantListScreen() {
   const homeBannerText = useSelector((state) => state.controls?.homeBannerText);
 
   // Announcement Alert Modal state (controlled dynamically from Office controls)
-  const [homeAlertDismissed, setHomeAlertDismissed] = useState(false);
-  const [lastSeenHomeAlert, setLastSeenHomeAlert] = useState('');
+  const currentAlertKey = `${homeBannerTitle || ''}_${homeBannerText || ''}`;
+  const [homeAlertDismissed, setHomeAlertDismissed] = useState(() => Boolean(globalAnnouncementAlertDismissed));
 
-  // Reset dismissed state whenever a new title/text is configured or toggled from Office
+  // Reset dismissed state only if office controls configure a completely new announcement during this session
   useEffect(() => {
-    const currentAlertKey = `${homeBannerTitle || ''}_${homeBannerText || ''}`;
-    if (homeBannerEnabled && currentAlertKey && currentAlertKey !== lastSeenHomeAlert) {
-      setHomeAlertDismissed(false);
-      setLastSeenHomeAlert(currentAlertKey);
+    if (homeBannerEnabled && currentAlertKey) {
+      if (globalDismissedAlertKey && globalDismissedAlertKey !== currentAlertKey) {
+        globalAnnouncementAlertDismissed = false;
+        globalDismissedAlertKey = '';
+        setHomeAlertDismissed(false);
+      }
     }
-  }, [homeBannerEnabled, homeBannerTitle, homeBannerText, lastSeenHomeAlert]);
+  }, [homeBannerEnabled, currentAlertKey]);
+
+  const handleDismissHomeAlert = () => {
+    globalAnnouncementAlertDismissed = true;
+    globalDismissedAlertKey = currentAlertKey;
+    setHomeAlertDismissed(true);
+  };
 
   // Priority flag: when announcement alert is active, it must show FIRST before location modals
   const isAnnouncementAlertActive = Boolean(
     homeBannerEnabled &&
     !homeAlertDismissed &&
+    !globalAnnouncementAlertDismissed &&
     (homeBannerTitle || homeBannerText) &&
     !maintenanceMode
   );
@@ -2010,7 +2023,7 @@ export default function RestaurantListScreen() {
         transparent
         visible={isAnnouncementAlertActive}
         animationType="fade"
-        onRequestClose={() => setHomeAlertDismissed(true)}
+        onRequestClose={handleDismissHomeAlert}
       >
         <View style={styles.modalOverlay}>
           <View
@@ -2040,7 +2053,7 @@ export default function RestaurantListScreen() {
                 justifyContent: 'center',
                 zIndex: 10,
               }}
-              onPress={() => setHomeAlertDismissed(true)}
+              onPress={handleDismissHomeAlert}
               activeOpacity={0.7}
             >
               <Feather name="x" size={17} color="#1E3545" />
@@ -2105,7 +2118,7 @@ export default function RestaurantListScreen() {
                   width: '100%',
                 },
               ]}
-              onPress={() => setHomeAlertDismissed(true)}
+              onPress={handleDismissHomeAlert}
               activeOpacity={0.85}
             >
               <Text style={[styles.primaryButtonText, { fontSize: 15, fontWeight: '700' }]}>

@@ -363,6 +363,7 @@ export default function CartScreen() {
   const [confirmResult, setConfirmResult] = useState(null);
   const [otpLoading, setOtpLoading] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
+  const phoneVerifiedRef = useRef(false);
 
   useEffect(() => {
     let interval = null;
@@ -1072,6 +1073,34 @@ export default function CartScreen() {
     }, 500);
   };
 
+  // Auto-detect Android SMS Retriever verification in Cart
+  useEffect(() => {
+    if (!auth || typeof auth !== 'function') return;
+
+    const unsubscribe = auth().onAuthStateChanged(async (firebaseUser) => {
+      if (showPhoneOTPModal && firebaseUser && !phoneVerifiedRef.current) {
+        const cleanPhone = verificationPhone.trim().slice(-10);
+        const formattedPhone = `+91${cleanPhone}`;
+        if (
+          firebaseUser.phoneNumber &&
+          (firebaseUser.phoneNumber === formattedPhone || firebaseUser.phoneNumber.endsWith(cleanPhone))
+        ) {
+          console.log('[Cart Phone OTP] onAuthStateChanged auto-verified phone:', firebaseUser.phoneNumber);
+          phoneVerifiedRef.current = true;
+          try {
+            await saveVerifiedPhoneToBackend(cleanPhone, true);
+          } catch (e) {
+            console.error('[Cart Phone OTP] Auto-verify save error:', e);
+          }
+        }
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [showPhoneOTPModal, verificationPhone]);
+
   const handleSendOTP = async (isResend = false) => {
     if (!verificationPhone || verificationPhone.trim().length < 10) {
       showAlert('Invalid Number', 'Please enter a valid 10-digit mobile number.');
@@ -1098,6 +1127,15 @@ export default function CartScreen() {
 
       try {
         if (auth && typeof auth === 'function' && auth().signInWithPhoneNumber) {
+          // If a user was logged into Firebase (like Google sign-in), sign out first so phone auth is clean and conflict-free
+          if (auth().currentUser) {
+            try {
+              await auth().signOut();
+            } catch (soErr) {
+              console.warn('[Phone Auth] Pre-signout error:', soErr);
+            }
+          }
+          phoneVerifiedRef.current = false;
           const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
           setConfirmResult(confirmation);
           triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
@@ -1124,29 +1162,53 @@ export default function CartScreen() {
       return;
     }
 
-    if (!confirmResult) {
-      showAlert('Session Expired', 'Verification session expired. Please click Resend OTP.');
-      return;
-    }
+    if (phoneVerifiedRef.current) return;
 
+    const cleanPhone = verificationPhone.trim().slice(-10);
+    const formattedPhone = `+91${cleanPhone}`;
     setOtpLoading(true);
     let verified = false;
 
-    try {
-      console.log('[Phone Auth] Confirming OTP code:', otpCode);
-      await confirmResult.confirm(otpCode.trim());
-      console.log('[Phone Auth] Verification successful!');
+    // Check if Firebase already auto-verified this phone
+    const currentUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
+    if (
+      currentUser &&
+      currentUser.phoneNumber &&
+      (currentUser.phoneNumber === formattedPhone || currentUser.phoneNumber.endsWith(cleanPhone))
+    ) {
+      console.log('[Phone Auth] Phone already verified via Firebase auto-retrieval!');
       verified = true;
-    } catch (otpError) {
-      console.error('[Phone Auth] OTP verification error:', otpError);
-      showAlert('Verification Failed', 'The code you entered is invalid or expired. Please enter the exact 6-digit OTP received via SMS.');
+    } else if (confirmResult) {
+      try {
+        console.log('[Phone Auth] Confirming OTP code:', otpCode);
+        await confirmResult.confirm(otpCode.trim());
+        console.log('[Phone Auth] Verification successful!');
+        verified = true;
+      } catch (otpError) {
+        console.error('[Phone Auth] OTP verification error:', otpError);
+        const recheckUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
+        if (
+          recheckUser &&
+          recheckUser.phoneNumber &&
+          (recheckUser.phoneNumber === formattedPhone || recheckUser.phoneNumber.endsWith(cleanPhone))
+        ) {
+          console.log('[Phone Auth] Phone verified via Firebase auto-retrieval on background re-check!');
+          verified = true;
+        } else {
+          showAlert('Verification Failed', 'The code you entered is invalid or expired. Please enter the exact 6-digit OTP received via SMS.');
+          setOtpLoading(false);
+          return;
+        }
+      }
+    } else {
+      showAlert('Session Expired', 'Verification session expired. Please click Resend OTP.');
       setOtpLoading(false);
       return;
     }
 
     if (verified) {
+      phoneVerifiedRef.current = true;
       try {
-        const cleanPhone = verificationPhone.trim().slice(-10);
         await saveVerifiedPhoneToBackend(cleanPhone, true);
       } catch (dbError) {
         console.error('[Phone Auth] Backend database update error:', dbError);

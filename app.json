@@ -2,7 +2,7 @@
   "expo": {
     "name": "Leevon Delivery",
     "slug": "customerreactnative",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/App Icon.png",
     "notification": {
@@ -27,7 +27,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.leevon.delivery",
-      "versionCode": 3,
+      "versionCode": 4,
       "usesCleartextTraffic": true,
       "googleServicesFile": "./google-services.json",
       "permissions": [

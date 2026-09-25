@@ -81,12 +81,102 @@ export default function LoginScreen() {
   const [signupOtpError, setSignupOtpError] = useState('');
   const [signupResendTimer, setSignupResendTimer] = useState(0);
   const otpInputRef = useRef(null);
+  const signupCompletedRef = useRef(false);
 
   // Google Signup Terms & Conditions Modal States
   const [showGoogleTermsModal, setShowGoogleTermsModal] = useState(false);
   const [googleTermsAccepted, setGoogleTermsAccepted] = useState(false);
   const [pendingGoogleSession, setPendingGoogleSession] = useState(null);
   const [savingGoogleTerms, setSavingGoogleTerms] = useState(false);
+
+  const completeSignupRegistration = useCallback(async (phoneToRegister) => {
+    if (signupCompletedRef.current) return;
+    signupCompletedRef.current = true;
+    setSignupOtpLoading(true);
+
+    try {
+      console.log(`[Signup] Registering account in MongoDB at: ${API_URL}/signup`);
+      const response = await fetch(`${API_URL}/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: phoneToRegister,
+          password,
+          name: name.trim(),
+          email: email.trim(),
+          isPhoneVerified: true,
+          termsAccepted: true,
+          termsAcceptedAt: new Date().toISOString()
+        }),
+      });
+
+      const data = await response.json();
+      console.log('Signup response:', data);
+
+      if (response.ok && data.success) {
+        const user = data.user;
+        const logintime = String(Date.now());
+        const rawUserId = user._id || user.id || user.userId || '';
+
+        await AsyncStorage.setItem('userid', String(rawUserId));
+        await AsyncStorage.setItem('phone', String(user.phone || phoneToRegister));
+        await AsyncStorage.setItem('isPhoneVerified', 'true');
+        await AsyncStorage.setItem('name', String(user.name || name.trim()));
+        await AsyncStorage.setItem('email', String(user.email || email.trim()));
+        await AsyncStorage.setItem('logintime', logintime);
+        await AsyncStorage.setItem('loginType', 'phone');
+        await AsyncStorage.setItem('coins', String(user.coins ?? 0));
+        await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
+
+        setShowSignupOtpModal(false);
+        setPassword('');
+        setConfirmPassword('');
+        setName('');
+        setEmail('');
+        setAcceptedTerms(false);
+        setIsSignUp(false);
+
+        dispatch(resetProfile());
+        if (rawUserId) {
+          dispatch(fetchProfileData(String(rawUserId)));
+        }
+
+        router.replace('/restaurentlist');
+      } else {
+        signupCompletedRef.current = false;
+        setSignupOtpError(data.message || 'Signup failed. Please try again.');
+      }
+    } catch (apiError) {
+      console.error('[Signup] Backend registration error:', apiError);
+      signupCompletedRef.current = false;
+      setSignupOtpError('Could not complete registration on server. Please check your connection and try again.');
+    } finally {
+      setSignupOtpLoading(false);
+    }
+  }, [password, name, email, dispatch, router]);
+
+  // Listen for Firebase SMS Auto-Verification on Android (Instant Verification / SMS Retriever)
+  useEffect(() => {
+    if (!auth || typeof auth !== 'function') return;
+
+    const unsubscribe = auth().onAuthStateChanged(async (firebaseUser) => {
+      if (showSignupOtpModal && isSignUp && firebaseUser && !signupCompletedRef.current) {
+        const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
+        const formattedPhone = `+91${cleanPhone}`;
+        if (
+          firebaseUser.phoneNumber &&
+          (firebaseUser.phoneNumber === formattedPhone || firebaseUser.phoneNumber.endsWith(cleanPhone))
+        ) {
+          console.log('[Signup OTP] onAuthStateChanged: phone verified via Android SMS Retriever:', firebaseUser.phoneNumber);
+          await completeSignupRegistration(cleanPhone);
+        }
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [showSignupOtpModal, isSignUp, mobile, completeSignupRegistration]);
 
   useEffect(() => {
     let interval = null;
@@ -112,12 +202,19 @@ export default function LoginScreen() {
   const handleResendSignupOTP = async () => {
     if (signupResendTimer > 0) return;
     setSignupOtpError('');
+    setSignupOtp('');
     setSignupResendTimer(30);
+    signupCompletedRef.current = false;
     const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
     const formattedPhone = `+91${cleanPhone}`;
     console.log(`[Signup OTP] Resending Firebase SMS OTP for: ${formattedPhone}`);
     try {
       if (auth && typeof auth === 'function') {
+        if (auth().currentUser) {
+          try {
+            await auth().signOut();
+          } catch (e) {}
+        }
         const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
         setSignupConfirmResult(confirmation);
       } else {
@@ -590,6 +687,16 @@ export default function LoginScreen() {
 
       try {
         if (auth && typeof auth === 'function') {
+          // Clear any stale lingering user session before initiating fresh phone auth
+          if (auth().currentUser) {
+            try {
+              await auth().signOut();
+            } catch (soErr) {
+              console.warn('[Signup OTP] Pre-signout warning:', soErr);
+            }
+          }
+
+          signupCompletedRef.current = false;
           const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
           setSignupConfirmResult(confirmation);
           setSignupOtp('');
@@ -616,82 +723,73 @@ export default function LoginScreen() {
 
   const handleVerifySignupOTP = async () => {
     setSignupOtpError('');
-    if (!signupOtp || signupOtp.trim().length < 4) {
-      setSignupOtpError('Please enter a valid OTP code');
+    if (!signupOtp || signupOtp.trim().length < 6) {
+      setSignupOtpError('Please enter the complete 6-digit OTP code');
       return;
     }
 
-    if (!signupConfirmResult) {
-      setSignupOtpError('Verification session expired or invalid. Please click Resend OTP.');
-      return;
-    }
+    if (signupCompletedRef.current) return;
 
     const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
+    const formattedPhone = `+91${cleanPhone}`;
     setSignupOtpLoading(true);
 
     try {
-      console.log('[Signup OTP] Confirming Firebase OTP code:', signupOtp);
-      await signupConfirmResult.confirm(signupOtp.trim());
-      console.log('[Signup OTP] Phone number verified successfully via SMS!');
+      let isVerified = false;
 
-      console.log(`[Signup] Registering account in MongoDB at: ${API_URL}/signup`);
-      const response = await fetch(`${API_URL}/signup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: cleanPhone,
-          password,
-          name: name.trim(),
-          email: email.trim(),
-          isPhoneVerified: true,
-          termsAccepted: true,
-          termsAcceptedAt: new Date().toISOString()
-        }),
-      });
+      // 1. Check if Firebase already auto-verified this phone in background (Android SMS Retriever)
+      const currentUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
+      if (
+        currentUser &&
+        currentUser.phoneNumber &&
+        (currentUser.phoneNumber === formattedPhone || currentUser.phoneNumber.endsWith(cleanPhone))
+      ) {
+        console.log('[Signup OTP] Phone already verified via Firebase auto-retrieval!');
+        isVerified = true;
+      } else if (signupConfirmResult) {
+        try {
+          console.log('[Signup OTP] Confirming Firebase OTP code:', signupOtp);
+          await signupConfirmResult.confirm(signupOtp.trim());
+          console.log('[Signup OTP] Phone number verified successfully via SMS!');
+          isVerified = true;
+        } catch (confirmError) {
+          console.warn('[Signup OTP] confirm() threw error:', confirmError);
 
-      const data = await response.json();
-      console.log('Signup response:', data);
-
-      if (response.ok && data.success) {
-        const user = data.user;
-        const logintime = String(Date.now());
-        const rawUserId = user._id || user.id || user.userId || '';
-
-        await AsyncStorage.setItem('userid', String(rawUserId));
-        await AsyncStorage.setItem('phone', String(user.phone || cleanPhone));
-        await AsyncStorage.setItem('isPhoneVerified', 'true');
-        await AsyncStorage.setItem('name', String(user.name || name.trim()));
-        await AsyncStorage.setItem('email', String(user.email || email.trim()));
-        await AsyncStorage.setItem('logintime', logintime);
-        await AsyncStorage.setItem('loginType', 'phone');
-        await AsyncStorage.setItem('coins', String(user.coins ?? 0));
-        await AsyncStorage.setItem('dateOfBirth', String(user.dateOfBirth ?? ''));
-
-        setShowSignupOtpModal(false);
-        setPassword('');
-        setConfirmPassword('');
-        setName('');
-        setEmail('');
-        setAcceptedTerms(false);
-        setIsSignUp(false);
-
-        dispatch(resetProfile());
-        if (rawUserId) {
-          dispatch(fetchProfileData(String(rawUserId)));
+          // Check if auto-retrieval finished during confirmation
+          const recheckUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
+          if (
+            recheckUser &&
+            recheckUser.phoneNumber &&
+            (recheckUser.phoneNumber === formattedPhone || recheckUser.phoneNumber.endsWith(cleanPhone))
+          ) {
+            console.log('[Signup OTP] Auto-retrieval confirmed user on background re-check!');
+            isVerified = true;
+          } else {
+            throw confirmError;
+          }
         }
-
-        router.replace('/restaurentlist');
       } else {
-        setSignupOtpError(data.message || 'Signup failed. Please try again.');
+        setSignupOtpError('Verification session expired or invalid. Please click Resend OTP.');
+        setSignupOtpLoading(false);
+        return;
+      }
+
+      if (isVerified) {
+        await completeSignupRegistration(cleanPhone);
       }
     } catch (error) {
       console.error('[Signup OTP] Verification error:', error);
-      if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
+      if (error.code === 'auth/session-expired') {
+        setSignupOtpError('The verification code has expired. Please click Resend OTP to receive a new code.');
+      } else if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
         setSignupOtpError('Invalid OTP code. Please enter the exact 6-digit code received via SMS.');
+      } else if (error.code === 'auth/quota-exceeded') {
+        setSignupOtpError('SMS quota exceeded. Please try again later.');
+      } else if (error.code === 'auth/too-many-requests') {
+        setSignupOtpError('Too many attempts. Please wait a few moments before trying again.');
       } else {
         setSignupOtpError(error.message || 'Failed to verify OTP or complete registration.');
       }
-    } finally {
       setSignupOtpLoading(false);
     }
   };
@@ -726,9 +824,18 @@ export default function LoginScreen() {
       console.log(`[Forgot Password] Triggering Firebase OTP for: ${formattedPhone}`);
       
       try {
-        const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
-        setForgotPasswordConfirmResult(confirmation);
-        setForgotPasswordStep(2);
+        if (auth && typeof auth === 'function') {
+          if (auth().currentUser) {
+            try {
+              await auth().signOut();
+            } catch (soErr) {}
+          }
+          const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+          setForgotPasswordConfirmResult(confirmation);
+          setForgotPasswordStep(2);
+        } else {
+          throw new Error('Firebase Auth service unavailable');
+        }
       } catch (otpErr) {
         console.error('[Forgot Password] Firebase SMS OTP failed:', otpErr);
         setForgotPasswordConfirmResult(null);
@@ -766,39 +873,72 @@ export default function LoginScreen() {
 
     setForgotPasswordLoading(true);
     try {
-      console.log('[Forgot Password] Confirming Firebase OTP code:', forgotPasswordOtp);
-      await forgotPasswordConfirmResult.confirm(forgotPasswordOtp.trim());
-      console.log('[Forgot Password] Firebase OTP verified successfully!');
+      let isVerified = false;
+      const cleanPhone = forgotPasswordPhone.trim().slice(-10);
+      const formattedPhone = `+91${cleanPhone}`;
+      const currentUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
 
-      console.log('[Forgot Password] Resetting password in backend...');
-      const response = await fetch(`${API_URL}/forgot-password/reset-password`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          phone: forgotPasswordPhone.trim(),
-          newPassword: forgotPasswordNewPassword,
-        }),
-      });
-
-      const data = await response.json();
-      if (response.ok && data.success) {
-        setShowForgotPasswordModal(false);
-        setForgotPasswordPhone('');
-        setForgotPasswordOtp('');
-        setForgotPasswordConfirmResult(null);
-        setForgotPasswordNewPassword('');
-        setForgotPasswordConfirmPassword('');
-        setForgotPasswordStep(1);
-        setErrorMessage('Password reset successfully! Please login with your new password.');
-        setShowErrorModal(true);
+      if (
+        currentUser &&
+        currentUser.phoneNumber &&
+        (currentUser.phoneNumber === formattedPhone || currentUser.phoneNumber.endsWith(cleanPhone))
+      ) {
+        console.log('[Forgot Password] Phone already verified via Firebase auto-retrieval!');
+        isVerified = true;
       } else {
-        setForgotPasswordError(data.message || 'Password reset failed.');
+        try {
+          console.log('[Forgot Password] Confirming Firebase OTP code:', forgotPasswordOtp);
+          await forgotPasswordConfirmResult.confirm(forgotPasswordOtp.trim());
+          console.log('[Forgot Password] Firebase OTP verified successfully!');
+          isVerified = true;
+        } catch (confirmErr) {
+          const recheckUser = (auth && typeof auth === 'function') ? auth().currentUser : null;
+          if (
+            recheckUser &&
+            recheckUser.phoneNumber &&
+            (recheckUser.phoneNumber === formattedPhone || recheckUser.phoneNumber.endsWith(cleanPhone))
+          ) {
+            console.log('[Forgot Password] Auto-retrieval verified phone on background recheck!');
+            isVerified = true;
+          } else {
+            throw confirmErr;
+          }
+        }
+      }
+
+      if (isVerified) {
+        console.log('[Forgot Password] Resetting password in backend...');
+        const response = await fetch(`${API_URL}/forgot-password/reset-password`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            phone: forgotPasswordPhone.trim(),
+            newPassword: forgotPasswordNewPassword,
+          }),
+        });
+
+        const data = await response.json();
+        if (response.ok && data.success) {
+          setShowForgotPasswordModal(false);
+          setForgotPasswordPhone('');
+          setForgotPasswordOtp('');
+          setForgotPasswordConfirmResult(null);
+          setForgotPasswordNewPassword('');
+          setForgotPasswordConfirmPassword('');
+          setForgotPasswordStep(1);
+          setErrorMessage('Password reset successfully! Please login with your new password.');
+          setShowErrorModal(true);
+        } else {
+          setForgotPasswordError(data.message || 'Password reset failed.');
+        }
       }
     } catch (error) {
       console.error('[Forgot Password] Reset error:', error);
-      if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
+      if (error.code === 'auth/session-expired') {
+        setForgotPasswordError('The verification code has expired. Please request a new OTP.');
+      } else if (error.code === 'auth/invalid-verification-code' || error.code === 'auth/invalid-code') {
         setForgotPasswordError('Invalid OTP code. Please check the code received via SMS and try again.');
       } else {
         setForgotPasswordError(error.message || 'Failed to verify OTP or reset password. Please try again.');
@@ -814,6 +954,7 @@ export default function LoginScreen() {
     setShowSignupOtpModal(false);
     setSignupOtp('');
     setSignupOtpError('');
+    signupCompletedRef.current = false;
   }, []);
 
   const handleCloseForgotPasswordModal = useCallback(() => {
@@ -1071,14 +1212,17 @@ export default function LoginScreen() {
               style={[
                 styles.otpVerifyButton,
                 styles.shadow,
-                (!signupOtp || signupOtp.length < 4) && { opacity: 0.7 }
+                (!signupOtp || signupOtp.length < 6) && !signupOtpLoading && styles.otpDisabledButton
               ]}
               onPress={handleVerifySignupOTP}
-              disabled={signupOtpLoading}
+              disabled={signupOtpLoading || (!signupOtp || signupOtp.length < 6)}
               activeOpacity={0.85}
             >
               {signupOtpLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <View style={styles.otpLoadingRow}>
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                  <Text style={styles.otpVerifyButtonText}>Verifying & Creating...</Text>
+                </View>
               ) : (
                 <Text style={styles.otpVerifyButtonText}>Create Account</Text>
               )}
