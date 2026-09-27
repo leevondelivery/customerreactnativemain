@@ -38,6 +38,7 @@ import { checkLocationAndCalculateDistances, setSelectedSavedAddressId, setSaved
 import { fetchAllRestaurantMenus, fetchRestaurantMenu, fetchRestaurants, loadCachedRestaurants, updateRestaurantStatuses } from '../../store/restaurantsSlice';
 import { styles } from '../../styles/restaurentlist.styles';
 import { useTabBar } from '../_layout';
+import { saveRestaurantCouponToStorage } from '../../utils/couponStorage';
 
 const { width: screenWidth } = Dimensions.get('window');
 const CAROUSEL_WIDTH = Math.min(screenWidth, 500) - 32;
@@ -656,6 +657,9 @@ export default function RestaurantListScreen() {
       triggerToast('THIS RESTAURANT IS CURRENTLY CLOSED!', 'warning');
       return;
     }
+    // Save couponCode, offerType, and offerValue to AsyncStorage if available; otherwise clear
+    saveRestaurantCouponToStorage(item);
+
     const targetId = item._id || item.restId;
     if (targetId) {
       dispatch(fetchRestaurantMenu(targetId));

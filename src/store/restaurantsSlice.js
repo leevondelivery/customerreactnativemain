@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 import { API_URL } from '../config';
+import { saveRestaurantCouponToStorage } from '../utils/couponStorage';
 
 const sortCarouselItems = (arr) => {
   if (!Array.isArray(arr)) return [];
@@ -297,6 +298,12 @@ export const fetchRestaurantMenu = createAsyncThunk(
             AsyncStorage.setItem('cached_offers_data', JSON.stringify(updatedOffers)).catch(() => {});
           }
         } catch (_e) {}
+      }
+
+      if (rest?.coupons && (Array.isArray(rest.coupons) ? rest.coupons.length > 0 : Boolean(rest.coupons.couponCode))) {
+        saveRestaurantCouponToStorage(rest.coupons);
+      } else if (offers?.coupons && (Array.isArray(offers.coupons) ? offers.coupons.length > 0 : Boolean(offers.coupons.couponCode))) {
+        saveRestaurantCouponToStorage(offers.coupons);
       }
 
       return { restaurantId, rest, items, offers };

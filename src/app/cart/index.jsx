@@ -26,6 +26,7 @@ import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { checkLocationAndCalculateDistances } from '../../store/locationSlice';
 import { fetchControlsStatus } from '../../store/controlsSlice';
+import { clearRestaurantCoupon } from '../../utils/couponStorage';
 // Lazily require Firebase Auth & Firestore to avoid crash when native module is not linked
 let auth = null;
 let firestore = null;
@@ -155,6 +156,10 @@ export default function CartScreen() {
   const confirmPayDisabledMessage = useSelector((state) => state.controls.confirmPayDisabledMessage);
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
 
+  const [cartItems, setCartItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isGstExpanded, setIsGstExpanded] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       dispatch(fetchControlsStatus());
@@ -182,9 +187,6 @@ export default function CartScreen() {
       return () => subscription.remove();
     }, [router, cartItems])
   );
-  const [cartItems, setCartItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [isGstExpanded, setIsGstExpanded] = useState(false);
 
   // 1+1 BOGO / Tiered Restaurant Discount Celebration Animation State
   const [celebrationState, setCelebrationState] = useState({ visible: false, offerDetails: null });
@@ -211,171 +213,6 @@ export default function CartScreen() {
   const [showPaymentChoiceModal, setShowPaymentChoiceModal] = useState(false);
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   // confirmPayEnabled comes from Redux (polled every 5s in _layout.jsx)
-
-  const targetRestId = cartItems[0]?.restId || '';
-  const targetRestaurant = (restaurants || []).find(r => String(r.restId || r.id || '') === String(targetRestId));
-  const isPackagingActive = Boolean(
-    restaurantOffers?.isPackagingFeeActive !== undefined
-      ? (restaurantOffers.isPackagingFeeActive === true || restaurantOffers.isPackagingFeeActive === 'true' || restaurantOffers.isPackagingFeeActive === 1)
-      : (targetRestaurant?.isPackagingFeeActive === true || targetRestaurant?.isPackagingFeeActive === 'true' || targetRestaurant?.isPackagingFeeActive === 1)
-  );
-  const rawPackagingFee = restaurantOffers?.packagingFee !== undefined
-    ? Number(restaurantOffers.packagingFee)
-    : Number(targetRestaurant?.packagingFee || 0);
-  const packagingFee = (isPackagingActive && rawPackagingFee > 0)
-    ? rawPackagingFee
-    : 0;
-  const distanceStr = roadDistances[targetRestId] || '';
-  const isDistanceCalculated = Boolean(distanceStr) && distanceStr.trim() !== '' && !isNaN(parseFloat(distanceStr));
-
-  // Location & Delivery Charge check: Delivery charge MUST be 100% calculated, flat/street filled, and location verified
-  const isLocationVerified = isDistanceCalculated && Boolean(flatNo.trim()) && Boolean(street.trim()) && (selectedSavedAddressId ? true : (locationStatus === 'inside' && Boolean(userLocation)));
-  const [feesConfig, setFeesConfig] = useState({
-    deliveryFeeBase: 20,
-    baseKmThreshold: 3,
-    deliveryFeePerKm: 10,
-    surgeFee: 0,
-    isSurgeActive: false
-  });
-
-  // Coupon states
-  const [couponInput, setCouponInput] = useState('');
-  const [appliedCoupon, setAppliedCoupon] = useState(null); // { couponCode, influencerName, discountType, discountValue, discountAmount }
-  const [couponError, setCouponError] = useState('');
-  const [isValidatingCoupon, setIsValidatingCoupon] = useState(false);
-
-  const handleApplyCoupon = async () => {
-    if (!couponInput.trim()) {
-      setCouponError('Please enter a coupon code.');
-      return;
-    }
-    setIsValidatingCoupon(true);
-    setCouponError('');
-    try {
-      const activeUid = userid || (await AsyncStorage.getItem('userid')) || (await AsyncStorage.getItem('user_id'));
-      const activePhone = await AsyncStorage.getItem('phone');
-      const response = await fetch(`${API_URL}/api/coupon/validate`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          couponCode: couponInput.trim(),
-          cartTotal: calculateTotal(),
-          userId: activeUid,
-          userPhone: activePhone,
-        }),
-      });
-      const data = await response.json();
-      if (data.success) {
-        const minOrderRaw =
-          data.minOrderAmount ??
-          data.minOrderValue ??
-          data.minOrder ??
-          data.min_order_amount ??
-          data.min_order_value ??
-          data.minimumOrderValue ??
-          data.minimumOrderAmount ??
-          data.minPurchase ??
-          data.minAmount ??
-          data.coupon?.minOrderAmount ??
-          data.coupon?.minOrderValue ??
-          data.coupon?.minOrder ??
-          data.coupon?.min_order_amount ??
-          data.coupon?.min_order_value ??
-          data.couponDetails?.minOrderValue ??
-          data.couponDetails?.minOrderAmount ??
-          data.data?.minOrderValue ??
-          data.data?.minOrderAmount ??
-          0;
-        const minOrder = Number(minOrderRaw || 0);
-
-        const currentSub = calculateTotal();
-        if (minOrder > 0 && currentSub < minOrder) {
-          setCouponError(`Minimum order value of ₹${minOrder} required to apply this coupon.`);
-          setAppliedCoupon(null);
-          await AsyncStorage.removeItem('applied_coupon');
-          return;
-        }
-
-        const couponObj = {
-          couponCode: data.couponCode || data.coupon?.couponCode || data.code || couponInput.trim(),
-          influencerName: data.influencerName || data.coupon?.influencerName || '',
-          discountType: data.discountType || data.coupon?.discountType || 'flat',
-          discountValue: Number(data.discountValue ?? data.coupon?.discountValue ?? 0),
-          discountAmount: Number(data.discountAmount ?? data.coupon?.discountAmount ?? 0),
-          minOrderAmount: minOrder,
-          minOrderValue: minOrder,
-        };
-        setAppliedCoupon(couponObj);
-        await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
-        triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
-        setCelebrationState({
-          visible: true,
-          offerDetails: {
-            type: 'coupon',
-            customTitle: 'COUPON APPLIED!',
-            customSubtext: `Saved with coupon ${couponObj.couponCode}!`,
-            triggerId: Date.now(),
-          },
-        });
-      } else {
-        setCouponError(data.message || 'Invalid coupon code.');
-        setAppliedCoupon(null);
-        await AsyncStorage.removeItem('applied_coupon');
-      }
-    } catch (error) {
-      console.error('Error validating coupon:', error);
-      setCouponError('Failed to validate coupon. Please try again.');
-      setAppliedCoupon(null);
-    } finally {
-      setIsValidatingCoupon(false);
-    }
-  };
-
-  // Automatically remove coupon and discount if cart total drops below minimum order requirement
-  useEffect(() => {
-    if (appliedCoupon && cartItems.length > 0) {
-      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
-      if (minOrder > 0) {
-        const currentSub = calculateTotal();
-        if (currentSub < minOrder) {
-          setAppliedCoupon(null);
-          setCouponError(`Coupon removed: Minimum order value of ₹${minOrder} required.`);
-          AsyncStorage.removeItem('applied_coupon');
-        }
-      }
-    }
-  }, [cartItems, appliedCoupon]);
-
-  const handleRemoveCoupon = async () => {
-    setAppliedCoupon(null);
-    setCouponInput('');
-    setCouponError('');
-    await AsyncStorage.removeItem('applied_coupon');
-    triggerToast('Coupon removed.', 'warning');
-  };
-
-  // Phone OTP Verification States
-  const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
-  const [verificationPhone, setVerificationPhone] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [confirmResult, setConfirmResult] = useState(null);
-  const [otpLoading, setOtpLoading] = useState(false);
-  const [resendTimer, setResendTimer] = useState(0);
-  const phoneVerifiedRef = useRef(false);
-
-  useEffect(() => {
-    let interval = null;
-    if (resendTimer > 0) {
-      interval = setInterval(() => {
-        setResendTimer(prev => prev - 1);
-      }, 1000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [resendTimer]);
 
   const showAlert = (title, message, onOk = null) => {
     setCustomAlert({
@@ -439,6 +276,263 @@ export default function CartScreen() {
       }
     };
   }, []);
+
+  const targetRestId = cartItems[0]?.restId || '';
+  const targetRestaurant = (restaurants || []).find(r => String(r.restId || r.id || '') === String(targetRestId));
+  const isPackagingActive = Boolean(
+    restaurantOffers?.isPackagingFeeActive !== undefined
+      ? (restaurantOffers.isPackagingFeeActive === true || restaurantOffers.isPackagingFeeActive === 'true' || restaurantOffers.isPackagingFeeActive === 1)
+      : (targetRestaurant?.isPackagingFeeActive === true || targetRestaurant?.isPackagingFeeActive === 'true' || targetRestaurant?.isPackagingFeeActive === 1)
+  );
+  const rawPackagingFee = restaurantOffers?.packagingFee !== undefined
+    ? Number(restaurantOffers.packagingFee)
+    : Number(targetRestaurant?.packagingFee || 0);
+  const packagingFee = (isPackagingActive && rawPackagingFee > 0)
+    ? rawPackagingFee
+    : 0;
+  const distanceStr = roadDistances[targetRestId] || '';
+  const isDistanceCalculated = Boolean(distanceStr) && distanceStr.trim() !== '' && !isNaN(parseFloat(distanceStr));
+
+  // Location & Delivery Charge check: Delivery charge MUST be 100% calculated, flat/street filled, and location verified
+  const isLocationVerified = isDistanceCalculated && Boolean(flatNo.trim()) && Boolean(street.trim()) && (selectedSavedAddressId ? true : (locationStatus === 'inside' && Boolean(userLocation)));
+  const [feesConfig, setFeesConfig] = useState({
+    deliveryFeeBase: 20,
+    baseKmThreshold: 3,
+    deliveryFeePerKm: 10,
+    surgeFee: 0,
+    isSurgeActive: false
+  });
+
+  const calculateTotal = useCallback(() => {
+    return cartItems.reduce((sum, item) => {
+      const itemCat = String(item.category || '').trim().toLowerCase();
+      const matchedCatDiscount = (restaurantOffers?.categoryDiscounts || []).find((d) => {
+        if (d.isActive === false) return false;
+        const targetCat = String(d.category || '').trim().toLowerCase();
+        return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
+      });
+      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : 0;
+      const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+      const offerPercent = Math.max(directOffer, catDiscountPercent);
+      const price = (offerPercent > 0 && offerPercent <= 100)
+        ? (item.price - (item.price * (offerPercent / 100)))
+        : (item.price || 0);
+      return sum + price * (item.quantity || 0);
+    }, 0);
+  }, [cartItems, restaurantOffers]);
+
+  // Coupon states
+  const [couponInput, setCouponInput] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState(null); // { couponCode, influencerName, discountType, discountValue, discountAmount }
+  const [couponError, setCouponError] = useState('');
+  const [isValidatingCoupon, setIsValidatingCoupon] = useState(false);
+  const [availableRestaurantCoupon, setAvailableRestaurantCoupon] = useState(null);
+
+  // Directly apply a restaurant coupon (from available restaurant offers / AsyncStorage)
+  const applyCouponDirectly = useCallback(async (couponToApply) => {
+    if (!couponToApply || !couponToApply.couponCode) return;
+    setIsValidatingCoupon(true);
+    setCouponError('');
+
+    try {
+      const currentSub = calculateTotal();
+      const rawType = String(couponToApply.offerType || '').toLowerCase();
+      const isPercentage = rawType === 'percentage' || rawType.includes('percent') || rawType === '%';
+      const numVal = parseFloat(couponToApply.offerValue) || 0;
+
+      let calculatedDiscount = 0;
+      if (isPercentage) {
+        calculatedDiscount = currentSub * (numVal / 100);
+      } else {
+        calculatedDiscount = Math.min(numVal, currentSub);
+      }
+      calculatedDiscount = Math.round(calculatedDiscount * 100) / 100;
+
+      const couponObj = {
+        couponCode: String(couponToApply.couponCode).trim().toUpperCase(),
+        influencerName: cartItems[0]?.restaurantName || 'Restaurant Special',
+        discountType: isPercentage ? 'percentage' : 'flat',
+        discountValue: numVal,
+        offerType: isPercentage ? 'percentage' : (rawType || 'flat'),
+        offerValue: numVal,
+        discountAmount: calculatedDiscount,
+        minOrderAmount: 0,
+        minOrderValue: 0,
+      };
+
+      setAppliedCoupon(couponObj);
+      await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
+      triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
+      setCelebrationState({
+        visible: true,
+        offerDetails: {
+          type: 'coupon',
+          customTitle: 'COUPON APPLIED!',
+          customSubtext: `Saved ₹${calculatedDiscount.toFixed(2)} with coupon ${couponObj.couponCode}!`,
+          triggerId: Date.now(),
+        },
+      });
+    } catch (err) {
+      console.warn('[Cart] Error applying coupon directly:', err);
+      setCouponError('Failed to apply coupon.');
+    } finally {
+      setIsValidatingCoupon(false);
+    }
+  }, [calculateTotal, cartItems, triggerToast]);
+
+  const handleApplyCoupon = async () => {
+    const entered = couponInput.trim().toUpperCase();
+    if (!entered) {
+      setCouponError('Please enter a coupon code.');
+      return;
+    }
+    // If entered coupon code matches available restaurant coupon, apply directly!
+    if (availableRestaurantCoupon && entered === String(availableRestaurantCoupon.couponCode).trim().toUpperCase()) {
+      applyCouponDirectly(availableRestaurantCoupon);
+      return;
+    }
+    setIsValidatingCoupon(true);
+    setCouponError('');
+    try {
+      const activeUid = userid || (await AsyncStorage.getItem('userid')) || (await AsyncStorage.getItem('user_id'));
+      const activePhone = await AsyncStorage.getItem('phone');
+      const response = await fetch(`${API_URL}/api/coupon/validate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          couponCode: couponInput.trim(),
+          cartTotal: calculateTotal(),
+          userId: activeUid,
+          userPhone: activePhone,
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        const minOrderRaw =
+          data.minOrderAmount ??
+          data.minOrderValue ??
+          data.minOrder ??
+          data.min_order_amount ??
+          data.min_order_value ??
+          data.minimumOrderValue ??
+          data.minimumOrderAmount ??
+          data.minPurchase ??
+          data.minAmount ??
+          data.coupon?.minOrderAmount ??
+          data.coupon?.minOrderValue ??
+          data.coupon?.minOrder ??
+          data.coupon?.min_order_amount ??
+          data.coupon?.min_order_value ??
+          data.couponDetails?.minOrderValue ??
+          data.couponDetails?.minOrderAmount ??
+          data.data?.minOrderValue ??
+          data.data?.minOrderAmount ??
+          0;
+        const minOrder = Number(minOrderRaw || 0);
+
+        const currentSub = calculateTotal();
+        if (minOrder > 0 && currentSub < minOrder) {
+          setCouponError(`Minimum order value of ₹${minOrder} required to apply this coupon.`);
+          setAppliedCoupon(null);
+          await AsyncStorage.removeItem('applied_coupon');
+          return;
+        }
+
+        const cType = data.discountType || data.offerType || data.coupon?.discountType || data.coupon?.offerType || 'flat';
+        const cVal = Number(data.discountValue ?? data.offerValue ?? data.coupon?.discountValue ?? data.coupon?.offerValue ?? 0);
+        const couponObj = {
+          couponCode: data.couponCode || data.coupon?.couponCode || data.code || couponInput.trim(),
+          influencerName: data.influencerName || data.coupon?.influencerName || '',
+          discountType: cType,
+          discountValue: cVal,
+          offerType: data.offerType || cType,
+          offerValue: data.offerValue !== undefined ? Number(data.offerValue) : cVal,
+          discountAmount: Number(data.discountAmount ?? data.coupon?.discountAmount ?? 0),
+          minOrderAmount: minOrder,
+          minOrderValue: minOrder,
+        };
+        setAppliedCoupon(couponObj);
+        await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
+        triggerToast('COUPON APPLIED SUCCESSFULLY!', 'success');
+        setCelebrationState({
+          visible: true,
+          offerDetails: {
+            type: 'coupon',
+            customTitle: 'COUPON APPLIED!',
+            customSubtext: `Saved with coupon ${couponObj.couponCode}!`,
+            triggerId: Date.now(),
+          },
+        });
+      } else {
+        setCouponError(data.message || 'Invalid coupon code.');
+        setAppliedCoupon(null);
+        await AsyncStorage.removeItem('applied_coupon');
+      }
+    } catch (error) {
+      console.error('Error validating coupon:', error);
+      setCouponError('Failed to validate coupon. Please try again.');
+      setAppliedCoupon(null);
+    } finally {
+      setIsValidatingCoupon(false);
+    }
+  };
+
+  // Automatically remove coupon and discount if cart is empty or total drops below minimum order requirement
+  useEffect(() => {
+    if (cartItems.length === 0) {
+      if (appliedCoupon || availableRestaurantCoupon) {
+        setAppliedCoupon(null);
+        setAvailableRestaurantCoupon(null);
+        setCouponInput('');
+        setCouponError('');
+        AsyncStorage.removeItem('applied_coupon').catch(() => {});
+        clearRestaurantCoupon().catch(() => {});
+      }
+      return;
+    }
+    if (appliedCoupon) {
+      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
+      if (minOrder > 0) {
+        const currentSub = calculateTotal();
+        if (currentSub < minOrder) {
+          setAppliedCoupon(null);
+          setCouponError(`Coupon removed: Minimum order value of ₹${minOrder} required.`);
+          AsyncStorage.removeItem('applied_coupon');
+        }
+      }
+    }
+  }, [cartItems, appliedCoupon, availableRestaurantCoupon, calculateTotal]);
+
+  const handleRemoveCoupon = async () => {
+    setAppliedCoupon(null);
+    setCouponInput('');
+    setCouponError('');
+    await AsyncStorage.removeItem('applied_coupon');
+    triggerToast('Coupon removed.', 'warning');
+  };
+
+  // Phone OTP Verification States
+  const [showPhoneOTPModal, setShowPhoneOTPModal] = useState(false);
+  const [verificationPhone, setVerificationPhone] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [confirmResult, setConfirmResult] = useState(null);
+  const [otpLoading, setOtpLoading] = useState(false);
+  const [resendTimer, setResendTimer] = useState(0);
+  const phoneVerifiedRef = useRef(false);
+
+  useEffect(() => {
+    let interval = null;
+    if (resendTimer > 0) {
+      interval = setInterval(() => {
+        setResendTimer(prev => prev - 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [resendTimer]);
 
   // Floating animation for empty cart icon
   const [floatAnim] = useState(() => new Animated.Value(0));
@@ -554,6 +648,19 @@ export default function CartScreen() {
         } catch (e) {
           setAppliedCoupon(null);
         }
+      } else {
+        try {
+          const storedCode = await AsyncStorage.getItem('couponCode').then((v) => v || AsyncStorage.getItem('coupencode'));
+          const storedType = await AsyncStorage.getItem('offerType').then((v) => v || AsyncStorage.getItem('offertype'));
+          const storedVal = await AsyncStorage.getItem('offerValue').then((v) => v || AsyncStorage.getItem('offervalue'));
+          if (storedCode) {
+            setAvailableRestaurantCoupon({
+              couponCode: storedCode,
+              offerType: (storedType || 'percentage').toLowerCase(),
+              offerValue: storedVal || '0',
+            });
+          }
+        } catch (_e) {}
       }
 
       // Load Restaurant Offers (Cached & Zero-Flicker)
@@ -626,6 +733,56 @@ export default function CartScreen() {
       setLoading(false);
     }
   }, []);
+
+  // Synchronize available restaurant coupon from restaurantOffers, restaurants slice, or AsyncStorage
+  useEffect(() => {
+    if (cartItems.length === 0) {
+      setAvailableRestaurantCoupon(null);
+      return;
+    }
+    const cartRestId = cartItems[0]?.restId || cartItems[0]?.restaurantId || '';
+
+    // 1. Check from restaurantOffers first
+    const offersCoupons = restaurantOffers?.coupons;
+    const offersCoupon = Array.isArray(offersCoupons) ? offersCoupons[0] : offersCoupons;
+    if (offersCoupon && (offersCoupon.couponCode || offersCoupon.coupencode)) {
+      setAvailableRestaurantCoupon({
+        couponCode: offersCoupon.couponCode || offersCoupon.coupencode,
+        offerType: (offersCoupon.offerType || offersCoupon.offertype || 'percentage').toLowerCase(),
+        offerValue: String(offersCoupon.offerValue !== undefined ? offersCoupon.offerValue : (offersCoupon.offervalue ?? 0)),
+      });
+      return;
+    }
+
+    // 2. Check from restaurants slice in Redux
+    const matchedRest = (restaurants || []).find((r) =>
+      cartRestId && (String(r.restId) === String(cartRestId) || String(r._id) === String(cartRestId))
+    );
+    const restCoupons = matchedRest?.coupons;
+    const restCoupon = Array.isArray(restCoupons) ? restCoupons[0] : restCoupons;
+    if (restCoupon && (restCoupon.couponCode || restCoupon.coupencode)) {
+      setAvailableRestaurantCoupon({
+        couponCode: restCoupon.couponCode || restCoupon.coupencode,
+        offerType: (restCoupon.offerType || restCoupon.offertype || 'percentage').toLowerCase(),
+        offerValue: String(restCoupon.offerValue !== undefined ? restCoupon.offerValue : (restCoupon.offervalue ?? 0)),
+      });
+      return;
+    }
+
+    // 3. Fallback: check AsyncStorage
+    AsyncStorage.getItem('couponCode').then(async (code) => {
+      const cCode = code || (await AsyncStorage.getItem('coupencode'));
+      if (cCode) {
+        const cType = (await AsyncStorage.getItem('offerType')) || (await AsyncStorage.getItem('offertype')) || 'percentage';
+        const cVal = (await AsyncStorage.getItem('offerValue')) || (await AsyncStorage.getItem('offervalue')) || '0';
+        setAvailableRestaurantCoupon({
+          couponCode: cCode,
+          offerType: cType.toLowerCase(),
+          offerValue: cVal,
+        });
+      }
+    }).catch(() => {});
+  }, [cartItems, restaurantOffers, restaurants]);
 
   const fetchSavedAddresses = useCallback(async (uid) => {
     const targetUid = uid || userid;
@@ -769,6 +926,12 @@ export default function CartScreen() {
       if (updated.length === 0) {
         lastCelebratedDiscountKey = null;
         await AsyncStorage.removeItem('last_celebrated_discount_key').catch(() => {});
+        await AsyncStorage.removeItem('applied_coupon').catch(() => {});
+        await clearRestaurantCoupon().catch(() => {});
+        setAppliedCoupon(null);
+        setAvailableRestaurantCoupon(null);
+        setCouponInput('');
+        setCouponError('');
       }
       setCartItems(updated);
       await AsyncStorage.setItem('cart', JSON.stringify(updated));
@@ -782,6 +945,12 @@ export default function CartScreen() {
       lastCelebratedDiscountKey = null;
       await AsyncStorage.removeItem('last_celebrated_discount_key').catch(() => {});
       await AsyncStorage.removeItem('cart');
+      await AsyncStorage.removeItem('applied_coupon').catch(() => {});
+      await clearRestaurantCoupon().catch(() => {});
+      setAppliedCoupon(null);
+      setAvailableRestaurantCoupon(null);
+      setCouponInput('');
+      setCouponError('');
       setCartItems([]);
     } catch (error) {
       console.error('Error clearing cart:', error);
@@ -1695,11 +1864,19 @@ export default function CartScreen() {
         surgeFee: surgeFee,
         couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
         influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+        offerType: appliedCoupon ? (appliedCoupon.offerType || appliedCoupon.discountType || null) : null,
+        offerValue: appliedCoupon ? (appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null)) : null,
         discountAmount: totalDiscount,
         couponDiscount: couponDiscount,
         tieredDiscount: tieredDiscount,
         tieredDiscountLabel: tieredDiscountLabel,
         totalSavings: totalDiscount,
+        offerDetails: appliedCoupon ? {
+          couponCode: appliedCoupon.couponCode,
+          offerType: appliedCoupon.offerType || appliedCoupon.discountType || null,
+          offerValue: appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null),
+          discountAmount: couponDiscount || totalDiscount,
+        } : null,
         paymentMethod: 'UPI On Delivery',
         paymentStatus: 'Pending',
       };
@@ -1898,11 +2075,19 @@ export default function CartScreen() {
                   surgeFee: surgeFee,
                   couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                   influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                  offerType: appliedCoupon ? (appliedCoupon.offerType || appliedCoupon.discountType || null) : null,
+                  offerValue: appliedCoupon ? (appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null)) : null,
                   discountAmount: totalDiscount,
                   couponDiscount: couponDiscount,
                   tieredDiscount: tieredDiscount,
                   tieredDiscountLabel: tieredDiscountLabel,
                   totalSavings: totalDiscount,
+                  offerDetails: appliedCoupon ? {
+                    couponCode: appliedCoupon.couponCode,
+                    offerType: appliedCoupon.offerType || appliedCoupon.discountType || null,
+                    offerValue: appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null),
+                    discountAmount: couponDiscount || totalDiscount,
+                  } : null,
                 }),
               });
 
@@ -2015,11 +2200,19 @@ export default function CartScreen() {
                     surgeFee: surgeFee,
                     couponCode: appliedCoupon ? appliedCoupon.couponCode : null,
                     influencerName: appliedCoupon ? appliedCoupon.influencerName : null,
+                    offerType: appliedCoupon ? (appliedCoupon.offerType || appliedCoupon.discountType || null) : null,
+                    offerValue: appliedCoupon ? (appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null)) : null,
                     discountAmount: totalDiscount,
                     couponDiscount: couponDiscount,
                     tieredDiscount: tieredDiscount,
                     tieredDiscountLabel: tieredDiscountLabel,
                     totalSavings: totalDiscount,
+                    offerDetails: appliedCoupon ? {
+                      couponCode: appliedCoupon.couponCode,
+                      offerType: appliedCoupon.offerType || appliedCoupon.discountType || null,
+                      offerValue: appliedCoupon.offerValue !== undefined ? appliedCoupon.offerValue : (appliedCoupon.discountValue !== undefined ? appliedCoupon.discountValue : null),
+                      discountAmount: couponDiscount || totalDiscount,
+                    } : null,
                   }),
                 });
 
@@ -2063,24 +2256,6 @@ export default function CartScreen() {
       console.error('Initiate payment error:', err);
       showAlert('Payment Connection Error', 'Could not establish connection to initiate checkout.');
     }
-  };
-
-  const calculateTotal = () => {
-    return cartItems.reduce((sum, item) => {
-      const itemCat = String(item.category || '').trim().toLowerCase();
-      const matchedCatDiscount = (restaurantOffers?.categoryDiscounts || []).find((d) => {
-        if (d.isActive === false) return false;
-        const targetCat = String(d.category || '').trim().toLowerCase();
-        return targetCat && (targetCat === itemCat || itemCat.includes(targetCat) || targetCat.includes(itemCat));
-      });
-      const catDiscountPercent = matchedCatDiscount ? Number(matchedCatDiscount.discountPercentage || 0) : 0;
-      const directOffer = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
-      const offerPercent = Math.max(directOffer, catDiscountPercent);
-      const price = (offerPercent > 0 && offerPercent <= 100)
-        ? (item.price - (item.price * (offerPercent / 100)))
-        : (item.price || 0);
-      return sum + price * (item.quantity || 0);
-    }, 0);
   };
 
   if (loading) {
@@ -2447,12 +2622,74 @@ export default function CartScreen() {
 
         {/* Coupon Card */}
         <View style={styles.couponCard}>
-          <Text style={styles.couponTitle}>Coupon Code</Text>
-          {!appliedCoupon ? (
-            <View style={styles.couponInputContainer}>
+          <Text style={styles.couponTitle}>Coupon & Offers</Text>
+
+          {/* 1. Available Restaurant Coupon Banner with Apply Button */}
+          {availableRestaurantCoupon && !appliedCoupon && (
+            <View style={styles.availableCouponBox}>
+              <View style={styles.availableCouponLeft}>
+                <View style={styles.couponTagIconWrapper}>
+                  <Ionicons name="pricetag" size={18} color="#047857" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={styles.availableCouponCodeText}>
+                      {availableRestaurantCoupon.couponCode}
+                    </Text>
+                    <View style={styles.availableDiscountBadge}>
+                      <Text style={styles.availableDiscountBadgeText}>
+                        {availableRestaurantCoupon.offerType === 'percentage'
+                          ? `${availableRestaurantCoupon.offerValue}% OFF`
+                          : `₹${availableRestaurantCoupon.offerValue} OFF`}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.availableCouponDesc}>
+                    {availableRestaurantCoupon.offerType === 'percentage'
+                      ? `Get ${availableRestaurantCoupon.offerValue}% discount on your item price`
+                      : `Get flat ₹${availableRestaurantCoupon.offerValue} discount on your item price`}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                style={styles.availableApplyBtn}
+                onPress={() => applyCouponDirectly(availableRestaurantCoupon)}
+                activeOpacity={0.8}
+                disabled={isValidatingCoupon}
+              >
+                {isValidatingCoupon ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.availableApplyBtnText}>Apply</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* 2. Applied Coupon State */}
+          {appliedCoupon ? (
+            <View style={styles.appliedCouponContainer}>
+              <View style={styles.appliedCouponLeft}>
+                <Ionicons name="pricetag" size={18} color="#27AE60" style={{ marginRight: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.appliedCouponCode}>{appliedCoupon.couponCode}</Text>
+                  <Text style={styles.appliedCouponSub}>
+                    {appliedCoupon.discountType === 'percentage'
+                      ? `${appliedCoupon.discountValue}% discount applied`
+                      : `₹${appliedCoupon.discountValue} discount applied`}
+                  </Text>
+                </View>
+              </View>
+              <TouchableOpacity style={styles.couponRemoveBtn} onPress={handleRemoveCoupon}>
+                <Text style={styles.couponRemoveBtnText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            /* 3. Manual Input Box for any coupon code */
+            <View style={[styles.couponInputContainer, availableRestaurantCoupon && { marginTop: 10 }]}>
               <TextInput
                 style={styles.couponInput}
-                placeholder="Enter Coupon Code"
+                placeholder={availableRestaurantCoupon ? "Or enter other coupon code" : "Enter Coupon Code"}
                 placeholderTextColor="#8A8A8A"
                 value={couponInput}
                 onChangeText={(text) => {
@@ -2474,26 +2711,11 @@ export default function CartScreen() {
                 )}
               </TouchableOpacity>
             </View>
-          ) : (
-            <View style={styles.appliedCouponContainer}>
-              <View style={styles.appliedCouponLeft}>
-                <Ionicons name="pricetag" size={18} color="#27AE60" style={{ marginRight: 8 }} />
-                <View>
-                  <Text style={styles.appliedCouponCode}>{appliedCoupon.couponCode}</Text>
-                  <Text style={styles.appliedCouponSub}>
-                    Code from {appliedCoupon.influencerName}
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity style={styles.couponRemoveBtn} onPress={handleRemoveCoupon}>
-                <Text style={styles.couponRemoveBtnText}>Remove</Text>
-              </TouchableOpacity>
-            </View>
           )}
           {couponError ? <Text style={styles.couponErrorText}>{couponError}</Text> : null}
           {appliedCoupon ? (
             <Text style={styles.couponSuccessText}>
-              Savings of ₹{discountAmount.toFixed(2)} applied!
+              Savings of ₹{discountAmount.toFixed(2)} applied to item price!
             </Text>
           ) : null}
         </View>
@@ -3986,6 +4208,81 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#1A1A1A',
     marginBottom: 10,
+  },
+  availableCouponBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1.5,
+    borderColor: '#047857',
+    borderStyle: 'dashed',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
+    marginBottom: 10,
+  },
+  availableCouponLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+    gap: 10,
+  },
+  couponTagIconWrapper: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#E8F5E9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  availableCouponCodeText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#1A1A1A',
+    letterSpacing: 0.5,
+  },
+  availableDiscountBadge: {
+    backgroundColor: '#047857',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  availableDiscountBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  availableCouponDesc: {
+    fontSize: 12,
+    color: '#555555',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  availableApplyBtn: {
+    backgroundColor: '#047857',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#047857',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  availableApplyBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13.5,
+    letterSpacing: 0.5,
   },
   couponInputContainer: {
     flexDirection: 'row',

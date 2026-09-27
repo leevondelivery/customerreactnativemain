@@ -28,6 +28,7 @@ import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { skipLocation } from '../../store/locationSlice';
 import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
+import { saveRestaurantCouponToStorage } from '../../utils/couponStorage';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -766,6 +767,16 @@ export default function RestaurantMenuScreen() {
       isSubscribed = false;
     };
   }, [restId, paramRestId, urlId, restaurantDetail?._id, restaurantDetail?.restId]);
+
+  // Synchronize restaurant coupon details (couponCode, offerType, offerValue) to AsyncStorage
+  useEffect(() => {
+    const coupons = restaurantDetail?.coupons || restaurantOffers?.coupons;
+    if (coupons && (Array.isArray(coupons) ? coupons.length > 0 : Boolean(coupons.couponCode || coupons.coupencode))) {
+      saveRestaurantCouponToStorage(coupons);
+    } else if (hasOffersFetched || restaurantDetail) {
+      saveRestaurantCouponToStorage(null);
+    }
+  }, [restaurantDetail?.coupons, restaurantOffers?.coupons, hasOffersFetched, restaurantDetail]);
 
   // Zero-flicker loading gate:
   // Requires both menu items and offers to be resolved before mounting the UI
