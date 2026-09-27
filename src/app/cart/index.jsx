@@ -2438,9 +2438,16 @@ export default function CartScreen() {
                 {/* Paid Item Card */}
                 <View style={[styles.cartCard, { flexDirection: 'column', alignItems: 'stretch' }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <Text style={styles.itemName} numberOfLines={2}>
-                      {displayItemName}
-                    </Text>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={styles.itemName} numberOfLines={2}>
+                        {displayItemName}
+                      </Text>
+                      {Boolean(item.description && String(item.description).trim()) && (
+                        <Text style={styles.cartItemDescription} numberOfLines={1}>
+                          {String(item.description).trim()}
+                        </Text>
+                      )}
+                    </View>
 
                     <View style={styles.controlsRow}>
                       {/* Quantity Pill with Minus on Left and Plus on Right */}
@@ -3839,8 +3846,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#1A1A1A',
-    flex: 1,
-    marginRight: 8,
+  },
+  cartItemDescription: {
+    fontSize: 11,
+    color: '#718096',
+    marginTop: 2,
+    fontWeight: '400',
   },
   controlsRow: {
     flexDirection: 'row',

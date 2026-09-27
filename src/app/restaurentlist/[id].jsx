@@ -20,6 +20,7 @@ import {
   UIManager,
   View,
   Modal,
+  Pressable,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDispatch, useSelector } from 'react-redux';
@@ -90,11 +91,13 @@ function AnimatedCardWrapper({ children, style }) {
   );
 }
 
+const FALLBACK_FOOD_IMAGE = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+
 // High-performance memoized item card for instant 60fps filter switching & smooth rendering
-const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast, isBogo, bogoOffer, categoryDiscountPercent }) {
+const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity, onTriggerToast, isBogo, bogoOffer, categoryDiscountPercent, onOpenDescription }) {
   const available = isItemAvailable(item);
   const isVeg = (item.vegOrNonVeg || 'veg').toLowerCase() === 'veg';
-  const fallbackImage = 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500';
+  const fallbackImage = FALLBACK_FOOD_IMAGE;
 
   let rawItemName = (item.itemName || item.name || 'Food Item').trim();
   let displayItemName = rawItemName.replace(/\s*\((?:veg|non-veg|non veg)\)/gi, '').trim();
@@ -105,6 +108,8 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
   const offerPercent = Math.max(directOffer, catOffer);
   const hasOffer = offerPercent > 0 && offerPercent <= 100;
   const offerPrice = hasOffer ? (item.price - (item.price * (offerPercent / 100))) : item.price;
+
+  const hasDescription = Boolean(item.description && String(item.description).trim());
 
   return (
     <View style={[
@@ -175,55 +180,70 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
         transition={100}
       />
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginVertical: 4, paddingHorizontal: 4, minHeight: 38 }}>
-        <Text style={[styles.itemNameText, { marginVertical: 0, minHeight: 0, flexShrink: 1 }, !available && { color: '#8E8E93' }]} numberOfLines={2}>
-          {displayItemName}
-        </Text>
+      {/* Arrow Button beside the photo */}
+      {hasDescription && (
+        <TouchableOpacity
+          style={styles.photoArrowBtn}
+          activeOpacity={0.8}
+          onPress={() => onOpenDescription(item)}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Feather name="chevron-down" size={22} color="#1E3545" />
+        </TouchableOpacity>
+      )}
 
-        {/* Official Veg (Green) / Non-Veg (Red) Symbol placed after the name */}
-        <View style={{
-          width: 13,
-          height: 13,
-          borderWidth: 1.5,
-          borderColor: isVeg ? '#0F8A65' : '#D32F2F',
-          borderRadius: 3,
-          justifyContent: 'center',
-          alignItems: 'center',
-          backgroundColor: '#FFFFFF',
-          flexShrink: 0,
-        }}>
-          <View style={{
-            width: 5.5,
-            height: 5.5,
-            borderRadius: 2.75,
-            backgroundColor: isVeg ? '#0F8A65' : '#D32F2F',
-          }} />
-        </View>
-      </View>
-
-      <View style={styles.ratingAndOfferContainer}>
-        <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
-          <FontAwesome name="star" size={10} color={available ? "#FFD200" : "#8E8E93"} />
-          <Text style={[styles.itemRatingText, !available && { color: '#8E8E93' }]}>
-            {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
+      {/* Item Body Content */}
+      <View style={{ width: '100%', alignItems: 'center' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, marginVertical: 4, paddingHorizontal: 4, minHeight: 38 }}>
+          <Text style={[styles.itemNameText, { marginVertical: 0, minHeight: 0, flexShrink: 1 }, !available && { color: '#8E8E93' }]} numberOfLines={2}>
+            {displayItemName}
           </Text>
-        </View>
-        {hasOffer && (
-          <View style={[styles.offerBadge, !available && { backgroundColor: '#8E8E93' }]}>
-            <Ionicons name="pricetag" size={9} color="#FFFFFF" />
-            <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
+
+          {/* Official Veg (Green) / Non-Veg (Red) Symbol placed after the name */}
+          <View style={{
+            width: 13,
+            height: 13,
+            borderWidth: 1.5,
+            borderColor: isVeg ? '#0F8A65' : '#D32F2F',
+            borderRadius: 3,
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: '#FFFFFF',
+            flexShrink: 0,
+          }}>
+            <View style={{
+              width: 5.5,
+              height: 5.5,
+              borderRadius: 2.75,
+              backgroundColor: isVeg ? '#0F8A65' : '#D32F2F',
+            }} />
           </View>
+        </View>
+
+        <View style={styles.ratingAndOfferContainer}>
+          <View style={[styles.itemRatingContainer, !available && { backgroundColor: '#E5E5EA' }]}>
+            <FontAwesome name="star" size={10} color={available ? "#FFD200" : "#8E8E93"} />
+            <Text style={[styles.itemRatingText, !available && { color: '#8E8E93' }]}>
+              {item.rating ? Number(item.rating).toFixed(1) : '4.2'}
+            </Text>
+          </View>
+          {hasOffer && (
+            <View style={[styles.offerBadge, !available && { backgroundColor: '#8E8E93' }]}>
+              <Ionicons name="pricetag" size={9} color="#FFFFFF" />
+              <Text style={styles.offerBadgeText}>{offerPercent}% OFF</Text>
+            </View>
+          )}
+        </View>
+
+        {hasOffer ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, marginTop: 2 }}>
+            <Text style={[styles.priceText, { marginBottom: 0 }, !available && { color: '#8E8E93' }]}>RS:{Math.round(offerPrice)}</Text>
+            <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: available ? '#FF5E00' : '#8E8E93', color: available ? '#FF5E00' : '#8E8E93', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
+          </View>
+        ) : (
+          <Text style={[styles.priceText, { marginTop: 2, marginBottom: 6 }, !available && { color: '#8E8E93' }]}>RS:{item.price || 0}</Text>
         )}
       </View>
-
-      {hasOffer ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-          <Text style={[styles.priceText, { marginBottom: 0 }, !available && { color: '#8E8E93' }]}>RS:{Math.round(offerPrice)}</Text>
-          <Text style={[styles.priceText, { textDecorationLine: 'line-through', textDecorationColor: available ? '#FF5E00' : '#8E8E93', color: available ? '#FF5E00' : '#8E8E93', fontSize: 12, marginBottom: 0 }]}>RS:{item.price || 0}</Text>
-        </View>
-      ) : (
-        <Text style={[styles.priceText, !available && { color: '#8E8E93' }]}>RS:{item.price || 0}</Text>
-      )}
 
       {!available ? (
         <TouchableOpacity
@@ -364,6 +384,11 @@ export default function RestaurantMenuScreen() {
   const [cart, setCart] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [dropdownItem, setDropdownItem] = useState(null);
+
+  const handleOpenDescription = useCallback((item) => {
+    setDropdownItem(item);
+  }, []);
 
   // Animated values for filter pills (sliding indicator + button scale micro-animations)
   const [filterTranslateX] = useState(() => new Animated.Value(0));
@@ -900,6 +925,8 @@ export default function RestaurantMenuScreen() {
         if (c.itemId) map[String(c.itemId)] = qty;
         if (c._id) map[String(c._id)] = qty;
         if (c.id) map[String(c.id)] = qty;
+        const nameKey = (c.itemName || c.name || '').toLowerCase().trim();
+        if (nameKey) map[nameKey] = qty;
       }
     }
     return map;
@@ -919,6 +946,38 @@ export default function RestaurantMenuScreen() {
     if (!cart || cart.length === 0) return 0;
     return cart.reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.quantity) || 0)), 0);
   }, [cart]);
+
+  const dropdownQuantity = useMemo(() => {
+    if (!dropdownItem) return 0;
+    const nameKey = (dropdownItem.itemName || dropdownItem.name || '').toLowerCase().trim();
+    return (
+      (dropdownItem._id && cartMap[String(dropdownItem._id)]) ||
+      (dropdownItem.itemId && cartMap[String(dropdownItem.itemId)]) ||
+      (dropdownItem.id && cartMap[String(dropdownItem.id)]) ||
+      (nameKey && cartMap[nameKey]) ||
+      0
+    );
+  }, [dropdownItem, cartMap]);
+
+  const dropdownBogoOffer = useMemo(() => {
+    if (!dropdownItem) return null;
+    return getBogoOffer(dropdownItem, dropdownItem.category);
+  }, [dropdownItem, getBogoOffer]);
+  const dropdownIsBogo = Boolean(dropdownBogoOffer);
+
+  const dropdownOfferPercent = useMemo(() => {
+    if (!dropdownItem) return 0;
+    const direct = dropdownItem.offerpercentage ? parseFloat(dropdownItem.offerpercentage) : 0;
+    const cat = getCategoryDiscountPercent(dropdownItem, dropdownItem.category);
+    return Math.max(direct, cat);
+  }, [dropdownItem, getCategoryDiscountPercent]);
+
+  const dropdownHasOffer = dropdownOfferPercent > 0 && dropdownOfferPercent <= 100;
+  const dropdownFinalPrice = dropdownHasOffer
+    ? Math.round(dropdownItem.price - (dropdownItem.price * (dropdownOfferPercent / 100)))
+    : (dropdownItem?.price || 0);
+
+  const dropdownAvailable = dropdownItem ? isItemAvailable(dropdownItem) : true;
 
   const bannerBottom = useMemo(() => {
     return insets.bottom > 0 ? insets.bottom + 94 : (Platform.OS === 'ios' ? 120 : 114);
@@ -1049,6 +1108,7 @@ export default function RestaurantMenuScreen() {
         (cartItem) => cartItem.restId && String(cartItem.restId) !== String(restId)
       );
       if (change > 0 && differentRestaurantItem) {
+        setDropdownItem(null);
         setPreviousRestaurantName(differentRestaurantItem.restaurantName || 'another restaurant');
         setPendingItemToAdd({ ...item, isBogo: passedIsBogo, bogoOffer: passedBogoOffer });
         setShowReplaceCartModal(true);
@@ -1061,7 +1121,9 @@ export default function RestaurantMenuScreen() {
           (
             (cartItem.itemId && item.itemId && String(cartItem.itemId) === String(item.itemId)) ||
             (cartItem._id && item._id && String(cartItem._id) === String(item._id)) ||
-            (cartItem.id && item.id && String(cartItem.id) === String(item.id))
+            (cartItem.id && item.id && String(cartItem.id) === String(item.id)) ||
+            ((cartItem.itemName || cartItem.name) && (item.itemName || item.name) &&
+             String(cartItem.itemName || cartItem.name).toLowerCase().trim() === String(item.itemName || item.name).toLowerCase().trim())
           )
       );
 
@@ -1305,6 +1367,7 @@ export default function RestaurantMenuScreen() {
                   isBogo={isBogo}
                   bogoOffer={bogoOffer}
                   categoryDiscountPercent={catDiscountPercent}
+                  onOpenDescription={handleOpenDescription}
                 />
               </AnimatedCardWrapper>
             );
@@ -1313,7 +1376,7 @@ export default function RestaurantMenuScreen() {
         </View>
       </View>
     );
-  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery, getBogoOffer, getCategoryDiscountPercent, restaurantOffers]);
+  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery, getBogoOffer, getCategoryDiscountPercent, restaurantOffers, handleOpenDescription]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';
@@ -1862,6 +1925,171 @@ export default function RestaurantMenuScreen() {
         </View>
       </Modal>
 
+      {/* Bottom Sheet Description Panel with Theme Colors & ADD TO CART */}
+      <Modal
+        visible={Boolean(dropdownItem)}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setDropdownItem(null)}
+      >
+        <Pressable
+          style={styles.sheetModalOverlay}
+          onPress={() => setDropdownItem(null)}
+        >
+          <Pressable
+            style={[
+              styles.sheetModalContent,
+              { paddingBottom: Math.max(insets.bottom, 16) + 14 }
+            ]}
+            onPress={(e) => e.stopPropagation?.()}
+          >
+            {/* Top Pull Indicator Handle */}
+            <View style={styles.sheetHandleBar} />
+
+            {/* Dish Header Info */}
+            <View style={styles.sheetHeaderRow}>
+              <Image
+                source={{ uri: dropdownItem?.photoUrl || FALLBACK_FOOD_IMAGE }}
+                style={styles.sheetDishThumb}
+                contentFit="cover"
+              />
+              <View style={{ flex: 1, marginLeft: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.sheetDishTitle} numberOfLines={2}>
+                    {dropdownItem?.name || dropdownItem?.itemName}
+                  </Text>
+                  {/* Veg / Non-Veg Indicator */}
+                  <View style={{
+                    width: 14,
+                    height: 14,
+                    borderWidth: 1.5,
+                    borderColor: (dropdownItem?.vegOrNonVeg || 'veg').toLowerCase() === 'veg' ? '#0F8A65' : '#D32F2F',
+                    borderRadius: 3,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: '#FFFFFF',
+                    flexShrink: 0,
+                  }}>
+                    <View style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: (dropdownItem?.vegOrNonVeg || 'veg').toLowerCase() === 'veg' ? '#0F8A65' : '#D32F2F',
+                    }} />
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  <Text style={styles.sheetFinalPrice}>
+                    RS:{dropdownFinalPrice}
+                  </Text>
+                  {dropdownHasOffer && (
+                    <Text style={styles.sheetStrikethroughPrice}>
+                      RS:{dropdownItem?.price || 0}
+                    </Text>
+                  )}
+                  {dropdownIsBogo && (
+                    <View style={styles.sheetBogoPill}>
+                      <Text style={styles.sheetBogoPillText}>1+1 FREE</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+
+              <TouchableOpacity
+                onPress={() => setDropdownItem(null)}
+                style={styles.sheetCloseBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                activeOpacity={0.7}
+              >
+                <Feather name="x" size={17} color="#1E3545" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Description Box */}
+            <View style={styles.sheetDescriptionCard}>
+              <View style={styles.sheetBadgeRow}>
+                <Text style={styles.sheetBadgeLabel}>{"CHEF'S DESCRIPTION"}</Text>
+              </View>
+
+              <ScrollView
+                style={{ maxHeight: 150 }}
+                showsVerticalScrollIndicator={true}
+                bounces={false}
+              >
+                <Text style={styles.sheetDescriptionBody}>
+                  {String(dropdownItem?.description || '').trim()}
+                </Text>
+              </ScrollView>
+            </View>
+
+            {/* Action Bar: ADD TO CART / Quantity Selector */}
+            <View style={styles.sheetActionContainer}>
+              {!dropdownAvailable ? (
+                <View style={styles.sheetDisabledBtn}>
+                  <Text style={styles.sheetDisabledBtnText}>OUT OF STOCK</Text>
+                </View>
+              ) : dropdownQuantity > 0 ? (
+                <View style={styles.sheetQuantityBox}>
+                  <TouchableOpacity
+                    style={styles.sheetQtyModifierBtn}
+                    activeOpacity={0.7}
+                    onPress={() => handleUpdateQuantity(dropdownItem, -1, dropdownIsBogo, dropdownBogoOffer)}
+                  >
+                    <Feather name="minus" size={17} color="#1E3545" />
+                  </TouchableOpacity>
+                  <View style={{ alignItems: 'center' }}>
+                    <Text style={styles.sheetQuantityNumber}>
+                      {dropdownIsBogo ? (dropdownQuantity * 2) : dropdownQuantity}
+                    </Text>
+                    <Text style={styles.sheetQtySubtext}>in cart</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.sheetQtyModifierBtn}
+                    activeOpacity={0.7}
+                    onPress={() => handleUpdateQuantity(dropdownItem, 1, dropdownIsBogo, dropdownBogoOffer)}
+                  >
+                    <Feather name="plus" size={17} color="#1E3545" />
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.sheetAddToCartBtn}
+                  activeOpacity={0.8}
+                  onPress={() => handleUpdateQuantity(dropdownItem, 1, dropdownIsBogo, dropdownBogoOffer)}
+                >
+                  <Text style={styles.sheetAddToCartBtnText}>ADD</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </Pressable>
+
+          {/* Warning / Toast Ribbon in FRONT of the bottom sheet card */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.toastContainer,
+              {
+                bottom: Math.max(insets.bottom, 16) + 24,
+                zIndex: 99999,
+                opacity: toastOpacity,
+                transform: [
+                  { translateY: toastTranslateY },
+                  { scale: toastScale },
+                ],
+              },
+            ]}
+          >
+            <View style={[styles.toastContent, { backgroundColor: toastBgColor }]}>
+              <View style={styles.toastIconContainer}>
+                <Ionicons name={toastIconName} size={13} color={toastIconColor} />
+              </View>
+              <Text style={styles.toastText}>{toastConfig.message || 'ADDED TO CART SUCCESSFULLY!'}</Text>
+            </View>
+          </Animated.View>
+        </Pressable>
+      </Modal>
+
       {/* 1+1 Free Celebration Confetti & Banner Overlay */}
       <BogoCelebration
         visible={celebrationState.visible}
@@ -2115,11 +2343,211 @@ const styles = StyleSheet.create({
     width: '100%',
     marginTop: 56, // space for the larger floating circular image
     paddingTop: 58, // push texts below the overlaying image
-    paddingHorizontal: 12,
-    paddingBottom: 18,
+    paddingHorizontal: 10,
+    paddingBottom: 16,
     alignItems: 'center',
     position: 'relative',
-    minHeight: 208, // Stable height for larger cards
+    minHeight: 218, // Stable height for larger cards
+    justifyContent: 'space-between',
+  },
+  photoArrowBtn: {
+    position: 'absolute',
+    top: 8,
+    left: '50%',
+    marginLeft: 26,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgb(247, 247, 235)',
+    borderWidth: 1.5,
+    borderColor: '#D4CEBF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 15,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.22,
+    shadowRadius: 3.5,
+    elevation: 5,
+  },
+  sheetModalOverlay: {
+    flex: 1,
+    backgroundColor: 'transparent',
+    justifyContent: 'flex-end',
+  },
+  sheetModalContent: {
+    backgroundColor: 'rgb(224, 214, 188)', // Exact same background colour as item card!
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderTopWidth: 2,
+    borderColor: '#D4CEBF',
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    elevation: 16,
+  },
+  sheetHandleBar: {
+    width: 44,
+    height: 4.5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(30, 53, 69, 0.25)',
+    alignSelf: 'center',
+    marginBottom: 14,
+  },
+  sheetHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  sheetDishThumb: {
+    width: 58,
+    height: 58,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#D4CEBF',
+    backgroundColor: 'rgb(247, 247, 235)',
+  },
+  sheetDishTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#1E3545',
+    flexShrink: 1,
+  },
+  sheetFinalPrice: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1E3545',
+  },
+  sheetStrikethroughPrice: {
+    fontSize: 13,
+    textDecorationLine: 'line-through',
+    color: '#FF5E00',
+  },
+  sheetBogoPill: {
+    backgroundColor: '#008000',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
+  },
+  sheetBogoPillText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+  },
+  sheetCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgb(247, 247, 235)',
+    borderWidth: 1,
+    borderColor: '#D4CEBF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  sheetDescriptionCard: {
+    backgroundColor: 'rgb(247, 247, 235)', // Matching card ADD button and page background
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#D4CEBF',
+    padding: 14,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  sheetBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginBottom: 6,
+  },
+  sheetBadgeLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1E3545',
+    letterSpacing: 0.6,
+  },
+  sheetDescriptionBody: {
+    fontSize: 13.5,
+    lineHeight: 20,
+    color: '#1E3545',
+    fontWeight: '500',
+  },
+  sheetActionContainer: {
+    width: '100%',
+  },
+  sheetAddToCartBtn: {
+    backgroundColor: 'rgb(247, 247, 235)', // Exact same colour as item card ADD button!
+    borderRadius: 14,
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#D4CEBF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  sheetAddToCartBtnText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1E3545', // Exact same text colour as item card ADD button text!
+    letterSpacing: 0.4,
+  },
+  sheetQuantityBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgb(247, 247, 235)', // Exact same background as item card quantityContainer
+    borderRadius: 14,
+    height: 44,
+    borderWidth: 1,
+    borderColor: '#D4CEBF',
+    paddingHorizontal: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  sheetQtyModifierBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F0EBE0', // Exact same button background as item card quantityBtn
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetQuantityNumber: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#1E3545',
+  },
+  sheetQtySubtext: {
+    fontSize: 9,
+    color: '#808C94',
+    fontWeight: '600',
+    marginTop: -2,
+  },
+  sheetDisabledBtn: {
+    backgroundColor: '#E5E5EA',
+    borderRadius: 14,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetDisabledBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#8E8E93',
   },
   itemImage: {
     width: 104,
