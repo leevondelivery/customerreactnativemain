@@ -2677,7 +2677,9 @@ export default function CartScreen() {
           {appliedCoupon ? (
             <View style={styles.appliedCouponContainer}>
               <View style={styles.appliedCouponLeft}>
-                <Ionicons name="pricetag" size={18} color="#27AE60" style={{ marginRight: 8 }} />
+                <View style={styles.appliedCouponTagIconWrapper}>
+                  <Ionicons name="pricetag" size={16} color="#059669" />
+                </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.appliedCouponCode}>{appliedCoupon.couponCode}</Text>
                   <Text style={styles.appliedCouponSub}>
@@ -2687,7 +2689,12 @@ export default function CartScreen() {
                   </Text>
                 </View>
               </View>
-              <TouchableOpacity style={styles.couponRemoveBtn} onPress={handleRemoveCoupon}>
+              <TouchableOpacity
+                style={styles.couponRemoveBtn}
+                onPress={handleRemoveCoupon}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close-circle" size={15} color="#DC2626" />
                 <Text style={styles.couponRemoveBtnText}>Remove</Text>
               </TouchableOpacity>
             </View>
@@ -4328,33 +4335,67 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#E2F0D9',
-    borderRadius: 15,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#27AE60',
+    backgroundColor: '#ECFDF5',
+    borderRadius: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1.5,
+    borderColor: '#10B981',
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 1,
   },
   appliedCouponLeft: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
+    gap: 8,
+  },
+  appliedCouponTagIconWrapper: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   appliedCouponCode: {
     fontSize: 15,
-    fontWeight: 'bold',
-    color: '#27AE60',
+    fontWeight: '800',
+    color: '#065F46',
+    letterSpacing: 0.5,
   },
   appliedCouponSub: {
     fontSize: 12,
-    color: '#666',
+    color: '#047857',
+    marginTop: 2,
+    fontWeight: '500',
   },
   couponRemoveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
     paddingVertical: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
+    borderRadius: 20,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
   },
   couponRemoveBtnText: {
-    color: '#FF5E5E',
-    fontWeight: 'bold',
-    fontSize: 13,
+    color: '#DC2626',
+    fontWeight: '700',
+    fontSize: 12.5,
+    letterSpacing: 0.3,
   },
   couponErrorText: {
     color: '#D32F2F',
