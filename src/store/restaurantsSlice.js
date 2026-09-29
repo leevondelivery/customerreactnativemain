@@ -53,6 +53,16 @@ export const loadCachedRestaurants = createAsyncThunk(
   }
 );
 
+const filterVisibleToCustomer = (list) => {
+  if (!Array.isArray(list)) return [];
+  return list.filter((rest) => {
+    if (!rest) return false;
+    if (rest.todisplaytocustomer === false || String(rest.todisplaytocustomer).toLowerCase() === 'false' || rest.todisplaytocustomer === 0) return false;
+    if (rest.displayToCustomer === false || String(rest.displayToCustomer).toLowerCase() === 'false' || rest.displayToCustomer === 0) return false;
+    return true;
+  });
+};
+
 export const fetchRestaurants = createAsyncThunk(
   'restaurants/fetchRestaurants',
   async (_, { rejectWithValue }) => {
@@ -64,7 +74,7 @@ export const fetchRestaurants = createAsyncThunk(
       }
     } catch (e) {}
 
-    let restaurants = cachedResult?.restaurants || [];
+    let restaurants = filterVisibleToCustomer(cachedResult?.restaurants || []);
     let carousel = cachedResult?.carousel || [];
     let categories = cachedResult?.categories || [];
 
@@ -78,7 +88,7 @@ export const fetchRestaurants = createAsyncThunk(
         if (restRes.ok) {
           const restData = await restRes.json();
           if (restData.restaurants && Array.isArray(restData.restaurants)) {
-            restaurants = restData.restaurants;
+            restaurants = filterVisibleToCustomer(restData.restaurants);
           }
         }
       } catch (e) {

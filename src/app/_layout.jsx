@@ -7,6 +7,8 @@ import { Alert, Animated, AppState, Dimensions, Easing, Modal, PermissionsAndroi
 import { Provider, useDispatch, useSelector } from 'react-redux';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_URL } from '../config';
+import AppUpdateModal from '../components/AppUpdateModal';
+import { getInstalledAppVersion, isVersionOlder } from '../utils/versionCheck';
 import { store } from '../store/store';
 import { fetchControlsStatus } from '../store/controlsSlice';
 // Native-only modules: lazily required to avoid crashes when native binary
@@ -62,6 +64,35 @@ export default function Layout() {
 
   // AppState tracking for pausing background tasks & instant wakeup resume
   const appStateRef = useRef(AppState.currentState);
+
+  // App Version Update state
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateData, setUpdateData] = useState(null);
+
+  // App Version Check on launch
+  useEffect(() => {
+    const checkAppVersion = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/app-version`);
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await response.json();
+            if (data && data.success) {
+              const installedVer = getInstalledAppVersion();
+              if (isVersionOlder(installedVer, data.minRequiredVersion)) {
+                setUpdateData(data);
+                setShowUpdateModal(true);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.log('[Layout] App version check skipped:', err?.message);
+      }
+    };
+    checkAppVersion();
+  }, []);
 
   // Hide the floating tab bar on login and root index redirection screens
   const isLoginPage = pathname === '/login' || pathname === '/' || pathname === '';
@@ -484,6 +515,8 @@ export default function Layout() {
             showBlockedModal={showBlockedModal}
             setShowBlockedModal={setShowBlockedModal}
             blockedModalMessage={blockedModalMessage}
+            showUpdateModal={showUpdateModal}
+            updateData={updateData}
           />
         </TabBarContext.Provider>
       </SafeAreaProvider>
@@ -505,6 +538,8 @@ function MainLayoutContent({
   showBlockedModal,
   setShowBlockedModal,
   blockedModalMessage,
+  showUpdateModal,
+  updateData,
 }) {
   // Hide bottom tab bar only on login page
   const shouldShowTabBar = !isLoginPage;
@@ -608,6 +643,9 @@ function MainLayoutContent({
           </View>
         </View>
       </Modal>
+
+      {/* Force App Update Modal */}
+      <AppUpdateModal visible={showUpdateModal} updateData={updateData} />
     </View>
   );
 }
