@@ -388,7 +388,7 @@ export default function RestaurantMenuScreen() {
 
   const handleOpenDescription = useCallback((item) => {
     setDropdownItem(item);
-  }, []);
+  }, [setDropdownItem]);
 
   // Animated values for filter pills (sliding indicator + button scale micro-animations)
   const [filterTranslateX] = useState(() => new Animated.Value(0));
@@ -1013,13 +1013,20 @@ export default function RestaurantMenuScreen() {
 
     const checkMatch = (item) => {
       if (!item || !hasQuery) return false;
+      const qLower = query.toLowerCase();
+      if ((qLower.includes('1+1') || qLower.includes('bogo')) && checkIsBogo(item, item.category)) {
+        return true;
+      }
+      if ((qLower.includes('discount') || qLower.includes('offer')) && getItemDiscountPercent(item, item.category) > 0) {
+        return true;
+      }
       const name = item.itemName || item.name || '';
       const cat = item.category || '';
       const desc = item.description || '';
       return (
         isTextMatchingQuery(name, query) ||
         isTextMatchingQuery(cat, query) ||
-        (query.length >= 3 && desc.toLowerCase().includes(query.toLowerCase()))
+        (query.length >= 3 && desc.toLowerCase().includes(qLower))
       );
     };
 
@@ -1036,7 +1043,24 @@ export default function RestaurantMenuScreen() {
         return true;
       })
       .sort((a, b) => {
-        // Priority 1: If a category is selected from drawer, items belonging to it are placed at the top
+        // Priority 1: When searching, search query matching items come at the very top
+        if (hasQuery) {
+          const matchA = checkMatch(a);
+          const matchB = checkMatch(b);
+          if (matchA && !matchB) return -1;
+          if (!matchA && matchB) return 1;
+
+          if (matchA && matchB) {
+            const nameA = a.itemName || a.name || '';
+            const nameB = b.itemName || b.name || '';
+            const nameMatchA = isTextMatchingQuery(nameA, query);
+            const nameMatchB = isTextMatchingQuery(nameB, query);
+            if (nameMatchA && !nameMatchB) return -1;
+            if (!nameMatchA && nameMatchB) return 1;
+          }
+        }
+
+        // Priority 2: If a category is selected from drawer, items belonging to it are placed at the top
         if (!catAll) {
           const isBogoCat = selectedCatLower.includes('1+1');
           if (isBogoCat) {
@@ -1052,32 +1076,24 @@ export default function RestaurantMenuScreen() {
           }
         }
 
-        // Priority 2: 1+1 BOGO items at the very top
+        // Priority 3: 1+1 BOGO items at the very top
         const bogoA = checkIsBogo(a, a.category);
         const bogoB = checkIsBogo(b, b.category);
         if (bogoA && !bogoB) return -1;
         if (!bogoA && bogoB) return 1;
 
-        // Priority 3: Items with direct or category discount (highest % discount first)
+        // Priority 4: Items with direct or category discount (highest % discount first)
         const discA = getItemDiscountPercent(a, a.category);
         const discB = getItemDiscountPercent(b, b.category);
         if (discA > 0 && discB <= 0) return -1;
         if (discA <= 0 && discB > 0) return 1;
         if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
 
-        // Priority 4: Available items before out-of-stock items
+        // Priority 5: Available items before out-of-stock items
         const availA = isItemAvailable(a);
         const availB = isItemAvailable(b);
         if (availA && !availB) return -1;
         if (!availA && availB) return 1;
-
-        // Priority 5: Search query matching items at top
-        if (hasQuery) {
-          const matchA = checkMatch(a);
-          const matchB = checkMatch(b);
-          if (matchA && !matchB) return -1;
-          if (!matchA && matchB) return 1;
-        }
 
         // Priority 6: Price sorting
         if (sortBy === 'Low to High') {
@@ -1171,29 +1187,77 @@ export default function RestaurantMenuScreen() {
       console.error('Error updating quantity:', error);
       Alert.alert('Error', 'Failed to update item quantity.');
     }
-  }, [hasActiveOrder, restId, passedName, triggerToast, getBogoOffer, getCategoryDiscountPercent]);
+  }, [hasActiveOrder, restId, passedName, triggerToast, getBogoOffer, getCategoryDiscountPercent, setDropdownItem, setPreviousRestaurantName, setPendingItemToAdd, setShowReplaceCartModal, setCelebrationState, setCart]);
 
   // Group sorted items by category with 1+1 BOGO first, then Special Discount Offers next, then regular categories
   const groupedCategories = useMemo(() => {
     if (!sortedItems || sortedItems.length === 0) return EMPTY_ARRAY;
 
+    const query = searchQuery.trim();
+    const hasQuery = Boolean(query);
+
+    const checkMatch = (item) => {
+      if (!item || !hasQuery) return false;
+      const qLower = query.toLowerCase();
+      if ((qLower.includes('1+1') || qLower.includes('bogo')) && checkIsBogo(item, item.category)) {
+        return true;
+      }
+      if ((qLower.includes('discount') || qLower.includes('offer')) && getItemDiscountPercent(item, item.category) > 0) {
+        return true;
+      }
+      const name = item.itemName || item.name || '';
+      const cat = item.category || '';
+      const desc = item.description || '';
+      return (
+        isTextMatchingQuery(name, query) ||
+        isTextMatchingQuery(cat, query) ||
+        (query.length >= 3 && desc.toLowerCase().includes(qLower))
+      );
+    };
+
     const groups = [];
-    const groupMap = {};
+
+    // When searching, pull items matching the query to a "Search Results" group at the top
+    let itemsForCategorization = sortedItems;
+    if (hasQuery) {
+      const matchingItems = [];
+      const nonMatchingItems = [];
+
+      for (let i = 0; i < sortedItems.length; i++) {
+        const item = sortedItems[i];
+        if (checkMatch(item)) {
+          matchingItems.push(item);
+        } else {
+          nonMatchingItems.push(item);
+        }
+      }
+
+      if (matchingItems.length > 0) {
+        groups.push({
+          title: `Search Results for "${query}"`,
+          isSpecialOffer: true,
+          offerType: 'search',
+          items: matchingItems,
+        });
+      }
+
+      itemsForCategorization = nonMatchingItems;
+    }
 
     // 1. Gather all items that have active 1+1 (BOGO) offer
     const bogoItems = [];
     const hasBogoOffers = Boolean(restaurantOffers?.bogoOffers && restaurantOffers.bogoOffers.length > 0);
 
     if (hasBogoOffers) {
-      for (let i = 0; i < sortedItems.length; i++) {
-        const item = sortedItems[i];
+      for (let i = 0; i < itemsForCategorization.length; i++) {
+        const item = itemsForCategorization[i];
         if (checkIsBogo(item, item.category)) {
           bogoItems.push(item);
         }
       }
     }
 
-    // If 1+1 offers exist, show dedicated "1+1 Free Offers" section at the TOP
+    // If 1+1 offers exist, show dedicated "1+1 Free Offers" section
     if (bogoItems.length > 0 && (!selectedCategory || selectedCategory === 'All' || selectedCategory.toLowerCase().includes('1+1'))) {
       groups.push({
         title: '1+1 Free Offers',
@@ -1205,8 +1269,8 @@ export default function RestaurantMenuScreen() {
 
     // 2. Gather all items that have any direct or category discount
     const discountItems = [];
-    for (let i = 0; i < sortedItems.length; i++) {
-      const item = sortedItems[i];
+    for (let i = 0; i < itemsForCategorization.length; i++) {
+      const item = itemsForCategorization[i];
       const disc = getItemDiscountPercent(item, item.category);
       if (disc > 0) {
         discountItems.push(item);
@@ -1223,7 +1287,7 @@ export default function RestaurantMenuScreen() {
       return 0;
     });
 
-    // If discount items exist, show dedicated "Special Discount Offers" section right after 1+1 (or at top if no 1+1)
+    // If discount items exist, show dedicated "Special Discount Offers" section
     if (discountItems.length > 0 && (!selectedCategory || selectedCategory === 'All' || selectedCategory.toLowerCase().includes('discount') || selectedCategory.toLowerCase().includes('offer'))) {
       groups.push({
         title: 'Special Discount Offers',
@@ -1234,8 +1298,9 @@ export default function RestaurantMenuScreen() {
     }
 
     // 3. Populate regular category groups
-    for (let i = 0; i < sortedItems.length; i++) {
-      const item = sortedItems[i];
+    const groupMap = {};
+    for (let i = 0; i < itemsForCategorization.length; i++) {
+      const item = itemsForCategorization[i];
       const rawCat = item.category ? item.category.trim() : 'Menu';
       const catTitle = rawCat ? (rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) : 'Menu';
 
@@ -1291,14 +1356,15 @@ export default function RestaurantMenuScreen() {
     }
 
     return groups;
-  }, [sortedItems, selectedCategory, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
+  }, [sortedItems, searchQuery, selectedCategory, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
 
   const renderCategoryGroup = useCallback(({ item: group }) => {
+    const isSearchGroup = group.offerType === 'search';
     const isBogoGroup = group.offerType === 'bogo';
     const isDiscountGroup = group.offerType === 'discount';
-    const bannerBgColor = isBogoGroup ? '#065F46' : (isDiscountGroup ? '#EA580C' : '#1E3545');
-    const dividerColor = isBogoGroup ? 'rgba(6, 95, 70, 0.25)' : (isDiscountGroup ? 'rgba(234, 88, 12, 0.25)' : 'rgba(30, 53, 69, 0.15)');
-    const bannerTitle = isBogoGroup ? `🎉 ${group.title}` : group.title;
+    const bannerBgColor = isSearchGroup ? '#0F766E' : (isBogoGroup ? '#065F46' : (isDiscountGroup ? '#EA580C' : '#1E3545'));
+    const dividerColor = isSearchGroup ? 'rgba(15, 118, 110, 0.25)' : (isBogoGroup ? 'rgba(6, 95, 70, 0.25)' : (isDiscountGroup ? 'rgba(234, 88, 12, 0.25)' : 'rgba(30, 53, 69, 0.15)'));
+    const bannerTitle = isSearchGroup ? `🔍 ${group.title}` : (isBogoGroup ? `🎉 ${group.title}` : group.title);
 
     return (
       <View key={group.title} style={{ marginBottom: 16 }}>
@@ -1376,7 +1442,7 @@ export default function RestaurantMenuScreen() {
         </View>
       </View>
     );
-  }, [cartMap, handleUpdateQuantity, triggerToast, filterType, selectedCategory, sortBy, searchQuery, getBogoOffer, getCategoryDiscountPercent, restaurantOffers, handleOpenDescription]);
+  }, [cartMap, handleUpdateQuantity, triggerToast, getBogoOffer, getCategoryDiscountPercent, handleOpenDescription]);
 
   const isWarningToast = toastConfig.type === 'warning';
   const toastBgColor = isWarningToast ? '#D32F2F' : '#2B783E';

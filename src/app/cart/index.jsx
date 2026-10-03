@@ -2870,6 +2870,15 @@ export default function CartScreen() {
             </View>
           )}
 
+          <View style={styles.billRow}>
+            <Text style={[styles.billLabel, { textDecorationLine: 'line-through', color: '#808C94' }]}>
+              PLATFORM FEE
+            </Text>
+            <Text style={[styles.billValue, { color: '#008000', fontWeight: '800', fontSize: 13.5 }]}>
+              Seriously? Not Here. 😏
+            </Text>
+          </View>
+
           {packagingFee > 0 && (
             <View style={styles.billRow}>
               <Text style={styles.billLabel}>
