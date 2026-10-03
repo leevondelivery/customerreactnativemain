@@ -7,7 +7,9 @@ import {
   Animated,
   AppState,
   Dimensions,
+  Easing,
   FlatList,
+  Keyboard,
   LayoutAnimation,
   Linking,
   Modal,
@@ -42,6 +44,8 @@ import { saveRestaurantCouponToStorage } from '../../utils/couponStorage';
 
 const { width: screenWidth } = Dimensions.get('window');
 const CAROUSEL_WIDTH = Math.min(screenWidth, 500) - 32;
+const CAROUSEL_HEIGHT = CAROUSEL_WIDTH * 0.545 + 5;
+const TOP_COLLAPSE_HEIGHT = Math.round(72 + CAROUSEL_HEIGHT + 20 + 16);
 
 // Precise search query matcher (matches word prefixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
 const isTextMatchingQuery = (text, query) => {
@@ -709,9 +713,57 @@ export default function RestaurantListScreen() {
 
   // States
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchActive, setIsSearchActive] = useState(false);
+  const isSearchActiveRef = useRef(false);
+  const searchInputRef = useRef(null);
+  const mainFlatListRef = useRef(null);
+  const searchAnim = useRef(new Animated.Value(0)).current; // 0: resting normal, 1: at top
   const [refreshing, setRefreshing] = useState(false);
   const [activeType, setActiveType] = useState('All'); // 'All', 'Veg', 'Non-Veg'
   const [selectedCategory, setSelectedCategory] = useState(null);
+
+  const animateSearch = useCallback((toValue) => {
+    const willBeActive = toValue === 1;
+    if (isSearchActiveRef.current === willBeActive) return;
+    isSearchActiveRef.current = willBeActive;
+    setIsSearchActive(willBeActive);
+
+    Animated.timing(searchAnim, {
+      toValue,
+      duration: willBeActive ? 280 : 240,
+      easing: willBeActive ? Easing.out(Easing.cubic) : Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [searchAnim]);
+
+  const handleSearchFocus = useCallback(() => {
+    animateSearch(1);
+  }, [animateSearch]);
+
+  const handleSearchBlur = useCallback(() => {
+    // Let keyboard dismiss listener handle return
+  }, []);
+
+  useEffect(() => {
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+
+    const hideListener = Keyboard.addListener(hideEvent, () => {
+      animateSearch(0);
+      searchInputRef.current?.blur();
+    });
+
+    const showListener = Keyboard.addListener(showEvent, () => {
+      if (searchInputRef.current?.isFocused()) {
+        animateSearch(1);
+      }
+    });
+
+    return () => {
+      hideListener.remove();
+      showListener.remove();
+    };
+  }, [animateSearch]);
 
   // Horizontal category scroll indicators state
   const [canScrollCatLeft, setCanScrollCatLeft] = useState(false);
@@ -1364,132 +1416,156 @@ export default function RestaurantListScreen() {
 
   const renderHeader = useMemo(() => (
     <View>
-      {/* Top Location Selection Bar */}
-      <TouchableOpacity
+      {/* Top Section (Deliver to + Carousel) */}
+      <Animated.View
         style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          backgroundColor: 'rgb(224, 214, 188)',
-          marginHorizontal: 0,
-          marginTop: 0,
-          marginBottom: 16,
-          paddingVertical: 12,
-          paddingHorizontal: 16,
-          borderRadius: 14,
-          gap: 10,
+          opacity: searchAnim.interpolate({
+            inputRange: [0, 0.45, 1],
+            outputRange: [1, 0.15, 0],
+          }),
         }}
-        activeOpacity={0.75}
-        onPress={() => {
-          if (!maintenanceMode) {
-            setShowDeliverToModal(true);
-          }
-        }}
+        pointerEvents={isSearchActive ? 'none' : 'auto'}
       >
-        <Feather name="map-pin" size={18} color="#FA4D56" />
-        <View style={{ flex: 1 }}>
-          <Text style={{ fontSize: 10, color: '#808C94', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-            Deliver to
-          </Text>
-          <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
-            {(() => {
-              if (selectedSavedAddressId) {
-                const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
-                const selectedAddr = addrList.find(
-                  (a) => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId)
-                );
-                if (selectedAddr) {
-                  const tagLabel = selectedAddr.tag || selectedAddr.label || 'Saved Address';
-                  const detailStr = [selectedAddr.flatNo, selectedAddr.street].filter(Boolean).join(', ');
-                  return detailStr ? `${tagLabel} - ${detailStr}` : tagLabel;
-                }
-                return 'Saved Address';
-              }
-              if (locationStatus === 'inside') {
-                if (userAddress && (userAddress.formattedAddress || userAddress.street)) {
-                  return userAddress.formattedAddress || [userAddress.street, userAddress.subregion || userAddress.city].filter(Boolean).join(', ');
-                }
-                return 'Current Location (GPS)';
-              }
-              if (locationStatus === 'skipped') {
-                return 'Skipped location (Explore only)';
-              }
-              return 'Select your location...';
-            })()}
-          </Text>
-        </View>
-        <Feather name="chevron-down" size={18} color="#1E3545" />
-      </TouchableOpacity>
-
-      {/* Fast CDN-mapped Carousel */}
-      {carouselItems.length > 0 && (
-        <View style={styles.carouselContainer}>
-          <FlatList
-            ref={flatListRef}
-            data={carouselItems}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            keyExtractor={(item) => item._id || item.carouselId}
-            onMomentumScrollEnd={onMomentumScrollEnd}
-            getItemLayout={(data, index) => ({
-              length: CAROUSEL_WIDTH,
-              offset: CAROUSEL_WIDTH * index,
-              index,
-            })}
-            renderItem={({ item }) => {
-              const hasTargetRest = !!(item.restaurantId && item.restaurantId.trim());
-              return (
-                <TouchableOpacity
-                  activeOpacity={hasTargetRest ? 0.85 : 1}
-                  onPress={() => handlePressCarousel(item)}
-                  disabled={!hasTargetRest}
-                  style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}
-                >
-                  <CarouselImage
-                    uri={item.imageUrl}
-                    style={styles.carouselImage}
-                  />
-                  {!!(item.tag || item.title) && (
-                    <View style={styles.carouselOverlay}>
-                      {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
-                      {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
+          {/* Top Location Selection Bar */}
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: 'rgb(224, 214, 188)',
+              marginHorizontal: 0,
+              marginTop: 0,
+              marginBottom: 16,
+              paddingVertical: 12,
+              paddingHorizontal: 16,
+              borderRadius: 14,
+              gap: 10,
             }}
-          />
-          {/* Carousel Dot Indicators */}
-          <View style={styles.paginationContainer}>
-            {carouselItems.map((_, index) => (
-              <View
-                key={`dot-${index}`}
-                style={[
-                  styles.paginationDot,
-                  activeCarouselIndex === index && styles.paginationDotActive,
-                ]}
+            activeOpacity={0.75}
+            onPress={() => {
+              if (!maintenanceMode) {
+                setShowDeliverToModal(true);
+              }
+            }}
+          >
+            <Feather name="map-pin" size={18} color="#FA4D56" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 10, color: '#808C94', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Deliver to
+              </Text>
+              <Text style={{ fontSize: 13, color: '#1E3545', fontWeight: '600' }} numberOfLines={1}>
+                {(() => {
+                  if (selectedSavedAddressId) {
+                    const addrList = Array.isArray(savedAddresses) ? savedAddresses : [];
+                    const selectedAddr = addrList.find(
+                      (a) => a && typeof a === 'object' && String(a.id || a._id) === String(selectedSavedAddressId)
+                    );
+                    if (selectedAddr) {
+                      const tagLabel = selectedAddr.tag || selectedAddr.label || 'Saved Address';
+                      const detailStr = [selectedAddr.flatNo, selectedAddr.street].filter(Boolean).join(', ');
+                      return detailStr ? `${tagLabel} - ${detailStr}` : tagLabel;
+                    }
+                    return 'Saved Address';
+                  }
+                  if (locationStatus === 'inside') {
+                    if (userAddress && (userAddress.formattedAddress || userAddress.street)) {
+                      return userAddress.formattedAddress || [userAddress.street, userAddress.subregion || userAddress.city].filter(Boolean).join(', ');
+                    }
+                    return 'Current Location (GPS)';
+                  }
+                  if (locationStatus === 'skipped') {
+                    return 'Skipped location (Explore only)';
+                  }
+                  return 'Select your location...';
+                })()}
+              </Text>
+            </View>
+            <Feather name="chevron-down" size={18} color="#1E3545" />
+          </TouchableOpacity>
+
+          {/* Fast CDN-mapped Carousel */}
+          {carouselItems.length > 0 && (
+            <View style={styles.carouselContainer}>
+              <FlatList
+                ref={flatListRef}
+                data={carouselItems}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                keyExtractor={(item) => item._id || item.carouselId}
+                onMomentumScrollEnd={onMomentumScrollEnd}
+                getItemLayout={(data, index) => ({
+                  length: CAROUSEL_WIDTH,
+                  offset: CAROUSEL_WIDTH * index,
+                  index,
+                })}
+                renderItem={({ item }) => {
+                  const hasTargetRest = !!(item.restaurantId && item.restaurantId.trim());
+                  return (
+                    <TouchableOpacity
+                      activeOpacity={hasTargetRest ? 0.85 : 1}
+                      onPress={() => handlePressCarousel(item)}
+                      disabled={!hasTargetRest}
+                      style={[styles.carouselSlide, { width: CAROUSEL_WIDTH }]}
+                    >
+                      <CarouselImage
+                        uri={item.imageUrl}
+                        style={styles.carouselImage}
+                      />
+                      {!!(item.tag || item.title) && (
+                        <View style={styles.carouselOverlay}>
+                          {item.tag ? <Text style={styles.carouselTag}>{item.tag}</Text> : null}
+                          {item.title ? <Text style={styles.carouselTitle}>{item.title}</Text> : null}
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
               />
-            ))}
-          </View>
-        </View>
-      )}
+              {/* Carousel Dot Indicators */}
+              <View style={styles.paginationContainer}>
+                {carouselItems.map((_, index) => (
+                  <View
+                    key={`dot-${index}`}
+                    style={[
+                      styles.paginationDot,
+                      activeCarouselIndex === index && styles.paginationDotActive,
+                    ]}
+                  />
+                ))}
+              </View>
+            </View>
+          )}
+      </Animated.View>
 
       {/* Search Engine Bar */}
-      <View style={styles.searchBarContainer}>
+      <View style={[styles.searchBarContainer, { marginTop: 20, marginBottom: 16 }]}>
         <View style={styles.searchInputContainer}>
           <Feather name="search" size={20} color="#1E3545" />
           <TextInput
+            ref={searchInputRef}
             style={styles.searchPlaceholderText}
             placeholder="Search restaurants or dishes..."
             placeholderTextColor="#808C94"
             value={searchQuery}
             onChangeText={setSearchQuery}
+            onFocus={handleSearchFocus}
+            onBlur={handleSearchBlur}
             autoCorrect={false}
             numberOfLines={1}
             multiline={false}
             textAlignVertical="center"
             returnKeyType="search"
+            onSubmitEditing={() => Keyboard.dismiss()}
           />
+          {Boolean(searchQuery) && (
+            <TouchableOpacity
+              onPress={() => setSearchQuery('')}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={{ paddingRight: 4 }}
+            >
+              <Ionicons name="close-circle" size={18} color="#808C94" />
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={styles.filterPillContainer}>
@@ -1765,6 +1841,10 @@ export default function RestaurantListScreen() {
     selectedCategory,
     canScrollCatLeft,
     canScrollCatRight,
+    isSearchActive,
+    searchAnim,
+    handleSearchFocus,
+    handleSearchBlur,
     handlePressCarousel,
     handleActiveTypeChange,
     handleCategoryScroll,
@@ -1970,25 +2050,40 @@ export default function RestaurantListScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <FlatList
-        data={filteredList}
-        extraData={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
-        keyExtractor={(item) => item._id || item.restId}
-        ListHeaderComponent={renderHeader}
-        renderItem={renderRestaurantCard}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        onScroll={handleScroll}
-        scrollEventThrottle={16}
-        initialNumToRender={5}
-        maxToRenderPerBatch={5}
-        windowSize={5}
-        removeClippedSubviews={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
-        }
-      />
+    <View style={[styles.container, { paddingTop: insets.top, overflow: 'hidden' }]}>
+      <Animated.View
+        style={{
+          flex: 1,
+          transform: [{
+            translateY: searchAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, -(carouselItems.length > 0 ? TOP_COLLAPSE_HEIGHT : 88)],
+            }),
+          }],
+        }}
+      >
+        <FlatList
+          ref={mainFlatListRef}
+          data={filteredList}
+          extraData={`${activeType}_${selectedCategory || ''}_${searchQuery}`}
+          keyExtractor={(item) => item._id || item.restId}
+          ListHeaderComponent={renderHeader}
+          renderItem={renderRestaurantCard}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          initialNumToRender={5}
+          maxToRenderPerBatch={5}
+          windowSize={5}
+          removeClippedSubviews={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#E05A47" />
+          }
+        />
+      </Animated.View>
 
       {/* Toast Notification Banner */}
       {toastConfig.visible && (
@@ -2029,8 +2124,14 @@ export default function RestaurantListScreen() {
         animationType="fade"
         onRequestClose={handleDismissHomeAlert}
       >
-        <View style={styles.modalOverlay}>
-          <View
+        <TouchableOpacity
+          style={[styles.modalOverlay, { backgroundColor: 'transparent' }]}
+          activeOpacity={1}
+          onPress={handleDismissHomeAlert}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={(e) => e.stopPropagation()}
             style={[
               styles.modalContent,
               {
@@ -2040,6 +2141,11 @@ export default function RestaurantListScreen() {
                 paddingVertical: 24,
                 paddingHorizontal: 22,
                 backgroundColor: '#FFFFFF',
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 6 },
+                shadowOpacity: 0.15,
+                shadowRadius: 14,
+                elevation: 8,
               },
             ]}
           >
@@ -2129,8 +2235,8 @@ export default function RestaurantListScreen() {
                 OK
               </Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* Deliver To Selector Modal */}

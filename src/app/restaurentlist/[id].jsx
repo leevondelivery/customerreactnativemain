@@ -9,6 +9,7 @@ import {
   Animated,
   Easing,
   FlatList,
+  Keyboard,
   LayoutAnimation,
   Platform,
   SafeAreaView,
@@ -379,12 +380,59 @@ export default function RestaurantMenuScreen() {
 
   // State
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchActive, setIsSearchActive] = useState(false);
+  const isSearchActiveRef = useRef(false);
+  const searchInputRef = useRef(null);
+  const searchAnim = useRef(new Animated.Value(0)).current; // 0: resting normal, 1: at top
   const [filterType, setFilterType] = useState('All'); // 'All', 'Veg', 'Non-Veg'
   const [sortBy, setSortBy] = useState('All'); // 'All', 'Low to High', 'High to Low'
   const [cart, setCart] = useState([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [dropdownItem, setDropdownItem] = useState(null);
+
+  const animateSearch = useCallback((toValue) => {
+    const willBeActive = toValue === 1;
+    if (isSearchActiveRef.current === willBeActive) return;
+    isSearchActiveRef.current = willBeActive;
+    setIsSearchActive(willBeActive);
+
+    Animated.timing(searchAnim, {
+      toValue,
+      duration: willBeActive ? 280 : 240,
+      easing: willBeActive ? Easing.out(Easing.cubic) : Easing.inOut(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [searchAnim]);
+
+  const handleSearchFocus = useCallback(() => {
+    animateSearch(1);
+  }, [animateSearch]);
+
+  const handleSearchBlur = useCallback(() => {
+    // Let keyboard dismiss listener handle return
+  }, []);
+
+  useEffect(() => {
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+
+    const hideListener = Keyboard.addListener(hideEvent, () => {
+      animateSearch(0);
+      searchInputRef.current?.blur();
+    });
+
+    const showListener = Keyboard.addListener(showEvent, () => {
+      if (searchInputRef.current?.isFocused()) {
+        animateSearch(1);
+      }
+    });
+
+    return () => {
+      hideListener.remove();
+      showListener.remove();
+    };
+  }, [animateSearch]);
 
   const handleOpenDescription = useCallback((item) => {
     setDropdownItem(item);
@@ -1454,26 +1502,50 @@ export default function RestaurantMenuScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0 }]}>
-      {/* Main Content */}
-      <FlatList
-        ref={flatListRef}
-        data={groupedCategories}
-        extraData={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}_${restaurantOffers ? 'offers_loaded' : 'no_offers'}`}
-        keyExtractor={(group) => group.title}
-        renderItem={renderCategoryGroup}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }]}
-        onScroll={handleScroll}
-        scrollEventThrottle={32}
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={11}
-        removeClippedSubviews={false}
-        ListHeaderComponent={
-          <>
-            {/* Restaurant Hero Card (redesigned) */}
-            <View style={styles.heroCard}>
+    <SafeAreaView style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0, overflow: 'hidden' }]}>
+      <Animated.View
+        style={{
+          flex: 1,
+          transform: [{
+            translateY: searchAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, -175],
+            }),
+          }],
+        }}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={groupedCategories}
+          extraData={`${filterType}_${selectedCategory || ''}_${sortBy}_${searchQuery}`}
+          keyExtractor={(group) => group.title}
+          renderItem={renderCategoryGroup}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.scrollContent,
+            { paddingBottom: cartItemCount > 0 ? bannerBottom + 85 : 110 }
+          ]}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          onScroll={handleScroll}
+          scrollEventThrottle={32}
+          initialNumToRender={8}
+          maxToRenderPerBatch={8}
+          windowSize={11}
+          removeClippedSubviews={false}
+          ListHeaderComponent={
+            <View>
+              {/* Restaurant Hero Card (redesigned) */}
+              <Animated.View
+                style={{
+                  opacity: searchAnim.interpolate({
+                    inputRange: [0, 0.45, 1],
+                    outputRange: [1, 0.15, 0],
+                  }),
+                }}
+                pointerEvents={isSearchActive ? 'none' : 'auto'}
+              >
+                <View style={styles.heroCard}>
               <View style={styles.heroInfoCard}>
                 <Text style={styles.heroNameText}>{passedName || restaurantDetail?.name || 'Restaurant'}</Text>
                 {displayAddress ? (
@@ -1564,23 +1636,37 @@ export default function RestaurantMenuScreen() {
                 transition={100}
               />
             </View>
+          </Animated.View>
 
             {/* Menu Search and Categories inside search bar */}
-            <View style={styles.searchBarContainer}>
+            <View style={[styles.searchBarContainer, { marginTop: 4, marginBottom: 16 }]}>
               <View style={styles.searchInputContainer}>
                 <Feather name="search" size={20} color="#1E3545" />
                 <TextInput
+                  ref={searchInputRef}
                   style={styles.searchPlaceholderText}
                   placeholder="Search by name"
                   placeholderTextColor="#808C94"
                   value={searchQuery}
                   onChangeText={setSearchQuery}
+                  onFocus={handleSearchFocus}
+                  onBlur={handleSearchBlur}
                   autoCorrect={false}
                   numberOfLines={1}
                   multiline={false}
                   textAlignVertical="center"
                   returnKeyType="search"
+                  onSubmitEditing={() => Keyboard.dismiss()}
                 />
+                {Boolean(searchQuery) && (
+                  <TouchableOpacity
+                    onPress={() => setSearchQuery('')}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={{ paddingRight: 4 }}
+                  >
+                    <Ionicons name="close-circle" size={18} color="#808C94" />
+                  </TouchableOpacity>
+                )}
               </View>
 
               {/* Filtering Pills */}
@@ -1704,9 +1790,10 @@ export default function RestaurantMenuScreen() {
                 <Text style={styles.emptySubtitleText}>Try adjusting your search query or filters.</Text>
               </View>
             )}
-          </>
+          </View>
         }
       />
+    </Animated.View>
 
       {/* Dimmed Backdrop overlay behind drawer */}
       <Animated.View
