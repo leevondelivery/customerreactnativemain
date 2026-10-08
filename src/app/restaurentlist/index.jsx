@@ -47,7 +47,7 @@ const CAROUSEL_WIDTH = Math.min(screenWidth, 500) - 32;
 const CAROUSEL_HEIGHT = CAROUSEL_WIDTH * 0.545 + 5;
 const TOP_COLLAPSE_HEIGHT = Math.round(72 + CAROUSEL_HEIGHT + 20 + 16);
 
-// Precise search query matcher (matches word prefixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
+// Precise search query matcher (matches wordfixes so searching 'lassi' matches 'Lassi' items only, NOT 'Classic')
 const isTextMatchingQuery = (text, query) => {
   if (!text || !query) return false;
   const t = String(text).toLowerCase().trim();
