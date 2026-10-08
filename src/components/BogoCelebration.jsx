@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -27,62 +27,65 @@ const CONFETTI_COLORS = [
 
 const NUM_CONFETTI = 18;
 
+const PARTICLE_SEEDS = Array.from({ length: NUM_CONFETTI }, (_, i) => {
+  const angle = -(Math.PI * 0.15 + (Math.PI * 0.42 * (i / NUM_CONFETTI))) + (((i * 17) % 16 - 8) * 0.01);
+  const velocity = 260 + ((i * 23) % 260);
+  const startX = 24 + ((i * 13) % 30 - 15);
+  const startY = SCREEN_HEIGHT - (Platform.OS === 'ios' ? 140 : 100) + ((i * 7) % 24 - 12);
+  const peakY = startY + Math.sin(angle) * velocity - 35;
+  const endX = startX + Math.cos(angle) * velocity;
+  const endY = startY + Math.sin(angle) * velocity + 120;
+  const rotationStart = (i * 37) % 360;
+  const rotationEnd = rotationStart + 360 + ((i * 41) % 540);
+  const size = 2.4 + ((i * 11) % 18) / 10;
+  const isCircle = i % 3 === 0;
+  const color = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+  return {
+    id: i,
+    size,
+    isCircle,
+    color,
+    startX,
+    endX,
+    startY,
+    peakY,
+    endY,
+    rotationStart,
+    rotationEnd,
+  };
+});
+
 export default function BogoCelebration({ visible, offerDetails, onDismiss }) {
-  const bannerAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const confettiProgress = useRef(new Animated.Value(0)).current;
+  const [bannerAnim] = useState(() => new Animated.Value(0));
+  const [pulseAnim] = useState(() => new Animated.Value(1));
+  const [confettiProgress] = useState(() => new Animated.Value(0));
   const animRunningRef = useRef(false);
 
-  // Pre-compute particle trajectory configurations and fixed interpolation nodes ONCE
+  // Pre-compute fixed interpolation nodes ONCE using static particle seeds
   const particles = useMemo(() => {
-    return Array.from({ length: NUM_CONFETTI }, (_, i) => {
-      const angle = -(Math.PI * 0.15 + (Math.PI * 0.42 * (i / NUM_CONFETTI))) + (Math.random() * 0.16 - 0.08);
-      const velocity = 260 + Math.random() * 260;
-      const startX = 24 + (Math.random() * 30 - 15);
-      const startY = SCREEN_HEIGHT - (Platform.OS === 'ios' ? 140 : 100) + (Math.random() * 24 - 12);
-      const peakY = startY + Math.sin(angle) * velocity - 35;
-      const endX = startX + Math.cos(angle) * velocity;
-      const endY = startY + Math.sin(angle) * velocity + 120;
-      const rotationStart = Math.random() * 360;
-      const rotationEnd = rotationStart + 360 + Math.random() * 540;
-      const size = 2.4 + Math.random() * 1.8;
-      const isCircle = i % 3 === 0;
-      const color = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
-
-      // Attach pre-computed interpolations directly to the single confettiProgress value
-      const translateX = confettiProgress.interpolate({
+    return PARTICLE_SEEDS.map((seed) => ({
+      ...seed,
+      translateX: confettiProgress.interpolate({
         inputRange: [0, 1],
-        outputRange: [startX, endX],
-      });
-      const translateY = confettiProgress.interpolate({
+        outputRange: [seed.startX, seed.endX],
+      }),
+      translateY: confettiProgress.interpolate({
         inputRange: [0, 0.45, 1],
-        outputRange: [startY, peakY, endY],
-      });
-      const rotate = confettiProgress.interpolate({
+        outputRange: [seed.startY, seed.peakY, seed.endY],
+      }),
+      rotate: confettiProgress.interpolate({
         inputRange: [0, 1],
-        outputRange: [`${rotationStart}deg`, `${rotationEnd}deg`],
-      });
-      const opacity = confettiProgress.interpolate({
+        outputRange: [`${seed.rotationStart}deg`, `${seed.rotationEnd}deg`],
+      }),
+      opacity: confettiProgress.interpolate({
         inputRange: [0, 0.75, 1],
         outputRange: [1, 0.9, 0],
-      });
-      const scale = confettiProgress.interpolate({
+      }),
+      scale: confettiProgress.interpolate({
         inputRange: [0, 0.2, 1],
         outputRange: [0.3, 1.2, 0.8],
-      });
-
-      return {
-        id: i,
-        size,
-        isCircle,
-        color,
-        translateX,
-        translateY,
-        rotate,
-        opacity,
-        scale,
-      };
-    });
+      }),
+    }));
   }, [confettiProgress]);
 
   useEffect(() => {

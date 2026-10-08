@@ -283,7 +283,7 @@ export default function MyDetailsScreen() {
             }
           }
           phoneVerifiedRef.current = false;
-          const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+          const confirmation = await auth().signInWithPhoneNumber(formattedPhone, isResend);
           setConfirmResult(confirmation);
           setIsOTPResend(isResend);
           setShowOTPSentModal(true);

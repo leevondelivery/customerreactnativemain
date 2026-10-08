@@ -310,10 +310,11 @@ export const fetchRestaurantMenu = createAsyncThunk(
         } catch (_e) {}
       }
 
+      const targetRestId = restaurantId || rest?.restId || rest?._id || '';
       if (rest?.coupons && (Array.isArray(rest.coupons) ? rest.coupons.length > 0 : Boolean(rest.coupons.couponCode))) {
-        saveRestaurantCouponToStorage(rest.coupons);
+        saveRestaurantCouponToStorage(rest.coupons, targetRestId);
       } else if (offers?.coupons && (Array.isArray(offers.coupons) ? offers.coupons.length > 0 : Boolean(offers.coupons.couponCode))) {
-        saveRestaurantCouponToStorage(offers.coupons);
+        saveRestaurantCouponToStorage(offers.coupons, targetRestId);
       }
 
       return { restaurantId, rest, items, offers };

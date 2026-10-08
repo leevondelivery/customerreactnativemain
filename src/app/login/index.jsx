@@ -71,6 +71,7 @@ export default function LoginScreen() {
   const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
   const [showForgotPasswordNewPassword, setShowForgotPasswordNewPassword] = useState(false);
   const [forgotPasswordError, setForgotPasswordError] = useState('');
+  const [forgotPasswordResendTimer, setForgotPasswordResendTimer] = useState(0);
   const [showSupportModal, setShowSupportModal] = useState(false);
 
   // Signup OTP Modal States
@@ -191,6 +192,18 @@ export default function LoginScreen() {
   }, [showSignupOtpModal, signupResendTimer]);
 
   useEffect(() => {
+    let interval = null;
+    if (showForgotPasswordModal && forgotPasswordStep === 2 && forgotPasswordResendTimer > 0) {
+      interval = setInterval(() => {
+        setForgotPasswordResendTimer((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [showForgotPasswordModal, forgotPasswordStep, forgotPasswordResendTimer]);
+
+  useEffect(() => {
     if (showSignupOtpModal) {
       const timer = setTimeout(() => {
         otpInputRef.current?.focus();
@@ -200,10 +213,11 @@ export default function LoginScreen() {
   }, [showSignupOtpModal]);
 
   const handleResendSignupOTP = async () => {
-    if (signupResendTimer > 0) return;
+    if (signupResendTimer > 0 || signupOtpLoading) return;
     setSignupOtpError('');
     setSignupOtp('');
     setSignupResendTimer(30);
+    setSignupOtpLoading(true);
     signupCompletedRef.current = false;
     const cleanPhone = mobile.trim().replace(/\D/g, '').slice(-10);
     const formattedPhone = `+91${cleanPhone}`;
@@ -215,7 +229,7 @@ export default function LoginScreen() {
             await auth().signOut();
           } catch (e) {}
         }
-        const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+        const confirmation = await auth().signInWithPhoneNumber(formattedPhone, true);
         setSignupConfirmResult(confirmation);
       } else {
         throw new Error('Firebase Auth service unavailable');
@@ -224,6 +238,8 @@ export default function LoginScreen() {
       console.error('[Signup OTP] Firebase SMS resend failed:', otpErr);
       setSignupConfirmResult(null);
       setSignupOtpError(otpErr.message || 'Failed to resend OTP via Firebase. Please try again.');
+    } finally {
+      setSignupOtpLoading(false);
     }
   };
 
@@ -833,6 +849,7 @@ export default function LoginScreen() {
           const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
           setForgotPasswordConfirmResult(confirmation);
           setForgotPasswordStep(2);
+          setForgotPasswordResendTimer(30);
         } else {
           throw new Error('Firebase Auth service unavailable');
         }
@@ -844,6 +861,35 @@ export default function LoginScreen() {
     } catch (error) {
       console.error('[Forgot Password] Check phone request error:', error);
       setForgotPasswordError('Failed to verify phone number. Please try again.');
+    } finally {
+      setForgotPasswordLoading(false);
+    }
+  };
+
+  const handleResendForgotPasswordOTP = async () => {
+    if (forgotPasswordResendTimer > 0 || forgotPasswordLoading) return;
+    setForgotPasswordError('');
+    setForgotPasswordOtp('');
+    setForgotPasswordResendTimer(30);
+    setForgotPasswordLoading(true);
+    try {
+      const formattedPhone = `+91${forgotPasswordPhone.trim().slice(-10)}`;
+      console.log(`[Forgot Password] Resending Firebase OTP for: ${formattedPhone}`);
+      if (auth && typeof auth === 'function') {
+        if (auth().currentUser) {
+          try {
+            await auth().signOut();
+          } catch (soErr) {}
+        }
+        const confirmation = await auth().signInWithPhoneNumber(formattedPhone, true);
+        setForgotPasswordConfirmResult(confirmation);
+      } else {
+        throw new Error('Firebase Auth service unavailable');
+      }
+    } catch (otpErr) {
+      console.error('[Forgot Password] Firebase SMS resend failed:', otpErr);
+      setForgotPasswordConfirmResult(null);
+      setForgotPasswordError(otpErr.message || 'Failed to resend OTP via Firebase. Please try again.');
     } finally {
       setForgotPasswordLoading(false);
     }
@@ -967,6 +1013,7 @@ export default function LoginScreen() {
     setForgotPasswordConfirmPassword('');
     setForgotPasswordStep(1);
     setForgotPasswordError('');
+    setForgotPasswordResendTimer(0);
   }, []);
 
   useFocusEffect(
@@ -1468,6 +1515,26 @@ export default function LoginScreen() {
                     onChangeText={setForgotPasswordConfirmPassword}
                     autoCapitalize="none"
                   />
+                </View>
+
+                {/* Resend OTP Section */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 5 }}>
+                  <Text style={{ color: '#7E7C77', fontSize: 13 }}>{"Didn't receive code? "}</Text>
+                  {forgotPasswordResendTimer > 0 ? (
+                    <Text style={{ color: '#9C9C9C', fontSize: 13, fontWeight: '600' }}>
+                      Resend in {forgotPasswordResendTimer}s
+                    </Text>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={handleResendForgotPasswordOTP}
+                      disabled={forgotPasswordLoading}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={{ color: '#E05A47', fontWeight: 'bold', fontSize: 13 }}>
+                        Resend OTP
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             )}

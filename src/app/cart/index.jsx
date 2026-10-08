@@ -358,6 +358,8 @@ export default function CartScreen() {
         discountAmount: calculatedDiscount,
         minOrderAmount: 0,
         minOrderValue: 0,
+        restId: cartItems[0]?.restId || cartItems[0]?.restaurantId || '',
+        isRestaurantCoupon: true,
       };
 
       setAppliedCoupon(couponObj);
@@ -452,6 +454,8 @@ export default function CartScreen() {
           discountAmount: Number(data.discountAmount ?? data.coupon?.discountAmount ?? 0),
           minOrderAmount: minOrder,
           minOrderValue: minOrder,
+          restId: cartItems[0]?.restId || cartItems[0]?.restaurantId || '',
+          isRestaurantCoupon: false,
         };
         setAppliedCoupon(couponObj);
         await AsyncStorage.setItem('applied_coupon', JSON.stringify(couponObj));
@@ -479,9 +483,9 @@ export default function CartScreen() {
     }
   };
 
-  // Automatically remove coupon and discount if cart is empty or total drops below minimum order requirement
+  // Automatically clear coupon only when cart is completely empty (0 items) after initial load finishes
   useEffect(() => {
-    if (cartItems.length === 0) {
+    if (!loading && cartItems.length === 0) {
       if (appliedCoupon || availableRestaurantCoupon) {
         setAppliedCoupon(null);
         setAvailableRestaurantCoupon(null);
@@ -490,20 +494,8 @@ export default function CartScreen() {
         AsyncStorage.removeItem('applied_coupon').catch(() => {});
         clearRestaurantCoupon().catch(() => {});
       }
-      return;
     }
-    if (appliedCoupon) {
-      const minOrder = Number(appliedCoupon.minOrderAmount ?? appliedCoupon.minOrderValue ?? appliedCoupon.minOrder ?? 0);
-      if (minOrder > 0) {
-        const currentSub = calculateTotal();
-        if (currentSub < minOrder) {
-          setAppliedCoupon(null);
-          setCouponError(`Coupon removed: Minimum order value of ₹${minOrder} required.`);
-          AsyncStorage.removeItem('applied_coupon');
-        }
-      }
-    }
-  }, [cartItems, appliedCoupon, availableRestaurantCoupon, calculateTotal]);
+  }, [loading, cartItems.length, appliedCoupon, availableRestaurantCoupon]);
 
   const handleRemoveCoupon = async () => {
     setAppliedCoupon(null);
@@ -618,6 +610,7 @@ export default function CartScreen() {
 
   const loadCart = useCallback(async () => {
     try {
+      setLoading(true);
       const cartData = await AsyncStorage.getItem('cart');
       let currentItems = [];
       if (cartData) {
@@ -630,23 +623,70 @@ export default function CartScreen() {
       if (storedCoupon) {
         try {
           const parsedCoupon = JSON.parse(storedCoupon);
-          const minOrder = Number(parsedCoupon.minOrderAmount ?? parsedCoupon.minOrderValue ?? parsedCoupon.minOrder ?? 0);
-          const currentSub = currentItems.reduce((sum, item) => {
-            const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
-            const price = (offerPercent > 0 && offerPercent <= 100)
-              ? (item.price - (item.price * (offerPercent / 100)))
-              : (item.price || 0);
-            return sum + price * (item.quantity || 0);
-          }, 0);
+          const cartRestId = String(currentItems[0]?.restId || currentItems[0]?.restaurantId || '').trim();
+          const couponRestId = String(parsedCoupon.restId || '').trim();
 
-          if (minOrder > 0 && currentSub < minOrder) {
-            await AsyncStorage.removeItem('applied_coupon');
-            setAppliedCoupon(null);
+          if (currentItems && currentItems.length > 0) {
+            // Check if coupon belongs to a specific restaurant and whether it matches current cart restaurant
+            if (!couponRestId || !cartRestId || couponRestId === cartRestId) {
+              setAppliedCoupon(parsedCoupon);
+            } else {
+              console.log(`[Cart] Stored coupon restId (${couponRestId}) doesn't match cart restId (${cartRestId}). Clearing stale coupon.`);
+              setAppliedCoupon(null);
+              await AsyncStorage.removeItem('applied_coupon').catch(() => {});
+            }
           } else {
-            setAppliedCoupon(parsedCoupon);
+            setAppliedCoupon(null);
+            await AsyncStorage.removeItem('applied_coupon').catch(() => {});
+          }
+
+          // Live validation check against backend database for applied coupon
+          if (parsedCoupon && parsedCoupon.couponCode) {
+            const codeToValidate = String(parsedCoupon.couponCode).trim();
+            const activeUid = userid || (await AsyncStorage.getItem('userid')) || (await AsyncStorage.getItem('user_id')) || '';
+            const activePhone = (await AsyncStorage.getItem('phone')) || '';
+
+            const currentSub = currentItems.reduce((sum, item) => {
+              const offerPercent = item.offerpercentage ? parseFloat(item.offerpercentage) : 0;
+              const price = (offerPercent > 0 && offerPercent <= 100)
+                ? (item.price - (item.price * (offerPercent / 100)))
+                : (item.price || 0);
+              return sum + price * (item.quantity || 0);
+            }, 0);
+
+            fetch(`${API_URL}/api/coupon/validate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                couponCode: codeToValidate,
+                cartTotal: currentSub || 1000,
+                userId: activeUid,
+                userPhone: activePhone,
+              }),
+            })
+              .then(res => res.json())
+              .then(async (valData) => {
+                if (valData && !valData.success) {
+                  const msg = String(valData.message || '').toLowerCase();
+                  const isMinOrderOnly =
+                    msg.includes('minimum order') ||
+                    msg.includes('min order') ||
+                    msg.includes('cart total') ||
+                    msg.includes('order value');
+
+                  // If failure is NOT just min order requirement (i.e. coupon is inactive, expired, deleted, or invalid in DB)
+                  if (!isMinOrderOnly) {
+                    console.log(`[Cart] Live check: Coupon "${codeToValidate}" is inactive or deleted in DB. Removing.`);
+                    setAppliedCoupon(null);
+                    await AsyncStorage.removeItem('applied_coupon').catch(() => {});
+                    triggerToast('Applied coupon is inactive or no longer valid and has been removed', 'warning');
+                  }
+                }
+              })
+              .catch(err => console.warn('[Cart] Live coupon validation check error:', err));
           }
         } catch (e) {
-          setAppliedCoupon(null);
+          console.warn('[Cart] Error parsing stored coupon:', e);
         }
       } else {
         try {
@@ -740,7 +780,7 @@ export default function CartScreen() {
       setAvailableRestaurantCoupon(null);
       return;
     }
-    const cartRestId = cartItems[0]?.restId || cartItems[0]?.restaurantId || '';
+    const cartRestId = String(cartItems[0]?.restId || cartItems[0]?.restaurantId || '').trim();
 
     // 1. Check from restaurantOffers first
     const offersCoupons = restaurantOffers?.coupons;
@@ -769,10 +809,19 @@ export default function CartScreen() {
       return;
     }
 
-    // 3. Fallback: check AsyncStorage
+    // 3. Fallback: check AsyncStorage if restaurant_id matches cartRestId
     AsyncStorage.getItem('couponCode').then(async (code) => {
       const cCode = code || (await AsyncStorage.getItem('coupencode'));
-      if (cCode) {
+      const storedRestId = await AsyncStorage.getItem('coupon_restaurant_id');
+
+      if (cartRestId && storedRestId && String(cartRestId).trim() !== String(storedRestId).trim()) {
+        console.log(`[Cart] Stored coupon restId (${storedRestId}) mismatch with cart restId (${cartRestId}). Clearing coupon.`);
+        await clearRestaurantCoupon();
+        setAvailableRestaurantCoupon(null);
+        return;
+      }
+
+      if (cCode && (!storedRestId || !cartRestId || String(cartRestId).trim() === String(storedRestId).trim())) {
         const cType = (await AsyncStorage.getItem('offerType')) || (await AsyncStorage.getItem('offertype')) || 'percentage';
         const cVal = (await AsyncStorage.getItem('offerValue')) || (await AsyncStorage.getItem('offervalue')) || '0';
         setAvailableRestaurantCoupon({
@@ -780,6 +829,8 @@ export default function CartScreen() {
           offerType: cType.toLowerCase(),
           offerValue: cVal,
         });
+      } else {
+        setAvailableRestaurantCoupon(null);
       }
     }).catch(() => {});
   }, [cartItems, restaurantOffers, restaurants]);
@@ -1305,7 +1356,7 @@ export default function CartScreen() {
             }
           }
           phoneVerifiedRef.current = false;
-          const confirmation = await auth().signInWithPhoneNumber(formattedPhone);
+          const confirmation = await auth().signInWithPhoneNumber(formattedPhone, isResend);
           setConfirmResult(confirmation);
           triggerToast(isResend ? 'OTP Resent Successfully!' : 'OTP Sent Successfully!', 'success');
           setResendTimer(30);
@@ -2678,15 +2729,21 @@ export default function CartScreen() {
             <View style={styles.appliedCouponContainer}>
               <View style={styles.appliedCouponLeft}>
                 <View style={styles.appliedCouponTagIconWrapper}>
-                  <Ionicons name="pricetag" size={16} color="#059669" />
+                  <Ionicons name="pricetag" size={16} color={discountAmount > 0 ? "#059669" : "#D97706"} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.appliedCouponCode}>{appliedCoupon.couponCode}</Text>
-                  <Text style={styles.appliedCouponSub}>
-                    {appliedCoupon.discountType === 'percentage'
-                      ? `${appliedCoupon.discountValue}% discount applied`
-                      : `₹${appliedCoupon.discountValue} discount applied`}
-                  </Text>
+                  {discountAmount > 0 ? (
+                    <Text style={styles.appliedCouponSub}>
+                      {appliedCoupon.discountType === 'percentage'
+                        ? `${appliedCoupon.discountValue}% discount applied`
+                        : `₹${appliedCoupon.discountValue} discount applied`}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.appliedCouponSub, { color: '#D97706' }]}>
+                      Add items worth ₹{(Number(appliedCoupon.minOrderAmount || appliedCoupon.minOrderValue || 0) - total).toFixed(2)} more to unlock
+                    </Text>
+                  )}
                 </View>
               </View>
               <TouchableOpacity
@@ -2727,7 +2784,7 @@ export default function CartScreen() {
             </View>
           )}
           {couponError ? <Text style={styles.couponErrorText}>{couponError}</Text> : null}
-          {appliedCoupon ? (
+          {appliedCoupon && discountAmount > 0 ? (
             <Text style={styles.couponSuccessText}>
               Savings of ₹{discountAmount.toFixed(2)} applied to item price!
             </Text>

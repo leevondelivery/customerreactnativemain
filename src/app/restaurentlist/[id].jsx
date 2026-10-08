@@ -30,7 +30,7 @@ import BogoCelebration from '../../components/BogoCelebration';
 import { API_URL } from '../../config';
 import { skipLocation } from '../../store/locationSlice';
 import { fetchRestaurantMenu, pollRestaurantMenu } from '../../store/restaurantsSlice';
-import { saveRestaurantCouponToStorage } from '../../utils/couponStorage';
+import { saveRestaurantCouponToStorage, clearRestaurantCoupon } from '../../utils/couponStorage';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -76,11 +76,15 @@ const memoryOffersCache = new Map();
 
 const isItemAvailable = (item) => {
   if (!item) return false;
-  if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0) return false;
-  if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0) return false;
-  if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'OUT_OF_STOCK' || item.status === 'inactive' || item.status === 0) return false;
-  if (item.available === false || item.available === 'false' || item.available === 0) return false;
-  if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0) return false;
+  if (item.itemStatus === false || item.itemStatus === 'false' || item.itemStatus === 0 || item.itemStatus === '0' || item.itemStatus === 'OFF' || item.itemStatus === 'off') return false;
+  if (item.itemtodisplayintherestuarentapp === false || item.itemtodisplayintherestuarentapp === 'false' || item.itemtodisplayintherestuarentapp === 0 || item.itemtodisplayintherestuarentapp === '0') return false;
+  if (item.status === false || item.status === 'false' || item.status === 'unavailable' || item.status === 'UNAVAILABLE' || item.status === 'OUT_OF_STOCK' || item.status === 'out_of_stock' || item.status === 'inactive' || item.status === 'INACTIVE' || item.status === 'off' || item.status === 'OFF' || item.status === 0 || item.status === '0') return false;
+  if (item.available === false || item.available === 'false' || item.available === 0 || item.available === '0' || item.available === 'off' || item.available === 'OFF') return false;
+  if (item.isAvailable === false || item.isAvailable === 'false' || item.isAvailable === 0 || item.isAvailable === '0' || item.isAvailable === 'off' || item.isAvailable === 'OFF') return false;
+  if (item.isOff === true || item.isOff === 'true' || item.isOff === 1 || item.isOff === '1') return false;
+  if (item.off === true || item.off === 'true' || item.off === 1 || item.off === '1') return false;
+  if (item.inStock === false || item.inStock === 'false' || item.inStock === 0 || item.inStock === '0') return false;
+  if (item.isOutOfStock === true || item.isOutOfStock === 'true' || item.isOutOfStock === 1 || item.isOutOfStock === '1') return false;
   return true;
 };
 
@@ -116,11 +120,24 @@ const ItemCard = React.memo(function ItemCard({ item, quantity, onUpdateQuantity
     <View style={[
       styles.itemCard,
       !available && {
-        opacity: 0.7,
-        backgroundColor: '#F2F2F7',
+        opacity: 0.55,
+        backgroundColor: '#EBEBEB',
         borderColor: '#D1D1D6',
       }
     ]}>
+      {/* Grey scale overlay for OFF items on Native & Web */}
+      {!available && (
+        <View
+          style={{
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(120, 120, 120, 0.25)',
+            borderRadius: 12,
+            zIndex: 5,
+          }}
+          pointerEvents="none"
+        />
+      )}
+
       {/* Out of Stock Top Overlay Badge */}
       {!available && (
         <View style={{
@@ -845,11 +862,11 @@ export default function RestaurantMenuScreen() {
   useEffect(() => {
     const coupons = restaurantDetail?.coupons || restaurantOffers?.coupons;
     if (coupons && (Array.isArray(coupons) ? coupons.length > 0 : Boolean(coupons.couponCode || coupons.coupencode))) {
-      saveRestaurantCouponToStorage(coupons);
+      saveRestaurantCouponToStorage(coupons, restId);
     } else if (hasOffersFetched || restaurantDetail) {
-      saveRestaurantCouponToStorage(null);
+      saveRestaurantCouponToStorage(null, restId);
     }
-  }, [restaurantDetail?.coupons, restaurantOffers?.coupons, hasOffersFetched, restaurantDetail]);
+  }, [restaurantDetail?.coupons, restaurantOffers?.coupons, hasOffersFetched, restaurantDetail, restId]);
 
   // Zero-flicker loading gate:
   // Requires both menu items and offers to be resolved before mounting the UI
@@ -1091,7 +1108,13 @@ export default function RestaurantMenuScreen() {
         return true;
       })
       .sort((a, b) => {
-        // Priority 1: When searching, search query matching items come at the very top
+        // Priority 1: Available items ALWAYS come before out-of-stock / off items (off items go down to last!)
+        const availA = isItemAvailable(a);
+        const availB = isItemAvailable(b);
+        if (availA && !availB) return -1;
+        if (!availA && availB) return 1;
+
+        // Priority 2: When searching, search query matching items come at the very top
         if (hasQuery) {
           const matchA = checkMatch(a);
           const matchB = checkMatch(b);
@@ -1108,7 +1131,7 @@ export default function RestaurantMenuScreen() {
           }
         }
 
-        // Priority 2: If a category is selected from drawer, items belonging to it are placed at the top
+        // Priority 3: If a category is selected from drawer, items belonging to it are placed at the top
         if (!catAll) {
           const isBogoCat = selectedCatLower.includes('1+1');
           if (isBogoCat) {
@@ -1124,24 +1147,18 @@ export default function RestaurantMenuScreen() {
           }
         }
 
-        // Priority 3: 1+1 BOGO items at the very top
+        // Priority 4: 1+1 BOGO items at the very top
         const bogoA = checkIsBogo(a, a.category);
         const bogoB = checkIsBogo(b, b.category);
         if (bogoA && !bogoB) return -1;
         if (!bogoA && bogoB) return 1;
 
-        // Priority 4: Items with direct or category discount (highest % discount first)
+        // Priority 5: Items with direct or category discount (highest % discount first)
         const discA = getItemDiscountPercent(a, a.category);
         const discB = getItemDiscountPercent(b, b.category);
         if (discA > 0 && discB <= 0) return -1;
         if (discA <= 0 && discB > 0) return 1;
         if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
-
-        // Priority 5: Available items before out-of-stock items
-        const availA = isItemAvailable(a);
-        const availB = isItemAvailable(b);
-        if (availA && !availB) return -1;
-        if (!availA && availB) return 1;
 
         // Priority 6: Price sorting
         if (sortBy === 'Low to High') {
@@ -1292,14 +1309,14 @@ export default function RestaurantMenuScreen() {
       itemsForCategorization = nonMatchingItems;
     }
 
-    // 1. Gather all items that have active 1+1 (BOGO) offer
+    // 1. Gather all AVAILABLE items that have active 1+1 (BOGO) offer for top section
     const bogoItems = [];
     const hasBogoOffers = Boolean(restaurantOffers?.bogoOffers && restaurantOffers.bogoOffers.length > 0);
 
     if (hasBogoOffers) {
       for (let i = 0; i < itemsForCategorization.length; i++) {
         const item = itemsForCategorization[i];
-        if (checkIsBogo(item, item.category)) {
+        if (checkIsBogo(item, item.category) && isItemAvailable(item)) {
           bogoItems.push(item);
         }
       }
@@ -1315,24 +1332,19 @@ export default function RestaurantMenuScreen() {
       });
     }
 
-    // 2. Gather all items that have any direct or category discount
+    // 2. Gather all AVAILABLE items that have any direct or category discount for top section
     const discountItems = [];
     for (let i = 0; i < itemsForCategorization.length; i++) {
       const item = itemsForCategorization[i];
       const disc = getItemDiscountPercent(item, item.category);
-      if (disc > 0) {
+      if (disc > 0 && isItemAvailable(item)) {
         discountItems.push(item);
       }
     }
     discountItems.sort((a, b) => {
       const discA = getItemDiscountPercent(a, a.category);
       const discB = getItemDiscountPercent(b, b.category);
-      if (discA !== discB) return discB - discA;
-      const availA = isItemAvailable(a);
-      const availB = isItemAvailable(b);
-      if (availA && !availB) return -1;
-      if (!availA && availB) return 1;
-      return 0;
+      return discB - discA;
     });
 
     // If discount items exist, show dedicated "Special Discount Offers" section
@@ -1345,10 +1357,17 @@ export default function RestaurantMenuScreen() {
       });
     }
 
-    // 3. Populate regular category groups
+    // 3. Populate regular category groups with AVAILABLE items only
     const groupMap = {};
+    const unavailableItems = [];
+
     for (let i = 0; i < itemsForCategorization.length; i++) {
       const item = itemsForCategorization[i];
+      if (!isItemAvailable(item)) {
+        unavailableItems.push(item);
+        continue;
+      }
+
       const rawCat = item.category ? item.category.trim() : 'Menu';
       const catTitle = rawCat ? (rawCat.charAt(0).toUpperCase() + rawCat.slice(1)) : 'Menu';
 
@@ -1359,10 +1378,7 @@ export default function RestaurantMenuScreen() {
       groupMap[catTitle].push(item);
     }
 
-    // Within each regular category group:
-    // Rank 1: 1+1 BOGO items
-    // Rank 2: Discounted items (highest discount % first)
-    // Rank 3: Available items before out-of-stock items
+    // Within each regular category group, sort available items
     groups.forEach((g) => {
       if (!g.isSpecialOffer) {
         g.items.sort((a, b) => {
@@ -1377,20 +1393,20 @@ export default function RestaurantMenuScreen() {
           if (discA <= 0 && discB > 0) return 1;
           if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
 
-          const availA = isItemAvailable(a);
-          const availB = isItemAvailable(b);
-          if (availA && !availB) return -1;
-          if (!availA && availB) return 1;
-
           return 0;
         });
       }
     });
 
-    // Handle user selected category filter from drawer
-    if (selectedCategory && selectedCategory !== 'All') {
-      const selCatLower = selectedCategory.toLowerCase().trim();
-      groups.sort((a, b) => {
+    // Sort category groups:
+    // 1. Special offer groups (search, bogo, discount) stay at top
+    // 2. Categories matching user selected filter from drawer
+    groups.sort((a, b) => {
+      if (a.isSpecialOffer && !b.isSpecialOffer) return -1;
+      if (!a.isSpecialOffer && b.isSpecialOffer) return 1;
+
+      if (selectedCategory && selectedCategory !== 'All') {
+        const selCatLower = selectedCategory.toLowerCase().trim();
         const isASel = a.title.toLowerCase().trim() === selCatLower ||
           (selCatLower.includes('1+1') && a.offerType === 'bogo') ||
           (selCatLower.includes('discount') && a.offerType === 'discount');
@@ -1399,7 +1415,18 @@ export default function RestaurantMenuScreen() {
           (selCatLower.includes('discount') && b.offerType === 'discount');
         if (isASel && !isBSel) return -1;
         if (!isASel && isBSel) return 1;
-        return 0;
+      }
+
+      return 0;
+    });
+
+    // 4. Gather ALL OFF / Unavailable items into a single "Currently Unavailable" group at the VERY BOTTOM below all categories
+    if (unavailableItems.length > 0) {
+      groups.push({
+        title: 'Currently Unavailable',
+        isSpecialOffer: true,
+        offerType: 'unavailable',
+        items: unavailableItems,
       });
     }
 
@@ -1410,9 +1437,10 @@ export default function RestaurantMenuScreen() {
     const isSearchGroup = group.offerType === 'search';
     const isBogoGroup = group.offerType === 'bogo';
     const isDiscountGroup = group.offerType === 'discount';
-    const bannerBgColor = isSearchGroup ? '#0F766E' : (isBogoGroup ? '#065F46' : (isDiscountGroup ? '#EA580C' : '#1E3545'));
-    const dividerColor = isSearchGroup ? 'rgba(15, 118, 110, 0.25)' : (isBogoGroup ? 'rgba(6, 95, 70, 0.25)' : (isDiscountGroup ? 'rgba(234, 88, 12, 0.25)' : 'rgba(30, 53, 69, 0.15)'));
-    const bannerTitle = isSearchGroup ? `🔍 ${group.title}` : (isBogoGroup ? `🎉 ${group.title}` : group.title);
+    const isUnavailableGroup = group.offerType === 'unavailable';
+    const bannerBgColor = isSearchGroup ? '#0F766E' : (isBogoGroup ? '#065F46' : (isDiscountGroup ? '#EA580C' : (isUnavailableGroup ? '#64748B' : '#1E3545')));
+    const dividerColor = isSearchGroup ? 'rgba(15, 118, 110, 0.25)' : (isBogoGroup ? 'rgba(6, 95, 70, 0.25)' : (isDiscountGroup ? 'rgba(234, 88, 12, 0.25)' : (isUnavailableGroup ? 'rgba(100, 116, 139, 0.25)' : 'rgba(30, 53, 69, 0.15)')));
+    const bannerTitle = isSearchGroup ? `🔍 ${group.title}` : (isBogoGroup ? `🎉 ${group.title}` : (isUnavailableGroup ? `🚫 ${group.title}` : group.title));
 
     return (
       <View key={group.title} style={{ marginBottom: 16 }}>
@@ -2037,6 +2065,10 @@ export default function RestaurantMenuScreen() {
                 onPress={async () => {
                   if (pendingItemToAdd) {
                     try {
+                      await clearRestaurantCoupon();
+                      if (restaurantOffers?.coupons) {
+                        saveRestaurantCouponToStorage(restaurantOffers.coupons, restId);
+                      }
                       const bogoMatch = getBogoOffer(pendingItemToAdd, pendingItemToAdd.category);
                       const isBogoMatch = Boolean(bogoMatch);
                       const catDiscountPercent = getCategoryDiscountPercent(pendingItemToAdd, pendingItemToAdd.category);
