@@ -1784,7 +1784,7 @@ export default function CartScreen() {
     const distanceStr = roadDistances[restId] || '';
     const distanceVal = parseFloat(distanceStr) || 0;
     const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
-    const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+    const extraDistance = Math.ceil(Math.max(0, distanceVal - baseKmThreshold));
     const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
     const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
     const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
@@ -2363,7 +2363,7 @@ export default function CartScreen() {
   const restId = targetRestId;
   const distanceVal = parseFloat(distanceStr) || 0;
   const baseKmThreshold = Number(feesConfig?.baseKmThreshold ?? 3);
-  const extraDistance = Math.max(0, distanceVal - baseKmThreshold);
+  const extraDistance = Math.ceil(Math.max(0, distanceVal - baseKmThreshold));
   const baseDeliveryFee = Number(feesConfig?.deliveryFeeBase || 0) + (extraDistance * Number(feesConfig?.deliveryFeePerKm || 0));
   const isSurgeOn = (feesConfig?.isSurgeActive === true || feesConfig?.isSurgeActive === 'true' || feesConfig?.isSurgeActive === 1 || feesConfig?.isSurgeActive === '1') && Number(feesConfig?.surgeFee || 0) > 0;
   const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
