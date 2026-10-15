@@ -1,18 +1,24 @@
-import { useEffect, useMemo } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Animated, Easing, Image, Platform, StyleSheet, Text, View } from 'react-native';
 
 export default function LoadingView() {
-  const rotateAnim = useMemo(() => new Animated.Value(0), []);
+  const rotateAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.loop(
+    rotateAnim.setValue(0);
+    const animation = Animated.loop(
       Animated.timing(rotateAnim, {
         toValue: 1,
-        duration: 1200,
+        duration: 1100,
         easing: Easing.linear,
-        useNativeDriver: false,
+        useNativeDriver: Platform.OS !== 'web',
       })
-    ).start();
+    );
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
   }, [rotateAnim]);
 
   const rotate = rotateAnim.interpolate({

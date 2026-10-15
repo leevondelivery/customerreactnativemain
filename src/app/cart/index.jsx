@@ -1790,8 +1790,7 @@ export default function CartScreen() {
     const surgeFee = isSurgeOn ? Number(feesConfig.surgeFee) : 0;
     const deliveryFee = Math.round((baseDeliveryFee + surgeFee) * 100) / 100;
     const foodGstAmount = Math.round((subTotal * 0.05) * 100) / 100;
-    const deliveryGstAmount = Math.round((deliveryFee * 0.18) * 100) / 100;
-    const gstAmount = Math.round((foodGstAmount + deliveryGstAmount) * 100) / 100;
+    const gstAmount = foodGstAmount;
     const gTotal = Math.round(Math.max(0, subTotal - totalDiscount + gstAmount + deliveryFee + packagingFee) * 100) / 100;
 
     return {
@@ -1805,7 +1804,6 @@ export default function CartScreen() {
       deliveryFee,
       surgeFee,
       foodGstAmount,
-      deliveryGstAmount,
       gstAmount,
       packagingFee,
       gTotal,
@@ -1829,7 +1827,6 @@ export default function CartScreen() {
         deliveryFee,
         surgeFee,
         foodGstAmount,
-        deliveryGstAmount,
         gstAmount,
         packagingFee: orderPkgFee,
         gTotal,
@@ -1891,7 +1888,6 @@ export default function CartScreen() {
         totalPrice: subTotal,
         gst: gstAmount,
         foodGst: foodGstAmount,
-        deliveryGst: deliveryGstAmount,
         platformFee: 0.00,
         packagingFee: orderPkgFee || 0,
         grandTotal: gTotal,
@@ -1983,7 +1979,6 @@ export default function CartScreen() {
       deliveryFee,
       surgeFee,
       foodGstAmount,
-      deliveryGstAmount,
       gstAmount,
       packagingFee: orderPkgFee,
       gTotal,
@@ -2102,7 +2097,6 @@ export default function CartScreen() {
                   totalPrice: subTotal,
                   gst: gstAmount,
                   foodGst: foodGstAmount,
-                  deliveryGst: deliveryGstAmount,
                   platformFee: pFee,
                   packagingFee: orderPkgFee !== undefined ? orderPkgFee : (packagingFee || 0),
                   grandTotal: gTotal,
@@ -2227,7 +2221,6 @@ export default function CartScreen() {
                     totalPrice: subTotal,
                     gst: gstAmount,
                     foodGst: foodGstAmount,
-                    deliveryGst: deliveryGstAmount,
                     platformFee: pFee,
                     packagingFee: orderPkgFee !== undefined ? orderPkgFee : (packagingFee || 0),
                     grandTotal: gTotal,
@@ -2370,8 +2363,7 @@ export default function CartScreen() {
   const isLocationFetched = locationStatus === 'inside';
   const deliveryFee = isLocationFetched ? Math.round((baseDeliveryFee + surgeFee) * 100) / 100 : 0;
   const foodGst = Math.round((total * 0.05) * 100) / 100; // 5% Food GST
-  const deliveryGst = isLocationFetched ? Math.round((deliveryFee * 0.18) * 100) / 100 : 0; // 18% Delivery GST
-  const gst = Math.round((foodGst + deliveryGst) * 100) / 100;
+  const gst = foodGst;
   const grandTotal = Math.round(Math.max(0, total - discountAmount - restaurantTieredDiscount + gst + deliveryFee + packagingFee) * 100) / 100;
   // Dynamic Coins Calculation
   const coinsMin = feesConfig.coinMinOrderAmount ?? 200;
@@ -2872,8 +2864,6 @@ export default function CartScreen() {
           {isGstExpanded && (() => {
             const foodCgst = (foodGst / 2).toFixed(2);
             const foodSgst = (foodGst / 2).toFixed(2);
-            const delCgst = (deliveryGst / 2).toFixed(2);
-            const delSgst = (deliveryGst / 2).toFixed(2);
             return (
               <View style={{ backgroundColor: '#F4F6F8', borderRadius: 10, padding: 12, marginVertical: 6, borderWidth: 1, borderColor: '#E2E8F0' }}>
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
@@ -2887,23 +2877,6 @@ export default function CartScreen() {
                   <Text style={{ fontSize: 12, color: '#64748B' }}>SGST (2.5%)</Text>
                   <Text style={{ fontSize: 12, color: '#64748B' }}>₹{foodSgst}</Text>
                 </View>
-
-                {deliveryGst > 0 && (
-                  <>
-                    <View style={{ height: 1, backgroundColor: '#CBD5E1', marginVertical: 8 }} />
-                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', marginBottom: 4 }}>
-                      Delivery GST (18%): ₹{deliveryGst.toFixed(2)}
-                    </Text>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
-                      <Text style={{ fontSize: 12, color: '#64748B' }}>CGST (9.0%)</Text>
-                      <Text style={{ fontSize: 12, color: '#64748B' }}>₹{delCgst}</Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingLeft: 12, marginVertical: 1 }}>
-                      <Text style={{ fontSize: 12, color: '#64748B' }}>SGST (9.0%)</Text>
-                      <Text style={{ fontSize: 12, color: '#64748B' }}>₹{delSgst}</Text>
-                    </View>
-                  </>
-                )}
               </View>
             );
           })()}

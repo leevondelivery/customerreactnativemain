@@ -134,7 +134,7 @@ export const fetchRestaurants = createAsyncThunk(
 
 export const fetchAllRestaurantMenus = createAsyncThunk(
   'restaurants/fetchAllRestaurantMenus',
-  async (restaurantsList, { getState }) => {
+  async (restaurantsList, { getState, dispatch }) => {
     try {
       if (!Array.isArray(restaurantsList) || restaurantsList.length === 0) return { menus: {}, offers: {} };
       const state = getState();
@@ -158,7 +158,7 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
       const newMenus = {};
       const newOffers = {};
 
-      const fetchMenuAndOffersForRest = async (rest) => {
+      const fetchMenuAndOffersForRest = async (rest, batchMenus, batchOffers) => {
         const candidateIds = [rest.restId, rest._id, rest.id, rest.restaurantId]
           .filter(Boolean)
           .filter((id, idx, arr) => arr.indexOf(id) === idx);
@@ -166,7 +166,7 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
         for (const id of candidateIds) {
           try {
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-            const timeoutId = controller ? setTimeout(() => controller.abort(), 5000) : null;
+            const timeoutId = controller ? setTimeout(() => controller.abort(), 10000) : null;
             const [menuRes, offersRes] = await Promise.allSettled([
               fetch(`${API_URL}/restaurants/${id}/menu`, { signal: controller?.signal }),
               fetch(`${API_URL}/api/offers/restaurant/${id}`, { signal: controller?.signal }),
@@ -177,22 +177,46 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
               const data = await menuRes.value.json();
               const items = data.items || [];
               if (Array.isArray(items) && items.length > 0) {
-                if (rest.restId) newMenus[rest.restId] = items;
-                if (rest._id) newMenus[rest._id] = items;
-                if (rest.id) newMenus[rest.id] = items;
-                if (rest.restaurantId) newMenus[rest.restaurantId] = items;
-                newMenus[id] = items;
+                const idKeys = [
+                  rest.restId,
+                  rest._id,
+                  rest.id,
+                  rest.restaurantId,
+                  id,
+                  rest.restId ? String(rest.restId) : null,
+                  rest._id ? String(rest._id) : null,
+                  rest.id ? String(rest.id) : null,
+                  rest.restaurantId ? String(rest.restaurantId) : null,
+                  String(id)
+                ].filter(Boolean);
+
+                idKeys.forEach(k => {
+                  newMenus[k] = items;
+                  if (batchMenus) batchMenus[k] = items;
+                });
               }
             }
 
             if (offersRes.status === 'fulfilled' && offersRes.value.ok) {
               const offersData = await offersRes.value.json();
               if (offersData && offersData.success && offersData.data) {
-                if (rest.restId) newOffers[rest.restId] = offersData.data;
-                if (rest._id) newOffers[rest._id] = offersData.data;
-                if (rest.id) newOffers[rest.id] = offersData.data;
-                if (rest.restaurantId) newOffers[rest.restaurantId] = offersData.data;
-                newOffers[id] = offersData.data;
+                const idKeys = [
+                  rest.restId,
+                  rest._id,
+                  rest.id,
+                  rest.restaurantId,
+                  id,
+                  rest.restId ? String(rest.restId) : null,
+                  rest._id ? String(rest._id) : null,
+                  rest.id ? String(rest.id) : null,
+                  rest.restaurantId ? String(rest.restaurantId) : null,
+                  String(id)
+                ].filter(Boolean);
+
+                idKeys.forEach(k => {
+                  newOffers[k] = offersData.data;
+                  if (batchOffers) batchOffers[k] = offersData.data;
+                });
               }
             }
 
@@ -205,7 +229,14 @@ export const fetchAllRestaurantMenus = createAsyncThunk(
       const batchSize = 4;
       for (let i = 0; i < missingRestaurants.length; i += batchSize) {
         const batch = missingRestaurants.slice(i, i + batchSize);
-        await Promise.all(batch.map(rest => fetchMenuAndOffersForRest(rest)));
+        const batchMenus = {};
+        const batchOffers = {};
+        await Promise.all(batch.map(rest => fetchMenuAndOffersForRest(rest, batchMenus, batchOffers)));
+        
+        // Dispatch batch immediately to Redux so UI updates without waiting for all 32 restaurants!
+        if (Object.keys(batchMenus).length > 0 || Object.keys(batchOffers).length > 0) {
+          dispatch(updateBatchMenus({ menus: batchMenus, offers: batchOffers }));
+        }
       }
       AsyncStorage.setItem('cached_menus_data', JSON.stringify({ ...existingMenus, ...newMenus })).catch(() => {});
       AsyncStorage.setItem('cached_offers_data', JSON.stringify({ ...existingOffers, ...newOffers })).catch(() => {});
@@ -528,6 +559,15 @@ const restaurantsSlice = createSlice({
       state.profileLoaded = false;
       state.profileLoading = false;
       state.profileLoadedUserId = null;
+    },
+    updateBatchMenus: (state, action) => {
+      const { menus, offers } = action.payload || {};
+      if (menus && Object.keys(menus).length > 0) {
+        state.menus = { ...state.menus, ...menus };
+      }
+      if (offers && Object.keys(offers).length > 0) {
+        state.offers = { ...state.offers, ...offers };
+      }
     }
   },
   extraReducers: (builder) => {
@@ -577,7 +617,20 @@ const restaurantsSlice = createSlice({
       })
       .addCase(fetchRestaurantMenu.pending, (state, action) => {
         const restaurantId = action.meta.arg;
-        state.menuLoading[restaurantId] = true;
+        const rest = state.list.find(r =>
+          (r.restId && String(r.restId) === String(restaurantId)) ||
+          (r._id && String(r._id) === String(restaurantId)) ||
+          (r.id && String(r.id) === String(restaurantId))
+        );
+        const hasExisting = Boolean(
+          (restaurantId && state.menus[restaurantId]?.length > 0) ||
+          (rest?.restId && state.menus[rest.restId]?.length > 0) ||
+          (rest?._id && state.menus[rest._id]?.length > 0) ||
+          (rest?.id && state.menus[rest.id]?.length > 0)
+        );
+        if (!hasExisting) {
+          state.menuLoading[restaurantId] = true;
+        }
       })
       .addCase(fetchRestaurantMenu.fulfilled, (state, action) => {
         const { restaurantId, rest, items, offers } = action.payload;
@@ -678,5 +731,5 @@ const restaurantsSlice = createSlice({
   },
 });
 
-export const { updateRestaurantStatuses, setRestaurantsList, addReviewLocally, resetProfile } = restaurantsSlice.actions;
+export const { updateRestaurantStatuses, setRestaurantsList, addReviewLocally, resetProfile, updateBatchMenus } = restaurantsSlice.actions;
 export default restaurantsSlice.reducer;

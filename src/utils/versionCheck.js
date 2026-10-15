@@ -21,5 +21,5 @@ export const isVersionOlder = (currentVersion, targetVersion) => {
 };
 
 export const getInstalledAppVersion = () => {
-  return Constants.expoConfig?.version || '1.0.7';
+  return Constants.expoConfig?.version || '1.0.8';
 };

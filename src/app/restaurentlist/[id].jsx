@@ -778,7 +778,7 @@ export default function RestaurantMenuScreen() {
 
   const restaurantOffers = localOffers || reduxOffers || (targetId ? memoryOffersCache.get(String(targetId)) : null) || null;
 
-  const [hasMenuFetched, setHasMenuFetched] = useState(false);
+  const [hasMenuFetched, setHasMenuFetched] = useState(() => menuItems.length > 0);
   const [hasOffersFetched, setHasOffersFetched] = useState(() => {
     return Boolean(
       (targetId && memoryOffersCache.has(String(targetId))) ||
@@ -792,11 +792,15 @@ export default function RestaurantMenuScreen() {
 
   useEffect(() => {
     if (targetId) {
-      if (!hasFetchedRef.current || menuItems.length === 0) {
-        hasFetchedRef.current = true;
-        dispatch(fetchRestaurantMenu(targetId)).finally(() => {
-          setHasMenuFetched(true);
-        });
+      if (menuItems.length === 0) {
+        if (!hasFetchedRef.current) {
+          hasFetchedRef.current = true;
+          dispatch(fetchRestaurantMenu(targetId)).finally(() => {
+            setHasMenuFetched(true);
+          });
+        }
+      } else {
+        setHasMenuFetched(true);
       }
     }
   }, [dispatch, targetId, restaurantDetail, menuItems.length]);
@@ -836,12 +840,15 @@ export default function RestaurantMenuScreen() {
             headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
           });
           const data = await res.json();
-          if (data && data.success && data.data && isSubscribed) {
-            candidateIds.forEach((cId) => memoryOffersCache.set(cId, data.data));
-            const currentStr = JSON.stringify(localOffers || reduxOffers || null);
-            const newStr = JSON.stringify(data.data);
-            if (currentStr !== newStr) {
-              setLocalOffers(data.data);
+          if (data && data.success && isSubscribed) {
+            const offersData = data.data || null;
+            candidateIds.forEach((cId) => memoryOffersCache.set(cId, offersData));
+            if (offersData) {
+              const currentStr = JSON.stringify(localOffers || reduxOffers || null);
+              const newStr = JSON.stringify(offersData);
+              if (currentStr !== newStr) {
+                setLocalOffers(offersData);
+              }
             }
             break;
           }
@@ -868,12 +875,22 @@ export default function RestaurantMenuScreen() {
     }
   }, [restaurantDetail?.coupons, restaurantOffers?.coupons, hasOffersFetched, restaurantDetail, restId]);
 
-  // Zero-flicker loading gate:
-  // Requires both menu items and offers to be resolved before mounting the UI
-  // This guarantees the menu never mounts without 1+1 offers and then shifts after fetching
-  const isMenuReady = (menuItems.length > 0 && !menuLoading) || hasMenuFetched;
-  const isOffersReady = Boolean(restaurantOffers) || hasOffersFetched;
-  const loading = !isMenuReady || !isOffersReady;
+  // Display loading view for a short time when clicking a restaurant until the menu opens
+  const [minLoadingDone, setMinLoadingDone] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setMinLoadingDone(true);
+    }, 550);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Loading gate:
+  // Shows loading for a brief moment when clicking a restaurant until the menu opens
+  const hasCachedItems = menuItems.length > 0;
+  const isMenuReady = hasCachedItems || !menuLoading || hasMenuFetched;
+  const isOffersReady = hasCachedItems || Boolean(restaurantOffers) || hasOffersFetched;
+  const loading = !minLoadingDone || !isMenuReady || !isOffersReady;
 
   // Background polling for menu items status (every 10 minutes)
   useEffect(() => {
@@ -1147,26 +1164,32 @@ export default function RestaurantMenuScreen() {
           }
         }
 
-        // Priority 4: 1+1 BOGO items at the very top
+        // Priority: When user selects "Low to High" or "High to Low", price sort takes precedence!
+        if (sortBy === 'Low to High') {
+          const pA = Number(a.price) || 0;
+          const pB = Number(b.price) || 0;
+          if (pA !== pB) return pA - pB;
+          return 0;
+        } else if (sortBy === 'High to Low') {
+          const pA = Number(a.price) || 0;
+          const pB = Number(b.price) || 0;
+          if (pA !== pB) return pB - pA;
+          return 0;
+        }
+
+        // Priority 4: 1+1 BOGO items at the very top (default view)
         const bogoA = checkIsBogo(a, a.category);
         const bogoB = checkIsBogo(b, b.category);
         if (bogoA && !bogoB) return -1;
         if (!bogoA && bogoB) return 1;
 
-        // Priority 5: Items with direct or category discount (highest % discount first)
+        // Priority 5: Items with direct or category discount (default view)
         const discA = getItemDiscountPercent(a, a.category);
         const discB = getItemDiscountPercent(b, b.category);
         if (discA > 0 && discB <= 0) return -1;
         if (discA <= 0 && discB > 0) return 1;
         if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
 
-        // Priority 6: Price sorting
-        if (sortBy === 'Low to High') {
-          return (a.price || 0) - (b.price || 0);
-        }
-        if (sortBy === 'High to Low') {
-          return (b.price || 0) - (a.price || 0);
-        }
         return 0;
       });
   }, [menuItems, searchQuery, filterType, selectedCategory, sortBy, checkIsBogo, getItemDiscountPercent]);
@@ -1341,11 +1364,13 @@ export default function RestaurantMenuScreen() {
         discountItems.push(item);
       }
     }
-    discountItems.sort((a, b) => {
-      const discA = getItemDiscountPercent(a, a.category);
-      const discB = getItemDiscountPercent(b, b.category);
-      return discB - discA;
-    });
+    if (sortBy === 'All') {
+      discountItems.sort((a, b) => {
+        const discA = getItemDiscountPercent(a, a.category);
+        const discB = getItemDiscountPercent(b, b.category);
+        return discB - discA;
+      });
+    }
 
     // If discount items exist, show dedicated "Special Discount Offers" section
     if (discountItems.length > 0 && (!selectedCategory || selectedCategory === 'All' || selectedCategory.toLowerCase().includes('discount') || selectedCategory.toLowerCase().includes('offer'))) {
@@ -1378,32 +1403,43 @@ export default function RestaurantMenuScreen() {
       groupMap[catTitle].push(item);
     }
 
-    // Within each regular category group, sort available items
+    // Within each category group, sort items by price or offers
     groups.forEach((g) => {
-      if (!g.isSpecialOffer) {
-        g.items.sort((a, b) => {
-          const bogoA = checkIsBogo(a, a.category);
-          const bogoB = checkIsBogo(b, b.category);
-          if (bogoA && !bogoB) return -1;
-          if (!bogoA && bogoB) return 1;
-
-          const discA = getItemDiscountPercent(a, g.title || a.category);
-          const discB = getItemDiscountPercent(b, g.title || b.category);
-          if (discA > 0 && discB <= 0) return -1;
-          if (discA <= 0 && discB > 0) return 1;
-          if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
-
+      g.items.sort((a, b) => {
+        if (sortBy === 'Low to High') {
+          const pA = Number(a.price) || 0;
+          const pB = Number(b.price) || 0;
+          if (pA !== pB) return pA - pB;
           return 0;
-        });
-      }
+        } else if (sortBy === 'High to Low') {
+          const pA = Number(a.price) || 0;
+          const pB = Number(b.price) || 0;
+          if (pA !== pB) return pB - pA;
+          return 0;
+        }
+
+        const bogoA = checkIsBogo(a, a.category);
+        const bogoB = checkIsBogo(b, b.category);
+        if (bogoA && !bogoB) return -1;
+        if (!bogoA && bogoB) return 1;
+
+        const discA = getItemDiscountPercent(a, g.title || a.category);
+        const discB = getItemDiscountPercent(b, g.title || b.category);
+        if (discA > 0 && discB <= 0) return -1;
+        if (discA <= 0 && discB > 0) return 1;
+        if (discA > 0 && discB > 0 && discA !== discB) return discB - discA;
+
+        return 0;
+      });
     });
 
     // Sort category groups:
-    // 1. Special offer groups (search, bogo, discount) stay at top
-    // 2. Categories matching user selected filter from drawer
+    // 1. Selected category from drawer takes priority
+    // 2. When sortBy is active ('Low to High' or 'High to Low'), groups order by item price
+    // 3. Default view: Special offer groups (search, bogo, discount) stay at top
     groups.sort((a, b) => {
-      if (a.isSpecialOffer && !b.isSpecialOffer) return -1;
-      if (!a.isSpecialOffer && b.isSpecialOffer) return 1;
+      if (a.offerType === 'search' && b.offerType !== 'search') return -1;
+      if (a.offerType !== 'search' && b.offerType === 'search') return 1;
 
       if (selectedCategory && selectedCategory !== 'All') {
         const selCatLower = selectedCategory.toLowerCase().trim();
@@ -1415,6 +1451,19 @@ export default function RestaurantMenuScreen() {
           (selCatLower.includes('discount') && b.offerType === 'discount');
         if (isASel && !isBSel) return -1;
         if (!isASel && isBSel) return 1;
+      }
+
+      if (sortBy === 'Low to High') {
+        const pA = a.items.length > 0 ? (Number(a.items[0]?.price) || 0) : 0;
+        const pB = b.items.length > 0 ? (Number(b.items[0]?.price) || 0) : 0;
+        if (pA !== pB) return pA - pB;
+      } else if (sortBy === 'High to Low') {
+        const pA = a.items.length > 0 ? (Number(a.items[0]?.price) || 0) : 0;
+        const pB = b.items.length > 0 ? (Number(b.items[0]?.price) || 0) : 0;
+        if (pA !== pB) return pB - pA;
+      } else {
+        if (a.isSpecialOffer && !b.isSpecialOffer) return -1;
+        if (!a.isSpecialOffer && b.isSpecialOffer) return 1;
       }
 
       return 0;
@@ -1431,7 +1480,7 @@ export default function RestaurantMenuScreen() {
     }
 
     return groups;
-  }, [sortedItems, searchQuery, selectedCategory, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
+  }, [sortedItems, searchQuery, selectedCategory, sortBy, restaurantOffers, checkIsBogo, getItemDiscountPercent]);
 
   const renderCategoryGroup = useCallback(({ item: group }) => {
     const isSearchGroup = group.offerType === 'search';
@@ -1557,9 +1606,9 @@ export default function RestaurantMenuScreen() {
           keyboardShouldPersistTaps="handled"
           onScroll={handleScroll}
           scrollEventThrottle={32}
-          initialNumToRender={8}
-          maxToRenderPerBatch={8}
-          windowSize={11}
+          initialNumToRender={3}
+          maxToRenderPerBatch={4}
+          windowSize={5}
           removeClippedSubviews={false}
           ListHeaderComponent={
             <View>
@@ -1784,11 +1833,17 @@ export default function RestaurantMenuScreen() {
               showsHorizontalScrollIndicator={false}
               style={styles.sortContainer}
               contentContainerStyle={styles.sortContent}
+              nestedScrollEnabled={true}
+              keyboardShouldPersistTaps="always"
+              delaysContentTouches={false}
             >
               <TouchableOpacity
                 style={sortBy === 'All' ? styles.sortButtonActive : styles.sortButton}
                 onPress={() => handleSortByChange('All')}
                 activeOpacity={0.7}
+                delayPressIn={0}
+                delayPressOut={0}
+                hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               >
                 <Text style={sortBy === 'All' ? styles.sortButtonTextActive : styles.sortButtonText}>All</Text>
               </TouchableOpacity>
@@ -1797,6 +1852,9 @@ export default function RestaurantMenuScreen() {
                 style={sortBy === 'Low to High' ? styles.sortButtonActive : styles.sortButton}
                 onPress={() => handleSortByChange('Low to High')}
                 activeOpacity={0.7}
+                delayPressIn={0}
+                delayPressOut={0}
+                hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               >
                 <Text style={sortBy === 'Low to High' ? styles.sortButtonTextActive : styles.sortButtonText}>Low Price to High Price</Text>
               </TouchableOpacity>
@@ -1805,6 +1863,9 @@ export default function RestaurantMenuScreen() {
                 style={sortBy === 'High to Low' ? styles.sortButtonActive : styles.sortButton}
                 onPress={() => handleSortByChange('High to Low')}
                 activeOpacity={0.7}
+                delayPressIn={0}
+                delayPressOut={0}
+                hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
               >
                 <Text style={sortBy === 'High to Low' ? styles.sortButtonTextActive : styles.sortButtonText}>High Price to Low Price</Text>
               </TouchableOpacity>
