@@ -155,6 +155,9 @@ export default function CartScreen() {
   const confirmPayDisabledTitle = useSelector((state) => state.controls.confirmPayDisabledTitle);
   const confirmPayDisabledMessage = useSelector((state) => state.controls.confirmPayDisabledMessage);
   const maintenanceMode = useSelector((state) => state.controls?.maintenanceMode);
+  const upiOnDeliveryEnabled = useSelector((state) => state.controls.upiOnDeliveryEnabled ?? true);
+  const upiOnDeliveryDisabledTitle = useSelector((state) => state.controls.upiOnDeliveryDisabledTitle);
+  const upiOnDeliveryDisabledMessage = useSelector((state) => state.controls.upiOnDeliveryDisabledMessage);
 
   const [cartItems, setCartItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1812,6 +1815,12 @@ export default function CartScreen() {
 
   const processCodPayment = async () => {
     if (isProcessingPayment) return;
+    if (upiOnDeliveryEnabled === false) {
+      const disabledTitle = upiOnDeliveryDisabledTitle?.trim() || 'UPI On Delivery Unavailable';
+      const disabledMsg = upiOnDeliveryDisabledMessage?.trim() || 'UPI on delivery is currently turned off. Please pay online.';
+      showAlert(disabledTitle, disabledMsg);
+      return;
+    }
     setShowPaymentChoiceModal(false);
     setIsProcessingPayment(true);
 
@@ -3794,41 +3803,43 @@ export default function CartScreen() {
             </TouchableOpacity>
 
             {/* Option 2: UPI On Delivery */}
-            <TouchableOpacity
-              disabled={isProcessingPayment}
-              style={{
-                width: '100%',
-                flexDirection: 'row',
-                alignItems: 'center',
-                backgroundColor: '#FFFFFF',
-                borderColor: '#E4E1D8',
-                borderWidth: 1.5,
-                borderRadius: 18,
-                padding: 16,
-                marginBottom: 16,
-                gap: 12,
-                opacity: isProcessingPayment ? 0.6 : 1
-              }}
-              onPress={() => {
-                if (isProcessingPayment) return;
-                setShowPaymentChoiceModal(false);
-                processCodPayment();
-              }}
-              activeOpacity={0.85}
-            >
-              <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
-                <Ionicons name="qr-code-outline" size={22} color="#E65100" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
-                  UPI On Delivery
-                </Text>
-                <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
-                  Pay via UPI QR Code or cash at doorstep
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={18} color="#E65100" />
-            </TouchableOpacity>
+            {upiOnDeliveryEnabled !== false && (
+              <TouchableOpacity
+                disabled={isProcessingPayment}
+                style={{
+                  width: '100%',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  backgroundColor: '#FFFFFF',
+                  borderColor: '#E4E1D8',
+                  borderWidth: 1.5,
+                  borderRadius: 18,
+                  padding: 16,
+                  marginBottom: 16,
+                  gap: 12,
+                  opacity: isProcessingPayment ? 0.6 : 1
+                }}
+                onPress={() => {
+                  if (isProcessingPayment) return;
+                  setShowPaymentChoiceModal(false);
+                  processCodPayment();
+                }}
+                activeOpacity={0.85}
+              >
+                <View style={{ width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF3E0', alignItems: 'center', justifyContent: 'center' }}>
+                  <Ionicons name="qr-code-outline" size={22} color="#E65100" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1A1A1A' }}>
+                    UPI On Delivery
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#666666', marginTop: 2 }}>
+                    Pay via UPI QR Code or cash at doorstep
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color="#E65100" />
+              </TouchableOpacity>
+            )}
 
           </View>
         </View>

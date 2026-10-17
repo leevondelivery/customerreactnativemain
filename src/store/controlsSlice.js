@@ -146,7 +146,85 @@ const parseHomeBannerStatus = (data) => {
   return null;
 };
 
-// Thunk: fetch controls status (confirmPayButton + maintenanceMode + homeHangingBanner) from the customer backend
+// Helper to parse upiOnDelivery status from various API response shapes
+const parseUpiOnDeliveryStatus = (data) => {
+  if (!data) return null;
+
+  let controlsArr = null;
+  if (Array.isArray(data)) controlsArr = data;
+  else if (Array.isArray(data.controls)) controlsArr = data.controls;
+  else if (Array.isArray(data.data)) controlsArr = data.data;
+
+  if (controlsArr) {
+    const item = controlsArr.find(
+      (c) =>
+        String(c.key || '').toLowerCase() === 'upiondelivery' ||
+        String(c.key || '').toLowerCase() === 'upiondeliverybutton' ||
+        String(c.name || '').toLowerCase() === 'upi on delivery button' ||
+        String(c.name || '').toLowerCase() === 'upi on delivery'
+    );
+    if (item) {
+      let status = null;
+      if (typeof item.status === 'boolean') status = item.status;
+      else if (typeof item.status === 'string') status = item.status !== 'false' && item.status !== '0';
+      else if (typeof item.status === 'number') status = item.status === 1;
+
+      return {
+        status,
+        title: item.title || '',
+        description: item.description || ''
+      };
+    }
+  }
+
+  if (
+    typeof data.status === 'boolean' &&
+    (String(data.key || '').toLowerCase() === 'upiondelivery' ||
+      String(data.key || '').toLowerCase() === 'upiondeliverybutton' ||
+      String(data.name || '').toLowerCase() === 'upi on delivery button' ||
+      String(data.name || '').toLowerCase() === 'upi on delivery')
+  ) {
+    return {
+      status: data.status,
+      title: data.title || data.control?.title || '',
+      description: data.description || data.control?.description || ''
+    };
+  }
+
+  if (typeof data.upiOnDelivery === 'boolean') {
+    return {
+      status: data.upiOnDelivery,
+      title: data.title || '',
+      description: data.description || ''
+    };
+  }
+
+  if (typeof data.controls === 'object' && typeof data.controls.upiOnDelivery === 'boolean') {
+    return {
+      status: data.controls.upiOnDelivery,
+      title: data.controls?.title || data.title || '',
+      description: data.controls?.description || data.description || ''
+    };
+  }
+
+  if (
+    data.control &&
+    (String(data.control.key || '').toLowerCase() === 'upiondelivery' ||
+      String(data.control.key || '').toLowerCase() === 'upiondeliverybutton' ||
+      String(data.control.name || '').toLowerCase() === 'upi on delivery button' ||
+      String(data.control.name || '').toLowerCase() === 'upi on delivery')
+  ) {
+    return {
+      status: typeof data.status === 'boolean' ? data.status : Boolean(data.control.status),
+      title: data.title || data.control.title || '',
+      description: data.description || data.control.description || ''
+    };
+  }
+
+  return null;
+};
+
+// Thunk: fetch controls status (confirmPayButton + maintenanceMode + homeHangingBanner + upiOnDelivery) from the customer backend
 export const fetchControlsStatus = createAsyncThunk(
   'controls/fetchControlsStatus',
   async (_, { rejectWithValue }) => {
@@ -156,6 +234,7 @@ export const fetchControlsStatus = createAsyncThunk(
       `${API_URL}/api/controls/confirmPayButton`,
       `${API_URL}/api/controls/maintenanceMode`,
       `${API_URL}/api/controls/homeHangingBanner`,
+      `${API_URL}/api/controls/upiOnDelivery`,
     ];
 
     const controller = new AbortController();
@@ -180,6 +259,9 @@ export const fetchControlsStatus = createAsyncThunk(
       let homeBannerStatus = null;
       let homeBannerTitle = '';
       let homeBannerText = '';
+      let upiOnDeliveryEnabled = null;
+      let upiOnDeliveryDisabledTitle = '';
+      let upiOnDeliveryDisabledMessage = '';
 
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value) {
@@ -207,10 +289,22 @@ export const fetchControlsStatus = createAsyncThunk(
               if (hbData.description) homeBannerText = hbData.description;
             }
           }
+          if (upiOnDeliveryEnabled === null) {
+            const upiData = parseUpiOnDeliveryStatus(result.value);
+            if (upiData !== null && upiData.status !== null) {
+              upiOnDeliveryEnabled = upiData.status;
+              if (upiData.title) {
+                upiOnDeliveryDisabledTitle = upiData.title;
+              }
+              if (upiData.description) {
+                upiOnDeliveryDisabledMessage = upiData.description;
+              }
+            }
+          }
         }
       }
 
-      if (confirmPayEnabled === null && maintenanceMode === null && homeBannerStatus === null) {
+      if (confirmPayEnabled === null && maintenanceMode === null && homeBannerStatus === null && upiOnDeliveryEnabled === null) {
         // All endpoints failed/returned nothing - default to allow
         return rejectWithValue('no_data');
       }
@@ -223,6 +317,9 @@ export const fetchControlsStatus = createAsyncThunk(
         homeBannerEnabled: homeBannerStatus !== null ? Boolean(homeBannerStatus) : false,
         homeBannerTitle: homeBannerTitle || '',
         homeBannerText: homeBannerText || '',
+        upiOnDeliveryEnabled: upiOnDeliveryEnabled !== null ? Boolean(upiOnDeliveryEnabled) : true,
+        upiOnDeliveryDisabledTitle: upiOnDeliveryDisabledTitle || '',
+        upiOnDeliveryDisabledMessage: upiOnDeliveryDisabledMessage || '',
       };
     } catch (err) {
       clearTimeout(timeoutId);
@@ -241,6 +338,9 @@ const controlsSlice = createSlice({
     homeBannerEnabled: false, // true = show hanging banner on home page, false = hide
     homeBannerTitle: '',      // custom banner headline
     homeBannerText: '',       // custom banner message / details
+    upiOnDeliveryEnabled: true, // true = UPI on delivery allowed, false = hidden/disabled
+    upiOnDeliveryDisabledTitle: '',
+    upiOnDeliveryDisabledMessage: '',
     lastFetched: null,
     loading: false,
     error: null,
@@ -274,6 +374,19 @@ const controlsSlice = createSlice({
         state.homeBannerEnabled = Boolean(action.payload);
       }
     },
+    setUpiOnDeliveryEnabled: (state, action) => {
+      if (typeof action.payload === 'object' && action.payload !== null) {
+        state.upiOnDeliveryEnabled = Boolean(action.payload.status);
+        if (action.payload.title !== undefined) {
+          state.upiOnDeliveryDisabledTitle = String(action.payload.title);
+        }
+        if (action.payload.description !== undefined) {
+          state.upiOnDeliveryDisabledMessage = String(action.payload.description);
+        }
+      } else {
+        state.upiOnDeliveryEnabled = Boolean(action.payload);
+      }
+    },
   },
   extraReducers: (builder) => {
     builder
@@ -296,6 +409,13 @@ const controlsSlice = createSlice({
         if (action.payload.homeBannerText !== undefined) {
           state.homeBannerText = String(action.payload.homeBannerText || '');
         }
+        state.upiOnDeliveryEnabled = action.payload.upiOnDeliveryEnabled !== undefined ? Boolean(action.payload.upiOnDeliveryEnabled) : true;
+        if (action.payload.upiOnDeliveryDisabledTitle !== undefined) {
+          state.upiOnDeliveryDisabledTitle = String(action.payload.upiOnDeliveryDisabledTitle || '');
+        }
+        if (action.payload.upiOnDeliveryDisabledMessage !== undefined) {
+          state.upiOnDeliveryDisabledMessage = String(action.payload.upiOnDeliveryDisabledMessage || '');
+        }
         state.lastFetched = Date.now();
         state.loading = false;
         state.error = null;
@@ -310,5 +430,5 @@ const controlsSlice = createSlice({
   },
 });
 
-export const { setConfirmPayEnabled, setConfirmPayDisabledTitle, setConfirmPayDisabledMessage, setHomeBanner } = controlsSlice.actions;
+export const { setConfirmPayEnabled, setConfirmPayDisabledTitle, setConfirmPayDisabledMessage, setHomeBanner, setUpiOnDeliveryEnabled } = controlsSlice.actions;
 export default controlsSlice.reducer;

@@ -1,4 +1,4 @@
-export const API_URL = 'https://customerbackendfile-production.up.railway.app';
+ export const API_URL = 'https://customerbackendfile-production.up.railway.app';
 
 export const CONTACT_INFO = {
   phone: '7207610235',
